@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, Any, AsyncGenerator
 
 from asgiref.sync import sync_to_async
-from langchain_core.messages import ToolMessage, convert_to_openai_messages
+from langchain_core.messages import SystemMessage, ToolMessage, convert_to_openai_messages
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END
@@ -18,6 +18,7 @@ from src.app.core.middleware import (
     LoggingMiddleware,
     MemoryMiddleware,
     SummarizationMiddleware,
+    TrimLongMessagesMiddleware,
 )
 from src.app.core.guardrails import create_input_guardrail_node, create_output_guardrail_node
 from src.app.core.common.config import settings
@@ -27,7 +28,7 @@ from src.app.core.metrics import model_invoke_with_metrics
 from src.app.core.metrics.metrics import tool_executions_total
 from src.app.core.common.model.graph import GraphState
 from src.app.core.common.model.message import Message
-from src.app.core.llm.llm_utils import dump_messages, prepare_messages, process_llm_response, record_llm_error
+from src.app.core.llm.llm_utils import dump_messages, process_llm_response, record_llm_error
 from src.app.core.context import truncate_tool_call_if_too_long
 from src.app.core.mcp.mcp_utils import handle_mcp_tool_call
 from src.app.core.mcp.session_manager import get_mcp_session_manager
@@ -60,6 +61,10 @@ class AgentChatbot:
                 SummarizationMiddleware(
                     llm=chatbot_model,
                     model_name=f"openai:{settings.DEFAULT_LLM_MODEL}",
+                ),
+                TrimLongMessagesMiddleware(
+                    llm=chatbot_model,
+                    max_tokens=settings.MAX_TOKENS,
                 ),
             ],
             invoke_fn=self._core_invoke,
@@ -254,7 +259,7 @@ class AgentChatbot:
             )
 
         system_prompt = load_system_prompt(long_term_memory=state.long_term_memory)
-        prepared_messages = prepare_messages(messages, chatbot_model, system_prompt)
+        prepared = [SystemMessage(content=system_prompt)] + list(messages)
 
         model = (
             chatbot_model
@@ -263,8 +268,6 @@ class AgentChatbot:
         )
 
         try:
-            prepared = dump_messages(prepared_messages)
-
             response_message = await model_invoke_with_metrics(model, prepared, settings.DEFAULT_LLM_MODEL, self.name, config)
 
             if ctx:
