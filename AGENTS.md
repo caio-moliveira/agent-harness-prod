@@ -24,14 +24,6 @@ This is a production-ready AI agent application built with:
 - Use `logger.exception()` instead of `logger.error()` to preserve tracebacks
 - Example: `logger.info("chat_request_received", session_id=session.id, message_count=len(messages))`
 
-### Retry Rules
-- **Always use tenacity library** for retry logic
-- Configure with exponential backoff
-- Example: `@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))`
-
-### Output Rules
-- **Always enable rich library** for formatted console outputs
-- Use rich for progress bars, tables, panels, and formatted text
 
 ### Caching Rules
 - **Only cache successful responses**, never cache errors
@@ -63,30 +55,12 @@ This is a production-ready AI agent application built with:
 
 ### Graph Structure
 - Use `StateGraph` for building AI agent workflows
-- Define clear state schemas using Pydantic models (see `app/schemas/graph.py`)
+- Define clear state schemas using Pydantic models
 - Use `CompiledStateGraph` for production workflows
 - Implement `AsyncPostgresSaver` for checkpointing and persistence
 - Use `Command` for controlling graph flow between nodes
 
-### Tracing
-- Use LangChain's `CallbackHandler` from Langfuse for tracing all LLM calls
-- All LLM operations must have Langfuse tracing enabled
-
-### Memory (mem0ai)
-- Use `AsyncMemory` for semantic memory storage
-- Store memories per user_id for personalized experiences
-- Use async methods: `add()`, `get()`, `search()`, `delete()`
-
-## Authentication & Security
-
-- Use JWT tokens for authentication
-- Implement session-based user management (see `app/api/v1/auth.py`)
-- Use `get_current_session` dependency for protected endpoints
-- Store sensitive data in environment variables
-- Validate all user inputs with Pydantic models
-
 ## Database Operations
-
 - Use SQLModel for ORM models (combines SQLAlchemy + Pydantic)
 - Use async database operations with asyncpg
 - Use LangGraph's AsyncPostgresSaver for agent checkpointing
@@ -108,8 +82,8 @@ This is a production-ready AI agent application built with:
 
 ## Testing & Evaluation
 
-- Implement metric-based evaluations for LLM outputs (see `evals/` directory)
-- Create custom evaluation metrics as markdown files in `evals/metrics/prompts/`
+- Implement metric-based evaluations for LLM outputs (see `src/evals/` directory)
+- Create custom evaluation metrics as markdown files in `src/evals/metrics/prompts/`
 - Use Langfuse traces for evaluation data sources
 - Generate JSON reports with success rates
 
@@ -177,3 +151,20 @@ Before modifying code:
 - LangChain Documentation: https://python.langchain.com/docs/
 - FastAPI Documentation: https://fastapi.tiangolo.com/
 - Langfuse Documentation: https://langfuse.com/docs
+
+
+# Task execution plan
+Important: Always plan the task step by step before writing code. Ask for permission to proceed with the plan.
+Important: Before proceed with the plan, create a new file named `.agent/plans/name-of-the-task.md`. Based on the approved plan, list all necessary implementation steps as GitHub-style checkboxes (`- [ ] Step Description`). Use sub-bullets for granular details within each main step.
+
+- Plans should be detailed enough to execute without ambiguity
+- Each task in the plan must include at least one validation test to verify it works
+- Assess complexity and single-pass feasibility - can an agent realistically complete this in one go?
+- Include a complexity indicator at the top of each plan:
+  ✅ Simple - Single-pass executable, low risk
+  ⚠️ Medium - May need iteration, some complexity
+  🔴 Complex - Break into sub-plans before executing
+
+**CRITICAL: After you successfully complete each step, you MUST update the `.agent/plans/name-of-the-task.md` file by changing the corresponding checkbox from `- [ ]` to `- [x]`.**
+Only proceed to the *next* unchecked item after confirming the previous one is checked off in the file. Announce which step you are starting.
+

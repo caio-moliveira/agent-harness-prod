@@ -3,6 +3,7 @@ from typing import Any, Optional
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
+from langchain.agents.middleware import PIIMiddleware
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_community.utilities import SQLDatabase
 from langchain_openai import ChatOpenAI
@@ -85,6 +86,7 @@ def create_sql_deep_agent():
         skills=[
             "./skills/"
         ],  # Specialized workflows (query-writing, schema-exploration)
+        middleware=[PIIMiddleware("email")],
         tools=sql_tools,  # SQL database tools
         subagents=[],  # No subagents needed
         backend=FilesystemBackend(root_dir=base_dir),  # Persistent file storage
