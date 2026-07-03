@@ -16,16 +16,25 @@ session_repository = SessionRepository(dbsession)
 
 
 def langfuse_init():
-    langfuse = Langfuse(
-        public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
-        secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
-        host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
-    )
+    # Langfuse is optional observability. Missing/invalid credentials must degrade
+    # gracefully (log a warning) rather than crash application startup.
+    if not os.getenv("LANGFUSE_PUBLIC_KEY") or not os.getenv("LANGFUSE_SECRET_KEY"):
+        logger.warning("langfuse_disabled_no_credentials")
+        return
 
-    if langfuse.auth_check():
-        logger.info("langfuse_auth_success")
-    else:
-        logger.error("langfuse_auth_failure")
+    try:
+        langfuse = Langfuse(
+            public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+            secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+            host=os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+        )
+
+        if langfuse.auth_check():
+            logger.info("langfuse_auth_success")
+        else:
+            logger.warning("langfuse_auth_failure")
+    except Exception as e:
+        logger.warning("langfuse_init_skipped", error=str(e))
 
 
 def get_langfuse_callback_handler() -> CallbackHandler:

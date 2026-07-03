@@ -49,7 +49,8 @@ def load_env_file():
     """Load environment-specific .env file."""
     env = get_environment()
     print(f"Loading environment: {env}")
-    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    # Project root: config.py lives at <root>/src/app/core/common/config.py
+    base_dir = str(Path(__file__).resolve().parents[4])
 
     # Define env files in priority order
     env_files = [
