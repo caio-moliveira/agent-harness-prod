@@ -1,8 +1,13 @@
 import type {
   ChatResponse,
+  ConnectDbRequest,
+  ConnectDbResponse,
+  GrantFolderResponse,
   Message,
   SessionResponse,
+  SourceStatus,
   StreamChunk,
+  StreamEvent,
   TokenResponse,
   UserResponse,
 } from "./types";
@@ -107,6 +112,88 @@ export async function clearMessages(sessionToken: string): Promise<void> {
     headers: { Authorization: `Bearer ${sessionToken}` },
   });
   await ensureOk(res);
+}
+
+// --- Data Agent: connect a database / grant a folder / query the sources ---
+
+export async function connectDb(sessionToken: string, body: ConnectDbRequest): Promise<ConnectDbResponse> {
+  const res = await fetch(`${BASE}/data-agent/connect-db`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
+    body: JSON.stringify(body),
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function grantFolder(sessionToken: string, path: string): Promise<GrantFolderResponse> {
+  const res = await fetch(`${BASE}/data-agent/grant-folder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
+    body: JSON.stringify({ path }),
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function dataStatus(sessionToken: string): Promise<SourceStatus> {
+  const res = await fetch(`${BASE}/data-agent/status`, {
+    headers: { Authorization: `Bearer ${sessionToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function dataQuery(sessionToken: string, query: string): Promise<Message[]> {
+  const res = await fetch(`${BASE}/data-agent/query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
+    body: JSON.stringify({ query }),
+  });
+  const data: ChatResponse = await (await ensureOk(res)).json();
+  return data.messages ?? [];
+}
+
+export async function disconnectSources(sessionToken: string): Promise<void> {
+  const res = await fetch(`${BASE}/data-agent/disconnect`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${sessionToken}` },
+  });
+  await ensureOk(res);
+}
+
+/** Stream the Data Agent's work as structured events (tool calls, tokens). */
+export async function* streamDataQuery(
+  sessionToken: string,
+  messages: { role: string; content: string }[],
+): AsyncGenerator<StreamEvent, void, unknown> {
+  const res = await fetch(`${BASE}/data-agent/query/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
+    body: JSON.stringify({ messages }),
+  });
+  await ensureOk(res);
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("Streaming não suportado pelo navegador");
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+    for (const event of events) {
+      const line = event.trim();
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload) continue;
+      try {
+        yield JSON.parse(payload) as StreamEvent;
+      } catch {
+        // ignore malformed frames
+      }
+    }
+  }
 }
 
 /**
