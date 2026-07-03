@@ -55,6 +55,36 @@ def get_context() -> Dict[str, Any]:
     return _request_context.get()
 
 
+_SENSITIVE_KEY_MARKERS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "authorization",
+    "connection_url",
+    "conn_url",
+    "dsn",
+    "credential",
+    "url",
+    "uri",
+)
+
+
+def redact_sensitive(logger: Any, method_name: str, event_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Redact values of sensitive keys so credentials never reach the logs.
+
+    Defense-in-depth: callers should already avoid passing secrets, but this
+    guarantees keys like ``password``/``token``/``dsn`` are masked everywhere.
+    """
+    for key in list(event_dict.keys()):
+        lowered = key.lower()
+        if any(marker in lowered for marker in _SENSITIVE_KEY_MARKERS):
+            event_dict[key] = "***redacted***"
+    return event_dict
+
+
 def add_context_to_event_dict(logger: Any, method_name: str, event_dict: Dict[str, Any]) -> Dict[str, Any]:
     """Add context variables to the event dictionary.
 
@@ -143,6 +173,8 @@ def get_structlog_processors(include_file_info: bool = True) -> List[Any]:
         structlog.processors.UnicodeDecoder(),
         # Add context variables (user_id, session_id, etc.) to all log events
         add_context_to_event_dict,
+        # Mask any sensitive values before rendering
+        redact_sensitive,
     ]
 
     # Add callsite parameters if file info is requested
