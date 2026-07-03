@@ -22,9 +22,13 @@ wheels/
 # Reports
 src/evals/reports/
 /.idea/
-/.claude/settings.local.json
 /.vscode/
-/.claude/
+
+# Claude Code: version the shared config, ignore local-only files
+/.claude/settings.local.json
+/.claude/plans/*
+!/.claude/plans/.gitkeep
+
 logs/
 large_tool_results/
 conversation_summaries/
