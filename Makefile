@@ -185,7 +185,7 @@ db-logs:
 db-reset:
 	@echo "WARNING: destroying the Postgres data volume."
 	$(DOCKER_COMPOSE) rm -sf db
-	docker volume rm agent-harness-prod-ready-template_postgres-data 2>/dev/null || true
+	docker volume rm agent-harness-prod_postgres-data 2>/dev/null || true
 	$(MAKE) db-up
 
 # Help

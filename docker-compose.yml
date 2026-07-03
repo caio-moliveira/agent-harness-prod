@@ -1,3 +1,7 @@
+# Pin the Compose project name so the volume/network names stay stable
+# regardless of the folder name.
+name: agent-harness-prod
+
 services:
   db:
     image: pgvector/pgvector:pg16
