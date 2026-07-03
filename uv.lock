@@ -3,6 +3,122 @@ revision = 3
 requires-python = ">=3.13"
 
 [[package]]
+name = "agent-harness-prod"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "asgiref" },
+    { name = "bcrypt" },
+    { name = "colorama" },
+    { name = "ddgs" },
+    { name = "deepagents" },
+    { name = "duckduckgo-search" },
+    { name = "email-validator" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "langchain" },
+    { name = "langchain-community" },
+    { name = "langchain-core" },
+    { name = "langchain-mcp-adapters" },
+    { name = "langchain-openai" },
+    { name = "langfuse" },
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint-postgres" },
+    { name = "mcp", extra = ["cli"] },
+    { name = "mem0ai" },
+    { name = "passlib", extra = ["bcrypt"] },
+    { name = "prometheus-client" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg2-binary" },
+    { name = "pydantic", extra = ["email"] },
+    { name = "pydantic-settings" },
+    { name = "python-dotenv" },
+    { name = "python-jose", extra = ["cryptography"] },
+    { name = "python-multipart" },
+    { name = "rich" },
+    { name = "slowapi" },
+    { name = "sqlmodel" },
+    { name = "starlette-prometheus" },
+    { name = "structlog" },
+    { name = "supabase" },
+    { name = "tenacity" },
+    { name = "tqdm" },
+    { name = "uvicorn" },
+    { name = "uvloop", marker = "sys_platform != 'win32'" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "black" },
+    { name = "djlint" },
+    { name = "flake8" },
+    { name = "isort" },
+    { name = "ruff" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "asgiref", specifier = ">=3.8.1" },
+    { name = "bcrypt", specifier = ">=4.3.0" },
+    { name = "black", marker = "extra == 'dev'" },
+    { name = "colorama", specifier = ">=0.4.6" },
+    { name = "ddgs", specifier = ">=9.6.0" },
+    { name = "deepagents", specifier = ">=0.4.3" },
+    { name = "djlint", marker = "extra == 'dev'", specifier = "==1.36.4" },
+    { name = "duckduckgo-search", specifier = ">=3.9.0" },
+    { name = "email-validator", specifier = ">=2.2.0" },
+    { name = "fastapi", specifier = ">=0.121.0" },
+    { name = "flake8", marker = "extra == 'dev'" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "isort", marker = "extra == 'dev'" },
+    { name = "langchain", specifier = ">=1.0.5" },
+    { name = "langchain-community", specifier = ">=0.4.1" },
+    { name = "langchain-core", specifier = ">=1.0.4" },
+    { name = "langchain-mcp-adapters", specifier = ">=0.2.1" },
+    { name = "langchain-openai", specifier = ">=1.0.2" },
+    { name = "langfuse", specifier = "==3.9.1" },
+    { name = "langgraph", specifier = ">=1.0.2" },
+    { name = "langgraph-checkpoint-postgres", specifier = ">=3.0.1" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.6.0" },
+    { name = "mem0ai", specifier = ">=1.0.0" },
+    { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
+    { name = "prometheus-client", specifier = ">=0.19.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.2" },
+    { name = "psycopg2-binary", specifier = ">=2.9.10" },
+    { name = "pydantic", extras = ["email"], specifier = ">=2.11.1" },
+    { name = "pydantic-settings", specifier = ">=2.8.1" },
+    { name = "python-dotenv", specifier = ">=1.1.0" },
+    { name = "python-jose", extras = ["cryptography"], specifier = ">=3.4.0" },
+    { name = "python-multipart", specifier = ">=0.0.20" },
+    { name = "rich", specifier = ">=13.7.0" },
+    { name = "ruff", marker = "extra == 'dev'" },
+    { name = "slowapi", specifier = ">=0.1.9" },
+    { name = "sqlmodel", specifier = ">=0.0.24" },
+    { name = "starlette-prometheus", specifier = ">=0.7.0" },
+    { name = "structlog", specifier = ">=25.2.0" },
+    { name = "supabase", specifier = ">=2.15.0" },
+    { name = "tenacity", specifier = ">=9.1.2" },
+    { name = "tqdm", specifier = ">=4.67.1" },
+    { name = "uvicorn", specifier = ">=0.34.0" },
+    { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.22.1" },
+]
+provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "pytest", specifier = ">=8.3.5" },
+    { name = "pytest-asyncio", specifier = ">=0.25.0" },
+]
+
+[[package]]
 name = "aiohappyeyeballs"
 version = "2.6.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1178,122 +1294,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/00/5e/c96bbded68a72757607e653c0f9cfaa02078da17e0999626f3c1ddc65ce9/langgraph_checkpoint_postgres-3.0.1.tar.gz", hash = "sha256:4ff0f04a70ce8f5b49d373f521eba97ccf0bb61181de1535e5d91e99db2ce7da", size = 113134, upload-time = "2025-11-06T16:21:47.855Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0e/01/5a5de9187f8a7f55fa546eb815fbeb4a41b10688d9a77b84224cb98ae0de/langgraph_checkpoint_postgres-3.0.1-py3-none-any.whl", hash = "sha256:f79eb588b328f05d715c7ed35d20895cd0a126b524f95edbbebedc4a595f43dd", size = 40914, upload-time = "2025-11-06T16:21:46.303Z" },
-]
-
-[[package]]
-name = "langgraph-fastapi-template"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "asgiref" },
-    { name = "bcrypt" },
-    { name = "colorama" },
-    { name = "ddgs" },
-    { name = "deepagents" },
-    { name = "duckduckgo-search" },
-    { name = "email-validator" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "langchain" },
-    { name = "langchain-community" },
-    { name = "langchain-core" },
-    { name = "langchain-mcp-adapters" },
-    { name = "langchain-openai" },
-    { name = "langfuse" },
-    { name = "langgraph" },
-    { name = "langgraph-checkpoint-postgres" },
-    { name = "mcp", extra = ["cli"] },
-    { name = "mem0ai" },
-    { name = "passlib", extra = ["bcrypt"] },
-    { name = "prometheus-client" },
-    { name = "psycopg", extra = ["binary"] },
-    { name = "psycopg2-binary" },
-    { name = "pydantic", extra = ["email"] },
-    { name = "pydantic-settings" },
-    { name = "python-dotenv" },
-    { name = "python-jose", extra = ["cryptography"] },
-    { name = "python-multipart" },
-    { name = "rich" },
-    { name = "slowapi" },
-    { name = "sqlmodel" },
-    { name = "starlette-prometheus" },
-    { name = "structlog" },
-    { name = "supabase" },
-    { name = "tenacity" },
-    { name = "tqdm" },
-    { name = "uvicorn" },
-    { name = "uvloop", marker = "sys_platform != 'win32'" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "black" },
-    { name = "djlint" },
-    { name = "flake8" },
-    { name = "isort" },
-    { name = "ruff" },
-]
-
-[package.dev-dependencies]
-test = [
-    { name = "httpx" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "asgiref", specifier = ">=3.8.1" },
-    { name = "bcrypt", specifier = ">=4.3.0" },
-    { name = "black", marker = "extra == 'dev'" },
-    { name = "colorama", specifier = ">=0.4.6" },
-    { name = "ddgs", specifier = ">=9.6.0" },
-    { name = "deepagents", specifier = ">=0.4.3" },
-    { name = "djlint", marker = "extra == 'dev'", specifier = "==1.36.4" },
-    { name = "duckduckgo-search", specifier = ">=3.9.0" },
-    { name = "email-validator", specifier = ">=2.2.0" },
-    { name = "fastapi", specifier = ">=0.121.0" },
-    { name = "flake8", marker = "extra == 'dev'" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "isort", marker = "extra == 'dev'" },
-    { name = "langchain", specifier = ">=1.0.5" },
-    { name = "langchain-community", specifier = ">=0.4.1" },
-    { name = "langchain-core", specifier = ">=1.0.4" },
-    { name = "langchain-mcp-adapters", specifier = ">=0.2.1" },
-    { name = "langchain-openai", specifier = ">=1.0.2" },
-    { name = "langfuse", specifier = "==3.9.1" },
-    { name = "langgraph", specifier = ">=1.0.2" },
-    { name = "langgraph-checkpoint-postgres", specifier = ">=3.0.1" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.6.0" },
-    { name = "mem0ai", specifier = ">=1.0.0" },
-    { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
-    { name = "prometheus-client", specifier = ">=0.19.0" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.2" },
-    { name = "psycopg2-binary", specifier = ">=2.9.10" },
-    { name = "pydantic", extras = ["email"], specifier = ">=2.11.1" },
-    { name = "pydantic-settings", specifier = ">=2.8.1" },
-    { name = "python-dotenv", specifier = ">=1.1.0" },
-    { name = "python-jose", extras = ["cryptography"], specifier = ">=3.4.0" },
-    { name = "python-multipart", specifier = ">=0.0.20" },
-    { name = "rich", specifier = ">=13.7.0" },
-    { name = "ruff", marker = "extra == 'dev'" },
-    { name = "slowapi", specifier = ">=0.1.9" },
-    { name = "sqlmodel", specifier = ">=0.0.24" },
-    { name = "starlette-prometheus", specifier = ">=0.7.0" },
-    { name = "structlog", specifier = ">=25.2.0" },
-    { name = "supabase", specifier = ">=2.15.0" },
-    { name = "tenacity", specifier = ">=9.1.2" },
-    { name = "tqdm", specifier = ">=4.67.1" },
-    { name = "uvicorn", specifier = ">=0.34.0" },
-    { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.22.1" },
-]
-provides-extras = ["dev"]
-
-[package.metadata.requires-dev]
-test = [
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "pytest", specifier = ">=8.3.5" },
-    { name = "pytest-asyncio", specifier = ">=0.25.0" },
 ]
 
 [[package]]
