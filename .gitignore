@@ -33,3 +33,6 @@ src/evals/reports/
 logs/
 large_tool_results/
 conversation_summaries/
+
+# Local sandbox test fixtures
+/sandbox_demo/

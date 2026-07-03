@@ -179,6 +179,20 @@ class Settings:
         ]
 
 
+        # Per-session data sources + sandbox Configuration
+        self.SESSION_SOURCE_TTL = int(os.getenv("SESSION_SOURCE_TTL", "3600"))
+        self.SANDBOX_ENABLED = os.getenv("SANDBOX_ENABLED", "true").lower() in ("true", "1", "yes")
+        self.SANDBOX_IMAGE = os.getenv("SANDBOX_IMAGE", "python:3.13-slim")
+        self.SANDBOX_MEMORY = os.getenv("SANDBOX_MEMORY", "512m")
+        self.SANDBOX_CPUS = os.getenv("SANDBOX_CPUS", "1")
+        self.SANDBOX_PIDS_LIMIT = int(os.getenv("SANDBOX_PIDS_LIMIT", "256"))
+        self.SANDBOX_EXEC_TIMEOUT = int(os.getenv("SANDBOX_EXEC_TIMEOUT", "30"))
+        self.SANDBOX_MOUNT_PATH = os.getenv("SANDBOX_MOUNT_PATH", "/workspace")
+        self.SANDBOX_USER = os.getenv("SANDBOX_USER", "")  # e.g. "1000:1000"; empty = image default
+        # Allow-list of host roots that may be granted to the sandbox. Empty = deny all grants
+        # (secure by default). A granted folder must live under one of these roots.
+        self.SANDBOX_ALLOWED_ROOTS = parse_list_from_env("SANDBOX_ALLOWED_ROOTS", [])
+
         # Rate Limiting Configuration
         self.RATE_LIMIT_DEFAULT = parse_list_from_env("RATE_LIMIT_DEFAULT", ["200 per day", "50 per hour"])
 
@@ -189,6 +203,8 @@ class Settings:
             "deep_research": ["10 per minute"],
             "deep_research_stream": ["10 per minute"],
             "text_to_sql": ["15 per minute"],
+            "data_agent": ["15 per minute"],
+            "data_connect": ["10 per minute"],
             "messages": ["50 per minute"],
             "register": ["10 per hour"],
             "login": ["20 per minute"],

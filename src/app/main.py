@@ -1,5 +1,7 @@
 """This file contains the main application entry point."""
 
+import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import (
@@ -31,6 +33,7 @@ from src.app.api.v1.api import api_router
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.db.database import database_factory
+from src.app.core.sandbox.registry import reaper_loop
 from src.app.init import langfuse_init, mcp_dependencies_init, mcp_dependencies_cleanup
 
 # Load environment variables
@@ -48,9 +51,14 @@ async def lifespan(app: FastAPI):
         api_prefix=settings.API_V1_STR,
     )
     await mcp_dependencies_init()
+    # Background reaper for idle per-session data sources
+    reaper_task = asyncio.create_task(reaper_loop())
 
     yield
 
+    reaper_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await reaper_task
     await mcp_dependencies_cleanup()
 
     logger.info("application_shutdown")
