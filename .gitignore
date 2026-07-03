@@ -28,6 +28,7 @@ src/evals/reports/
 /.claude/settings.local.json
 /.claude/plans/*
 !/.claude/plans/.gitkeep
+./claude
 
 logs/
 large_tool_results/
