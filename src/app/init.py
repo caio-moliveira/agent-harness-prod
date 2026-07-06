@@ -7,6 +7,8 @@ from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.agent import AgentRepository
 from src.app.core.db.database import database_factory
+from src.app.core.hitl import HitlService, PendingActionRepository
+from src.app.core.hitl.executors import register_default_executors
 from src.app.core.mcp.session_manager import get_mcp_session_manager
 from src.app.core.session import SessionRepository
 from src.app.core.session.event_repository import SessionEventRepository
@@ -19,6 +21,9 @@ session_repository = SessionRepository(dbsession)
 agent_repository = AgentRepository(dbsession)
 skill_repository = SkillRepository(dbsession)
 session_event_repository = SessionEventRepository()
+pending_action_repository = PendingActionRepository()
+hitl_service = HitlService(pending_action_repository)
+register_default_executors()
 
 
 def langfuse_init():
