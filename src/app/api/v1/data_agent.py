@@ -208,7 +208,17 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
     skills_dir = None
     folder = None
     if session.agent_id is not None:
-        agent = await agent_repository.get_agent(session.agent_id)
+        # Isolation choke point (#11): resolve the bound agent through the ownership filter, so a
+        # session can never materialize another user's folder, DB password, or skills. A non-owned
+        # (or absent) agent falls through to plain defaults — fail-closed, no foreign resources.
+        agent = await agent_repository.get_owned_agent(session.agent_id, session.user_id)
+        if agent is None:
+            logger.warning(
+                "session_agent_ownership_mismatch",
+                session_id=session.id,
+                user_id=session.user_id,
+                agent_id=session.agent_id,
+            )
         if agent is not None:
             config = agent.config or {}
             system_prompt = agent.system_prompt or None

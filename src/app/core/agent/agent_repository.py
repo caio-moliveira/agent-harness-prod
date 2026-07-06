@@ -39,6 +39,17 @@ class AgentRepository:
         with session_scope() as session:
             return session.get(Agent, agent_id)
 
+    async def get_owned_agent(self, agent_id: int, user_id: int) -> Optional[Agent]:
+        """Get an agent only if it belongs to ``user_id``, else None.
+
+        Ownership is enforced as a QUERY-LEVEL filter (``WHERE id AND user_id``), not a post-hoc
+        comparison after fetching — so a non-owner can never even load the row. This is the
+        isolation choke point the session-build path uses.
+        """
+        with session_scope() as session:
+            statement = select(Agent).where(Agent.id == agent_id, Agent.user_id == user_id)
+            return session.exec(statement).first()
+
     async def get_user_agents(self, user_id: int) -> List[Agent]:
         """Get all agents owned by a user, oldest first."""
         with session_scope() as session:

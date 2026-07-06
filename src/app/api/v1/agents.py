@@ -72,14 +72,19 @@ def _to_response(agent: Agent) -> AgentResponse:
 
 
 async def _owned_agent_or_error(agent_id: int, user: User) -> Agent:
-    """Return the agent if it exists and belongs to the user, else raise 404/403."""
-    agent = await agent_repository.get_agent(agent_id)
-    if agent is None:
+    """Return the agent if it exists and belongs to the user, else raise 404/403.
+
+    The happy path uses the query-level ownership filter (``get_owned_agent``) so a non-owner
+    never loads the row. Only when that returns nothing do we probe existence to pick the right
+    status (404 absent vs 403 owned-by-another).
+    """
+    agent = await agent_repository.get_owned_agent(agent_id, user.id)
+    if agent is not None:
+        return agent
+    if await agent_repository.get_agent(agent_id) is None:
         raise HTTPException(status_code=404, detail="Agent not found")
-    if agent.user_id != user.id:
-        logger.warning("agent_access_denied", agent_id=agent_id, user_id=user.id)
-        raise HTTPException(status_code=403, detail="Cannot access another user's agent")
-    return agent
+    logger.warning("agent_access_denied", agent_id=agent_id, user_id=user.id)
+    raise HTTPException(status_code=403, detail="Cannot access another user's agent")
 
 
 @router.post("", response_model=AgentResponse)
