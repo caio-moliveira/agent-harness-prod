@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ToolStep } from "../lib/types";
+import Markdown from "./Markdown";
 
 const TOOL_LABELS: Record<string, { icon: string; label: string }> = {
   list_tables: { icon: "🗂️", label: "Listando tabelas" },
@@ -40,15 +41,17 @@ function StepCard({ step }: { step: ToolStep }) {
       </button>
       {open && (
         <div className="space-y-1 border-t border-slate-800 px-3 py-2">
+          {/* Input is the query/path/command — keep it verbatim in monospace. */}
           {step.input && (
             <pre className="overflow-x-auto rounded bg-slate-950 p-2 text-[11px] text-slate-300">
               {step.input}
             </pre>
           )}
+          {/* Output can be a markdown file, a table, or prose — render it. */}
           {step.output && (
-            <pre className="max-h-40 overflow-auto rounded bg-slate-950 p-2 text-[11px] text-slate-400">
-              {step.output}
-            </pre>
+            <div className="max-h-56 overflow-auto rounded bg-slate-950 p-2 text-[11px] text-slate-300">
+              <Markdown>{step.output}</Markdown>
+            </div>
           )}
         </div>
       )}
