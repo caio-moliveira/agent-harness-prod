@@ -1,4 +1,5 @@
 import type {
+  Agent,
   ChatResponse,
   ConnectDbRequest,
   ConnectDbResponse,
@@ -57,12 +58,56 @@ export async function login(email: string, password: string): Promise<TokenRespo
   return (await ensureOk(res)).json();
 }
 
-export async function createSession(userToken: string): Promise<SessionResponse> {
-  const res = await fetch(`${BASE}/auth/session`, {
+export async function createSession(userToken: string, agentId?: number): Promise<SessionResponse> {
+  const url = agentId != null ? `${BASE}/auth/session?agent_id=${agentId}` : `${BASE}/auth/session`;
+  const res = await fetch(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${userToken}` },
   });
   return (await ensureOk(res)).json();
+}
+
+// --- Agents: the user's persisted agent configurations ---
+
+export async function listAgents(userToken: string): Promise<Agent[]> {
+  const res = await fetch(`${BASE}/agents`, {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function createAgent(
+  userToken: string,
+  name: string,
+  systemPrompt: string,
+): Promise<Agent> {
+  const res = await fetch(`${BASE}/agents`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ name, system_prompt: systemPrompt }),
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function updateAgent(
+  userToken: string,
+  agentId: number,
+  body: { name?: string; system_prompt?: string },
+): Promise<Agent> {
+  const res = await fetch(`${BASE}/agents/${agentId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify(body),
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function deleteAgent(userToken: string, agentId: number): Promise<void> {
+  const res = await fetch(`${BASE}/agents/${agentId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  await ensureOk(res);
 }
 
 export async function listSessions(userToken: string): Promise<SessionResponse[]> {

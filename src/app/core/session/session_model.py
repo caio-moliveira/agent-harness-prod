@@ -2,6 +2,7 @@
 
 from typing import (
     TYPE_CHECKING,
+    Optional,
 )
 
 from sqlmodel import (
@@ -21,6 +22,7 @@ class Session(BaseModel, table=True):
     Attributes:
         id: The primary key
         user_id: Foreign key to the user
+        agent_id: Foreign key to the agent this session is bound to (nullable)
         name: Name of the session (defaults to empty string)
         created_at: When the session was created
         messages: Relationship to session messages
@@ -29,5 +31,6 @@ class Session(BaseModel, table=True):
 
     id: str = Field(primary_key=True)
     user_id: int = Field(foreign_key="user.id")
+    agent_id: Optional[int] = Field(default=None, foreign_key="agent.id", index=True)
     name: str = Field(default="")
     user: "User" = Relationship(back_populates="sessions")

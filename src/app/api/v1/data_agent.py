@@ -37,7 +37,9 @@ from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
 from src.app.core.sandbox import registry
 from src.app.core.sandbox.docker_sandbox import DockerSandbox, create_container
+from src.app.core.sandbox.registry import SessionResources
 from src.app.core.session.session_model import Session
+from src.app.init import agent_repository
 
 router = APIRouter()
 
@@ -155,7 +157,7 @@ async def query_sources(
 
     try:
         if res.agent is None:
-            res.agent = build_data_agent(res, session.user_id)
+            res.agent = await _build_agent_for_session(res, session)
         messages = [Message(role="user", content=body.query)]
         result = await res.agent.agent_invoke(messages, session.id, user_id=session.user_id)
         logger.info("data_query_processed", session_id=session.id)
@@ -167,11 +169,33 @@ async def query_sources(
         raise HTTPException(status_code=500, detail="Erro ao processar a consulta.")
 
 
-async def _get_or_build_agent(session_id: str, user_id: int):
+async def _build_agent_for_session(res: SessionResources, session: Session):
+    """Build a Data Agent from the session's live sources and its bound agent config.
+
+    When the session is bound to an agent, the agent's system prompt is applied and its id
+    scopes long-term memory (per-agent isolation). Works with zero sources.
+    """
+    system_prompt = None
+    name = "Data Agent"
+    if session.agent_id is not None:
+        agent = await agent_repository.get_agent(session.agent_id)
+        if agent is not None:
+            system_prompt = agent.system_prompt or None
+            name = agent.name or name
+    return build_data_agent(
+        res,
+        user_id=session.user_id,
+        system_prompt=system_prompt,
+        agent_id=session.agent_id,
+        name=name,
+    )
+
+
+async def _get_or_build_agent(session: Session):
     """Return the session's Data Agent, building it if needed (works with zero sources)."""
-    res = await registry.ensure(session_id)
+    res = await registry.ensure(session.id)
     if res.agent is None:
-        res.agent = build_data_agent(res, user_id)
+        res.agent = await _build_agent_for_session(res, session)
     return res.agent
 
 
@@ -183,7 +207,7 @@ async def query_stream(
     session: Session = Depends(get_current_session),
 ) -> StreamingResponse:
     """Stream the Data Agent's work (tool calls, reasoning, tokens) as SSE events."""
-    agent = await _get_or_build_agent(session.id, session.user_id)
+    agent = await _get_or_build_agent(session)
     logger.info("data_stream_started", session_id=session.id, message_count=len(body.messages))
 
     async def event_generator():

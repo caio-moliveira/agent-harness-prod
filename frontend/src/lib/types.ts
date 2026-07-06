@@ -25,8 +25,16 @@ export interface TokenResponse {
 
 export interface SessionResponse {
   session_id: string;
+  agent_id?: number | null;
   name: string;
   token: Token;
+}
+
+export interface Agent {
+  id: number;
+  name: string;
+  system_prompt: string;
+  config: Record<string, unknown>;
 }
 
 export interface ChatResponse {

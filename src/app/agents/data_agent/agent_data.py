@@ -43,10 +43,14 @@ class DataAgent:
         db: Optional[SQLDatabase] = None,
         backend: Any = None,
         user_id: Optional[int] = None,
+        system_prompt: Optional[str] = None,
+        agent_id: Optional[int] = None,
     ):
+        """Build a Data Agent over a session's sources, isolated to one user and agent."""
         self.name = name
         self.user_id = user_id
-        self.agent = _create_data_deep_agent(db, backend, user_id)
+        self.agent_id = agent_id
+        self.agent = _create_data_deep_agent(db, backend, user_id, system_prompt, agent_id)
         self._pipeline = AgentPipeline(
             middlewares=[LoggingMiddleware(), ErrorHandlingMiddleware(), GuardrailMiddleware()],
             invoke_fn=self._core_invoke,
@@ -99,10 +103,10 @@ class DataAgent:
         history = [{"role": m.role, "content": m.content} for m in messages]
         last_user = messages[-1].content if messages else ""
 
-        # Auto-inject relevant long-term memory as leading context.
+        # Auto-inject relevant long-term memory as leading context (scoped to this agent).
         payload_messages = history
         if user_id is not None and last_user:
-            relevant = await get_relevant_memory(user_id, last_user)
+            relevant = await get_relevant_memory(user_id, last_user, agent_id=self.agent_id)
             if relevant:
                 payload_messages = [
                     {"role": "system", "content": f"Contexto do usuário (memória de longo prazo):\n{relevant}"},
@@ -131,12 +135,13 @@ class DataAgent:
                     answer += text
                     yield {"type": "token", "content": text}
 
-        # Store this exchange back into long-term memory (non-blocking).
+        # Store this exchange back into long-term memory (non-blocking), scoped to this agent.
         if user_id is not None and last_user and answer:
             bg_update_memory(
                 user_id,
                 [{"role": "user", "content": last_user}, {"role": "assistant", "content": answer}],
-                {"session_id": session_id},
+                {"session_id": session_id, "agent_id": self.agent_id},
+                agent_id=self.agent_id,
             )
 
 
@@ -146,17 +151,58 @@ def _short(value: Any, limit: int = 1500) -> str:
     return text[:limit]
 
 
-def _create_data_deep_agent(db: Optional[SQLDatabase], backend: Any, user_id: Optional[int]) -> Any:
-    """Build the underlying Deep Agent with read-only SQL, memory tools, and optional sandbox."""
+# Tool-usage guidance the harness ALWAYS appends to a user's custom system prompt, so a
+# user-authored persona never drops the mechanics the model needs to actually use its tools.
+_HARNESS_CAPABILITIES = """
+
+## Ferramentas desta sessão (não removível)
+Conforme as fontes que o usuário conectou, você pode ter:
+- **Banco SQL (somente leitura)** — ferramentas `list_tables`, `describe_tables`, `run_sql`
+  (apenas `SELECT`/`WITH`/`EXPLAIN`/`SHOW`).
+- **Uma pasta concedida** exposta por ferramentas de arquivo (`ls`, `read_file`, `glob`, `grep`)
+  em um sandbox isolado montado em `/workspace`.
+- **Memória de longo prazo** — `buscar_memoria(consulta)`.
+
+Regras: somente leitura; nunca modifique dados. Para perguntas sobre **arquivos**, use `ls`/`glob`
+em `/workspace` e `read_file` para ler o conteúdo (ex.: leia o CSV antes de responder sobre ele);
+nunca cite caminhos fora de `/workspace`. Para perguntas de **banco**, faça `list_tables`, depois
+`describe_tables` e então `run_sql`. Seja conciso e cite os arquivos/tabelas usados.
+"""
+
+
+def _compose_system_prompt(system_prompt: Optional[str]) -> str:
+    """Return the effective system prompt.
+
+    With no user prompt, use the bundled default (which already documents the tools). With a
+    user-authored prompt, keep it as the persona but append the non-removable capabilities
+    guidance so the model still knows how to use the filesystem/SQL/memory tools.
+    """
+    if not system_prompt:
+        return load_system_prompt()
+    return f"{system_prompt}\n{_HARNESS_CAPABILITIES}"
+
+
+def _create_data_deep_agent(
+    db: Optional[SQLDatabase],
+    backend: Any,
+    user_id: Optional[int],
+    system_prompt: Optional[str] = None,
+    agent_id: Optional[int] = None,
+) -> Any:
+    """Build the underlying Deep Agent with read-only SQL, memory tools, and optional sandbox.
+
+    ``system_prompt`` sets the agent's persona; the harness capabilities guidance is always
+    appended so tool usage survives. ``agent_id`` scopes the memory tools per agent.
+    """
     model = ChatOpenAI(model=settings.DEFAULT_LLM_MODEL, temperature=0, api_key=settings.OPENAI_API_KEY)
-    tools = make_memory_tools(user_id)
+    tools = make_memory_tools(user_id, agent_id)
     if db is not None:
         tools = tools + make_readonly_sql_tools(db)
 
     kwargs: dict[str, Any] = {
         "model": model,
         "tools": tools,
-        "system_prompt": load_system_prompt(),
+        "system_prompt": _compose_system_prompt(system_prompt),
         "middleware": [PIIMiddleware("email")],
     }
     # When a sandbox backend is provided (phase 2), the built-in filesystem tools

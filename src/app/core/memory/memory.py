@@ -47,19 +47,27 @@ async def get_memory_instance() -> AsyncMemory:
     return _memory_instance
 
 
-async def get_relevant_memory(user_id: int, query: str) -> str:
-    """Get relevant memories for user and query.
+async def get_relevant_memory(user_id: int, query: str, agent_id: Optional[int] = None) -> str:
+    """Get relevant memories for a user, partitioned by agent when given.
+
+    Memory is isolated per ``(user_id, agent_id)``: passing ``agent_id`` scopes retrieval to
+    that agent so facts learned by one agent are never surfaced to another. When ``agent_id``
+    is None the retrieval is user-scoped only (used by agents without an agent identity).
 
     Args:
         user_id: The user ID to search memories for.
         query: The query to search for relevant memories.
+        agent_id: Optional agent scope for per-agent isolation.
 
     Returns:
         str: Formatted string of relevant memories, or empty string on error.
     """
     try:
         memory = await get_memory_instance()
-        results = await memory.search(user_id=str(user_id), query=query)
+        kwargs = {"user_id": str(user_id), "query": query}
+        if agent_id is not None:
+            kwargs["agent_id"] = str(agent_id)
+        results = await memory.search(**kwargs)
         memory_result = "\n".join([f"* {result['memory']}" for result in results["results"]])
         logger.debug("retrieved_relevant_memory", memory=memory_result)
         return memory_result
@@ -68,18 +76,24 @@ async def get_relevant_memory(user_id: int, query: str) -> str:
         return ""
 
 
-async def update_memory(user_id: int, messages: list[dict], metadata: dict = None) -> None:
-    """Update long-term memory with new messages.
+async def update_memory(
+    user_id: int, messages: list[dict], metadata: dict = None, agent_id: Optional[int] = None
+) -> None:
+    """Update long-term memory with new messages, partitioned by agent when given.
 
     Args:
         user_id: The user ID to update memory for.
         messages: The messages to add to memory.
         metadata: Optional metadata to include with the memory update.
+        agent_id: Optional agent scope for per-agent isolation.
     """
     try:
         memory = await get_memory_instance()
-        await memory.add(messages, user_id=str(user_id), metadata=metadata)
-        logger.info("long_term_memory_updated_successfully", user_id=user_id)
+        kwargs = {"user_id": str(user_id), "metadata": metadata}
+        if agent_id is not None:
+            kwargs["agent_id"] = str(agent_id)
+        await memory.add(messages, **kwargs)
+        logger.info("long_term_memory_updated_successfully", user_id=user_id, agent_id=agent_id)
     except Exception as e:
         logger.exception(
             "failed_to_update_long_term_memory",
@@ -87,15 +101,18 @@ async def update_memory(user_id: int, messages: list[dict], metadata: dict = Non
             error=str(e),
         )
 
-def bg_update_memory(user_id: int, messages: list[dict], metadata: dict = None) -> None:
-    """Run memory update in background without blocking the response
+def bg_update_memory(
+    user_id: int, messages: list[dict], metadata: dict = None, agent_id: Optional[int] = None
+) -> None:
+    """Run memory update in background without blocking the response.
 
     Args:
         user_id: The user ID to update memory for.
         messages: The messages to add to memory.
         metadata: Optional metadata to include with the memory update.
+        agent_id: Optional agent scope for per-agent isolation.
     """
     asyncio.create_task(
-        update_memory(user_id, messages, metadata)
+        update_memory(user_id, messages, metadata, agent_id=agent_id)
     )
 

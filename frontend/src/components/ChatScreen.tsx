@@ -31,7 +31,7 @@ function closeStep(steps: ToolStep[], name: string, output?: string): ToolStep[]
 }
 
 export default function ChatScreen() {
-  const { email, sessionToken, logout } = useAuth();
+  const { agentName, sessionToken, leaveAgent, logout } = useAuth();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [sending, setSending] = useState(false);
   const [showSources, setShowSources] = useState(false);
@@ -118,9 +118,18 @@ export default function ChatScreen() {
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-          <div className="min-w-0">
-            <h1 className="text-sm font-semibold">Agent Harness</h1>
-            <p className="truncate text-xs text-slate-500">{email}</p>
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              onClick={leaveAgent}
+              title="Trocar de agente"
+              className="rounded-lg border border-slate-700 px-2 py-1.5 text-xs hover:bg-slate-800"
+            >
+              ←
+            </button>
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-semibold">{agentName ?? "Agente"}</h1>
+              <p className="truncate text-xs text-slate-500">Agent Harness</p>
+            </div>
           </div>
           <div className="flex items-center gap-2 text-xs">
             <span className={`rounded-full px-2 py-1 ${sources.db_connected ? "bg-emerald-900 text-emerald-200" : "bg-slate-800 text-slate-500"}`}>

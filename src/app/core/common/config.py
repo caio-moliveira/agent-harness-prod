@@ -205,6 +205,7 @@ class Settings:
             "text_to_sql": ["15 per minute"],
             "data_agent": ["15 per minute"],
             "data_connect": ["10 per minute"],
+            "agents": ["60 per minute"],
             "messages": ["50 per minute"],
             "register": ["10 per hour"],
             "login": ["20 per minute"],
