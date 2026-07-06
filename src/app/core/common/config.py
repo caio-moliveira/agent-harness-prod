@@ -216,6 +216,7 @@ class Settings:
             "data_connect": ["10 per minute"],
             "agents": ["60 per minute"],
             "skills": ["60 per minute"],
+            "session_events": ["60 per minute"],
             "messages": ["50 per minute"],
             "register": ["10 per hour"],
             "login": ["20 per minute"],

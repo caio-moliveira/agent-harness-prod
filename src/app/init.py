@@ -9,6 +9,7 @@ from src.app.core.agent import AgentRepository
 from src.app.core.db.database import database_factory
 from src.app.core.mcp.session_manager import get_mcp_session_manager
 from src.app.core.session import SessionRepository
+from src.app.core.session.event_repository import SessionEventRepository
 from src.app.core.skill import SkillRepository
 from src.app.core.user import UserRepository
 
@@ -17,6 +18,7 @@ user_repository =  UserRepository(dbsession)
 session_repository = SessionRepository(dbsession)
 agent_repository = AgentRepository(dbsession)
 skill_repository = SkillRepository(dbsession)
+session_event_repository = SessionEventRepository()
 
 
 def langfuse_init():

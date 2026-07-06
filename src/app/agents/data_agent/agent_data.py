@@ -27,6 +27,11 @@ from src.app.core.middleware import (
     LoggingMiddleware,
     build_invoke_config,
 )
+from src.app.core.session.event_recorder import bg_record_tool_event
+from src.app.core.session.event_repository import SessionEventRepository
+
+# One stateless repository instance for recording episodic events off the streaming path.
+_event_repo = SessionEventRepository()
 
 
 def load_system_prompt() -> str:
@@ -125,10 +130,22 @@ class DataAgent:
         async for event in self.agent.astream_events({"messages": payload_messages}, config=config, version="v2"):
             kind = event.get("event")
             if kind == "on_tool_start":
+                tool_name = event.get("name", "")
+                tool_input = _short(event.get("data", {}).get("input"))
+                # Audit trail (#10): record document reads / SQL executions off the hot path.
+                bg_record_tool_event(
+                    _event_repo,
+                    user_id=user_id,
+                    agent_id=self.agent_id,
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    scope="database" if tool_name == "run_sql" else "folder",
+                )
                 yield {
                     "type": "tool_start",
-                    "name": event.get("name", ""),
-                    "input": _short(event.get("data", {}).get("input")),
+                    "name": tool_name,
+                    "input": tool_input,
                 }
             elif kind == "on_tool_end":
                 output = event.get("data", {}).get("output")
