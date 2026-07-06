@@ -48,6 +48,12 @@ export interface Skill {
   source: string;
 }
 
+export interface RegistrySkill {
+  slug: string;
+  name: string;
+  description: string;
+}
+
 export interface Agent {
   id: number;
   name: string;

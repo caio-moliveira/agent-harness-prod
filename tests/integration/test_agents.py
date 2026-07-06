@@ -592,3 +592,67 @@ class TestSkillMaterialize:
         from src.app.core.skill import materialize as mat
 
         assert mat.materialize_skills(agent_id=1, skills=[]) is None
+
+
+# ---------------------------------------------------------------------------
+# Skill registry fetch (#7) — vetted source, saved as a user-owned copy
+# ---------------------------------------------------------------------------
+
+class TestSkillRegistry:
+    def test_parse_skill_md(self):
+        from src.app.core.skill.registry import _parse_skill_md
+
+        parsed = _parse_skill_md("---\nname: Cool Skill\ndescription: does things\n---\n\n# Body\nStep 1.")
+        assert parsed["name"] == "Cool Skill"
+        assert parsed["description"] == "does things"
+        assert "Step 1." in parsed["body"]
+
+    def test_invalid_slug_rejected(self):
+        import asyncio
+
+        from src.app.core.common import config as config_module
+        from src.app.core.skill import registry
+
+        with patch.object(config_module.settings, "SKILL_REGISTRY_URL", "https://reg.example.com"):
+            with pytest.raises(ValueError):
+                asyncio.run(registry.fetch_registry_skill("../etc/passwd"))
+
+    async def test_fetch_disabled_returns_503(self, client: AsyncClient, user_token):
+        from src.app.core.common import config as config_module
+
+        with patch.object(config_module.settings, "SKILL_REGISTRY_URL", ""):
+            resp = await client.post(
+                "/api/v1/skills/fetch", json={"slug": "query-tips"}, headers=_auth(user_token)
+            )
+        assert resp.status_code == 503
+
+    async def test_fetch_saves_user_owned_copy(self, client: AsyncClient, user_token):
+        from src.app.core.common import config as config_module
+
+        parsed = {"name": "Imported", "description": "from registry", "body": "Do the thing."}
+        with (
+            patch.object(config_module.settings, "SKILL_REGISTRY_URL", "https://reg.example.com"),
+            patch("src.app.api.v1.skills.fetch_registry_skill", new=AsyncMock(return_value=parsed)),
+        ):
+            resp = await client.post(
+                "/api/v1/skills/fetch", json={"slug": "imported"}, headers=_auth(user_token)
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["source"] == "fetched"
+        assert data["body"] == "Do the thing."
+        # It is a real library entry now (an independent copy).
+        listed = (await client.get("/api/v1/skills", headers=_auth(user_token))).json()
+        assert any(s["id"] == data["id"] for s in listed)
+
+    async def test_fetch_missing_returns_404(self, client: AsyncClient, user_token):
+        from src.app.core.common import config as config_module
+
+        with (
+            patch.object(config_module.settings, "SKILL_REGISTRY_URL", "https://reg.example.com"),
+            patch("src.app.api.v1.skills.fetch_registry_skill", new=AsyncMock(return_value=None)),
+        ):
+            resp = await client.post(
+                "/api/v1/skills/fetch", json={"slug": "nope"}, headers=_auth(user_token)
+            )
+        assert resp.status_code == 404

@@ -1,6 +1,7 @@
 import type {
   Agent,
   Skill,
+  RegistrySkill,
   DatabaseSummary,
   ChatResponse,
   ConnectDbRequest,
@@ -214,6 +215,20 @@ export async function deleteSkill(userToken: string, skillId: number): Promise<v
     headers: { Authorization: `Bearer ${userToken}` },
   });
   await ensureOk(res);
+}
+
+export async function listRegistry(userToken: string): Promise<RegistrySkill[]> {
+  const res = await fetch(`${BASE}/skills/registry`, { headers: { Authorization: `Bearer ${userToken}` } });
+  return (await ensureOk(res)).json();
+}
+
+export async function fetchSkill(userToken: string, slug: string): Promise<Skill> {
+  const res = await fetch(`${BASE}/skills/fetch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ slug }),
+  });
+  return (await ensureOk(res)).json();
 }
 
 export async function listSessions(userToken: string): Promise<SessionResponse[]> {

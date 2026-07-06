@@ -8,14 +8,23 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from pydantic import BaseModel
+
 from src.app.api.security.limiter import limiter
 from src.app.api.v1.auth import get_current_user
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
+from src.app.core.skill.registry import fetch_registry_index, fetch_registry_skill, is_registry_enabled
 from src.app.core.skill.skill_dtos import SkillCreate, SkillResponse, SkillUpdate
 from src.app.core.skill.skill_model import Skill
 from src.app.core.user.user_model import User
 from src.app.init import skill_repository
+
+
+class FetchSkillRequest(BaseModel):
+    """Request body to import a skill from the vetted registry by slug."""
+
+    slug: str
 
 router = APIRouter()
 
@@ -61,6 +70,48 @@ async def list_skills(request: Request, user: User = Depends(get_current_user)) 
     """List all skills in the user's library."""
     skills = await skill_repository.get_user_skills(user.id)
     return [_to_response(s) for s in skills]
+
+
+@router.get("/registry", response_model=List[dict])
+@limiter.limit(_RATE)
+async def list_registry(request: Request, user: User = Depends(get_current_user)) -> List[dict]:
+    """List skills available in the vetted registry (empty when fetch is disabled)."""
+    if not is_registry_enabled():
+        raise HTTPException(status_code=503, detail="Registro de skills não configurado (SKILL_REGISTRY_URL).")
+    try:
+        return await fetch_registry_index()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("skill_registry_index_failed", error_type=type(e).__name__)
+        raise HTTPException(status_code=502, detail="Falha ao consultar o registro de skills.")
+
+
+@router.post("/fetch", response_model=SkillResponse)
+@limiter.limit(_RATE)
+async def fetch_skill(
+    request: Request, body: FetchSkillRequest, user: User = Depends(get_current_user)
+) -> SkillResponse:
+    """Import a skill from the vetted registry, saved as the user's own copy.
+
+    Only the configured registry may be fetched; the imported text is stored as an independent
+    copy (``source='fetched'``) so a later upstream change never alters the user's skill.
+    """
+    if not is_registry_enabled():
+        raise HTTPException(status_code=503, detail="Registro de skills não configurado (SKILL_REGISTRY_URL).")
+    try:
+        fetched = await fetch_registry_skill(body.slug)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Slug de skill inválido.")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("skill_fetch_failed", error_type=type(e).__name__)
+        raise HTTPException(status_code=502, detail="Falha ao buscar a skill no registro.")
+    if fetched is None:
+        raise HTTPException(status_code=404, detail="Skill não encontrada no registro.")
+
+    skill = await skill_repository.create_skill(
+        user.id, fetched["name"], fetched["description"], fetched["body"], source="fetched"
+    )
+    logger.info("skill_fetched", skill_id=skill.id, user_id=user.id, slug=body.slug)
+    return _to_response(skill)
 
 
 @router.get("/{skill_id}", response_model=SkillResponse)

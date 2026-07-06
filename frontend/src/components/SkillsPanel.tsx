@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
-import type { Skill } from "../lib/types";
+import type { RegistrySkill, Skill } from "../lib/types";
 
 /** Slide-over panel to author and manage the user's skill library. */
 export default function SkillsPanel({ onClose }: { onClose: () => void }) {
@@ -12,6 +12,7 @@ export default function SkillsPanel({ onClose }: { onClose: () => void }) {
   const [body, setBody] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [registry, setRegistry] = useState<RegistrySkill[] | null>(null);
 
   async function refresh() {
     if (!userToken) return;
@@ -54,6 +55,25 @@ export default function SkillsPanel({ onClose }: { onClose: () => void }) {
     }
   }
 
+  async function loadRegistry() {
+    if (!userToken) return;
+    try {
+      setRegistry(await api.listRegistry(userToken));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Registro indisponível (configure SKILL_REGISTRY_URL).");
+    }
+  }
+
+  async function importSkill(slug: string) {
+    if (!userToken) return;
+    try {
+      await api.fetchSkill(userToken, slug);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao importar skill");
+    }
+  }
+
   return (
     <div className="fixed inset-y-0 right-0 z-20 flex w-full max-w-md flex-col border-l border-slate-800 bg-slate-950 p-5 shadow-xl">
       <div className="mb-4 flex items-center justify-between">
@@ -87,6 +107,40 @@ export default function SkillsPanel({ onClose }: { onClose: () => void }) {
               <p className="truncate text-xs text-slate-500">{s.description || "sem descrição"}</p>
             </div>
           ))
+        )}
+      </div>
+
+      <div className="mt-3 border-t border-slate-800 pt-3">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-xs font-medium text-slate-400">Registro confiável</span>
+          <button
+            onClick={() => void loadRegistry()}
+            className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+          >
+            Buscar
+          </button>
+        </div>
+        {registry !== null && (
+          <div className="max-h-40 space-y-1 overflow-y-auto">
+            {registry.length === 0 ? (
+              <p className="text-xs text-slate-500">Nenhuma skill no registro.</p>
+            ) : (
+              registry.map((r) => (
+                <div
+                  key={r.slug}
+                  className="flex items-center justify-between gap-2 rounded border border-slate-800 px-2 py-1"
+                >
+                  <span className="min-w-0 truncate text-xs text-slate-300">{r.name || r.slug}</span>
+                  <button
+                    onClick={() => void importSkill(r.slug)}
+                    className="rounded border border-indigo-700 bg-indigo-950/40 px-2 py-1 text-xs text-indigo-200 hover:bg-indigo-900/50"
+                  >
+                    Importar
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
         )}
       </div>
 
