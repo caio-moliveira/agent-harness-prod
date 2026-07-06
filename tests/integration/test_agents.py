@@ -656,3 +656,39 @@ class TestSkillRegistry:
                 "/api/v1/skills/fetch", json={"slug": "nope"}, headers=_auth(user_token)
             )
         assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# DB session robustness (#8) — a failed query must not poison later operations
+# ---------------------------------------------------------------------------
+
+class TestSessionRobustness:
+    def test_failed_query_does_not_poison_later_operations(self):
+        from sqlalchemy import text
+
+        from src.app.core.db.database import session_scope
+
+        # A failing query rolls back within its own scope...
+        with pytest.raises(Exception):
+            with session_scope() as s:
+                s.execute(text("SELECT * FROM definitely_not_a_table"))
+
+        # ...and a later, unrelated operation still succeeds (no aborted-transaction cascade).
+        with session_scope() as s:
+            value = s.execute(text("SELECT 1")).scalar()
+        assert value == 1
+
+    async def test_api_survives_a_failing_request(self, client: AsyncClient, user_token):
+        """After a request whose DB query errors, a following request still works."""
+        # Force get_user_agents to raise once (simulating a transient DB error). The ASGI test
+        # transport re-raises unhandled exceptions, so the first call raises.
+        with patch(
+            "src.app.init.agent_repository.get_user_agents",
+            new=AsyncMock(side_effect=Exception("boom")),
+        ):
+            with pytest.raises(Exception):
+                await client.get("/api/v1/agents", headers=_auth(user_token))
+
+        # A subsequent request on a real DB path succeeds — no lingering aborted transaction.
+        ok = await client.get("/api/v1/agents", headers=_auth(user_token))
+        assert ok.status_code == 200

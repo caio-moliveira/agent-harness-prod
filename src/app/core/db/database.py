@@ -1,5 +1,8 @@
 """This file contains the database service for the application."""
 
+from contextlib import contextmanager
+from typing import Iterator
+
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import QueuePool
 from sqlmodel import (
@@ -69,7 +72,24 @@ class DatabaseFactory:
         return Session(self.engine)
 
 
-
-
 # Create a singleton instance
 database_factory = DatabaseFactory()
+
+
+@contextmanager
+def session_scope() -> Iterator[Session]:
+    """Yield a fresh short-lived session, committing on success and rolling back on error.
+
+    A per-operation session isolates failures: one bad query rolls back its own transaction and
+    can never poison a later request (unlike a single long-lived, process-wide session).
+    ``expire_on_commit=False`` keeps returned objects usable after the session closes.
+    """
+    session = Session(database_factory.engine, expire_on_commit=False)
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
