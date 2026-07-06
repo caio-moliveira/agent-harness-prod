@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
-import type { Agent } from "../lib/types";
+import type { Agent, Skill } from "../lib/types";
+import SkillsPanel from "./SkillsPanel";
 
 export default function AgentsScreen() {
   const { email, userToken, selectAgent, logout } = useAuth();
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [library, setLibrary] = useState<Skill[]>([]);
+  const [showSkills, setShowSkills] = useState(false);
+  const [skillEditingId, setSkillEditingId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -29,7 +33,9 @@ export default function AgentsScreen() {
     if (!userToken) return;
     setLoading(true);
     try {
-      setAgents(await api.listAgents(userToken));
+      const [ags, skills] = await Promise.all([api.listAgents(userToken), api.listSkills(userToken)]);
+      setAgents(ags);
+      setLibrary(skills);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao carregar agentes");
@@ -42,6 +48,28 @@ export default function AgentsScreen() {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userToken]);
+
+  async function toggleAttachedSkill(agent: Agent, skillId: number) {
+    if (!userToken) return;
+    const current = new Set(agent.skills ?? []);
+    if (current.has(skillId)) current.delete(skillId);
+    else current.add(skillId);
+    try {
+      const updated = await api.attachAgentSkills(userToken, agent.id, [...current]);
+      setAgents((prev) => prev.map((a) => (a.id === agent.id ? updated : a)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao anexar skill");
+    }
+  }
+
+  async function reloadLibrary() {
+    if (!userToken) return;
+    try {
+      setLibrary(await api.listSkills(userToken));
+    } catch {
+      /* ignore */
+    }
+  }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -160,12 +188,20 @@ export default function AgentsScreen() {
           <h1 className="text-lg font-semibold">Seus agentes</h1>
           <p className="text-xs text-slate-500">{email}</p>
         </div>
-        <button
-          onClick={logout}
-          className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs hover:bg-slate-800"
-        >
-          Sair
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowSkills(true)}
+            className="rounded-lg border border-indigo-700 bg-indigo-950/40 px-3 py-1.5 text-xs text-indigo-200 hover:bg-indigo-900/50"
+          >
+            Skills
+          </button>
+          <button
+            onClick={logout}
+            className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs hover:bg-slate-800"
+          >
+            Sair
+          </button>
+        </div>
       </header>
 
       {error && (
@@ -348,10 +384,54 @@ export default function AgentsScreen() {
                   🧠 memória {agent.memory ? "on" : "off"}
                 </button>
               </div>
+
+              <div className="mt-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-500">📚</span>
+                  <span className="min-w-0 flex-1 truncate text-slate-400">
+                    {(agent.skills?.length ?? 0) > 0 ? `${agent.skills.length} skill(s) anexada(s)` : "nenhuma skill anexada"}
+                  </span>
+                  <button
+                    onClick={() => setSkillEditingId(skillEditingId === agent.id ? null : agent.id)}
+                    className="rounded border border-slate-700 px-2 py-1 text-slate-400 hover:bg-slate-800"
+                  >
+                    {skillEditingId === agent.id ? "Fechar" : "Anexar"}
+                  </button>
+                </div>
+                {skillEditingId === agent.id && (
+                  <div className="mt-2 space-y-1 rounded-lg border border-slate-800 bg-slate-950/40 p-2">
+                    {library.length === 0 ? (
+                      <p className="text-slate-500">
+                        Nenhuma skill na biblioteca. Crie uma em <strong>Skills</strong> no topo.
+                      </p>
+                    ) : (
+                      library.map((s) => (
+                        <label key={s.id} className="flex items-center gap-2 text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={(agent.skills ?? []).includes(s.id)}
+                            onChange={() => void toggleAttachedSkill(agent, s.id)}
+                          />
+                          <span className="truncate">{s.name}</span>
+                        </label>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           ))
         )}
       </div>
+
+      {showSkills && (
+        <SkillsPanel
+          onClose={() => {
+            setShowSkills(false);
+            void reloadLibrary();
+          }}
+        />
+      )}
 
       <div className="mt-4 border-t border-slate-800 pt-4">
         {creating ? (

@@ -28,8 +28,9 @@ from src.app.core.common.logging import logger
 from src.app.core.db.connect import build_db_url, connect_readonly
 from src.app.core.sandbox.paths import validate_grantable_folder
 from src.app.core.security import encrypt, is_encryption_available
+from src.app.core.skill.skill_dtos import AttachSkillsRequest
 from src.app.core.user.user_model import User
-from src.app.init import agent_repository
+from src.app.init import agent_repository, skill_repository
 
 router = APIRouter()
 
@@ -65,6 +66,7 @@ def _to_response(agent: Agent) -> AgentResponse:
         memory=bool(config.get("memory", True)),
         folder=config.get("folder"),
         database=_db_summary(config),
+        skills=list(config.get("skills", [])),
         config=safe_config,
     )
 
@@ -211,6 +213,35 @@ async def unbind_database(
         raise HTTPException(status_code=404, detail="Agent not found")
     logger.info("agent_database_unbound", agent_id=agent_id, user_id=user.id)
     return BindDatabaseResponse(id=agent_id, database=None, password_persisted=False)
+
+
+@router.put("/{agent_id}/skills", response_model=AgentResponse)
+@limiter.limit(_RATE)
+async def attach_skills(
+    request: Request, agent_id: int, body: AttachSkillsRequest, user: User = Depends(get_current_user)
+) -> AgentResponse:
+    """Set the skills attached to an agent (replaces the current set).
+
+    Every skill id must belong to the requesting user, else 403 — an agent can only attach its
+    owner's skills.
+    """
+    await _owned_agent_or_error(agent_id, user)
+    unique_ids = list(dict.fromkeys(body.skill_ids))
+    if unique_ids:
+        found = await skill_repository.get_skills_by_ids(unique_ids)
+        by_id = {s.id: s for s in found}
+        for sid in unique_ids:
+            skill = by_id.get(sid)
+            if skill is None:
+                raise HTTPException(status_code=404, detail=f"Skill {sid} not found")
+            if skill.user_id != user.id:
+                logger.warning("skill_attach_denied", skill_id=sid, user_id=user.id)
+                raise HTTPException(status_code=403, detail="Cannot attach another user's skill")
+    updated = await agent_repository.set_config_value(agent_id, "skills", unique_ids)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    logger.info("agent_skills_attached", agent_id=agent_id, user_id=user.id, count=len(unique_ids))
+    return _to_response(updated)
 
 
 @router.delete("/{agent_id}")

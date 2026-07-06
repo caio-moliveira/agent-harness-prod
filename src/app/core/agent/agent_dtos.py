@@ -61,6 +61,7 @@ class AgentResponse(BaseModel):
     memory: bool = True
     folder: Optional[str] = Field(default=None, description="Bound sandboxed folder path, if any")
     database: Optional["DatabaseSummary"] = Field(default=None, description="Bound database summary, if any")
+    skills: list[int] = Field(default_factory=list, description="Attached skill ids")
     config: dict = Field(default_factory=dict)
 
 

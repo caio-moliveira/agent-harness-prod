@@ -40,6 +40,14 @@ export interface DatabaseSummary {
   password_persisted: boolean;
 }
 
+export interface Skill {
+  id: number;
+  name: string;
+  description: string;
+  body: string;
+  source: string;
+}
+
 export interface Agent {
   id: number;
   name: string;
@@ -48,6 +56,7 @@ export interface Agent {
   memory: boolean;
   folder?: string | null;
   database?: DatabaseSummary | null;
+  skills: number[];
   config: Record<string, unknown>;
 }
 

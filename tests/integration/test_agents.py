@@ -5,6 +5,7 @@ partition seam — all through the existing ASGI HTTP boundary, except the memor
 assertion which tests the pure memory helpers directly.
 """
 
+import os
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -485,3 +486,109 @@ class TestAgentCapabilities:
         with_search = _create_data_deep_agent(None, None, user_id=1, memory_enabled=True, web_search=True)
         # The compiled agents differ; at minimum both build without error and are distinct objects.
         assert no_mem is not None and with_search is not None
+
+
+# ---------------------------------------------------------------------------
+# Skill library (#6) — author, isolate, attach
+# ---------------------------------------------------------------------------
+
+async def _create_skill(client: AsyncClient, token: str, name: str = "Query Tips", body: str = "Do X then Y."):
+    resp = await client.post(
+        "/api/v1/skills",
+        json={"name": name, "description": "how to", "body": body},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+class TestSkillLibrary:
+    async def test_crud_roundtrip(self, client: AsyncClient, user_token):
+        created = await _create_skill(client, user_token)
+        assert created["id"] is not None
+        assert created["source"] == "authored"
+
+        listed = await client.get("/api/v1/skills", headers=_auth(user_token))
+        assert any(s["id"] == created["id"] for s in listed.json())
+
+        upd = await client.patch(
+            f"/api/v1/skills/{created['id']}",
+            json={"body": "New body."},
+            headers=_auth(user_token),
+        )
+        assert upd.json()["body"] == "New body."
+
+        dele = await client.delete(f"/api/v1/skills/{created['id']}", headers=_auth(user_token))
+        assert dele.status_code == 200
+        gone = await client.get(f"/api/v1/skills/{created['id']}", headers=_auth(user_token))
+        assert gone.status_code == 404
+
+    async def test_skills_are_private(self, client: AsyncClient, user_token):
+        skill = await _create_skill(client, user_token)
+        attacker = await _register_and_token(client, "skill-attacker@example.com")
+        # not visible
+        attacker_list = (await client.get("/api/v1/skills", headers=_auth(attacker))).json()
+        assert attacker_list == []
+        # not readable / mutable
+        assert (await client.get(f"/api/v1/skills/{skill['id']}", headers=_auth(attacker))).status_code == 403
+        assert (
+            await client.delete(f"/api/v1/skills/{skill['id']}", headers=_auth(attacker))
+        ).status_code == 403
+
+
+class TestAgentSkills:
+    async def test_attach_persists(self, client: AsyncClient, user_token):
+        agent = await _create_agent(client, user_token)
+        s1 = await _create_skill(client, user_token, name="A")
+        s2 = await _create_skill(client, user_token, name="B")
+        resp = await client.put(
+            f"/api/v1/agents/{agent['id']}/skills",
+            json={"skill_ids": [s1["id"], s2["id"]]},
+            headers=_auth(user_token),
+        )
+        assert resp.status_code == 200
+        assert set(resp.json()["skills"]) == {s1["id"], s2["id"]}
+        got = (await client.get(f"/api/v1/agents/{agent['id']}", headers=_auth(user_token))).json()
+        assert set(got["skills"]) == {s1["id"], s2["id"]}
+
+    async def test_cannot_attach_another_users_skill(self, client: AsyncClient, user_token):
+        agent = await _create_agent(client, user_token)
+        attacker = await _register_and_token(client, "attach-attacker@example.com")
+        victim_skill = await _create_skill(client, user_token, name="Secret")
+        resp = await client.put(
+            f"/api/v1/agents/{agent['id']}/skills",
+            json={"skill_ids": [victim_skill["id"]]},
+            headers=_auth(attacker),
+        )
+        # attacker doesn't even own the agent
+        assert resp.status_code == 403
+
+    async def test_attach_nonexistent_skill_404(self, client: AsyncClient, user_token):
+        agent = await _create_agent(client, user_token)
+        resp = await client.put(
+            f"/api/v1/agents/{agent['id']}/skills",
+            json={"skill_ids": [999999]},
+            headers=_auth(user_token),
+        )
+        assert resp.status_code == 404
+
+
+class TestSkillMaterialize:
+    def test_writes_skill_md(self, tmp_path):
+        from src.app.core.skill import materialize as mat
+        from src.app.core.skill.skill_model import Skill
+
+        skill = Skill(user_id=1, name="My Skill", description="one liner", body="Step 1. Do it.")
+        base = mat.materialize_skills(agent_id=42, skills=[skill])
+        assert base is not None
+        skill_md = os.path.join(base, "my-skill", "SKILL.md")
+        assert os.path.isfile(skill_md)
+        with open(skill_md, encoding="utf-8") as f:
+            content = f.read()
+        assert "name: My Skill" in content
+        assert "Step 1. Do it." in content
+
+    def test_empty_returns_none(self):
+        from src.app.core.skill import materialize as mat
+
+        assert mat.materialize_skills(agent_id=1, skills=[]) is None

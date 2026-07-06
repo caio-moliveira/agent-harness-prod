@@ -48,6 +48,7 @@ class DataAgent:
         agent_id: Optional[int] = None,
         web_search: bool = False,
         memory_enabled: bool = True,
+        skills_dir: Optional[str] = None,
     ):
         """Build a Data Agent over a session's sources, isolated to one user and agent."""
         self.name = name
@@ -55,7 +56,7 @@ class DataAgent:
         self.agent_id = agent_id
         self.memory_enabled = memory_enabled
         self.agent = _create_data_deep_agent(
-            db, backend, user_id, system_prompt, agent_id, web_search, memory_enabled
+            db, backend, user_id, system_prompt, agent_id, web_search, memory_enabled, skills_dir
         )
         self._pipeline = AgentPipeline(
             middlewares=[LoggingMiddleware(), ErrorHandlingMiddleware(), GuardrailMiddleware()],
@@ -196,13 +197,15 @@ def _create_data_deep_agent(
     agent_id: Optional[int] = None,
     web_search: bool = False,
     memory_enabled: bool = True,
+    skills_dir: Optional[str] = None,
 ) -> Any:
     """Build the underlying Deep Agent with read-only SQL, memory tools, and optional sandbox.
 
     ``system_prompt`` sets the agent's persona; the harness capabilities guidance is always
     appended so tool usage survives. ``agent_id`` scopes the memory tools per agent.
     ``web_search`` adds a host-side web-search tool (the sandbox stays network-isolated);
-    ``memory_enabled`` gates the long-term memory tool.
+    ``memory_enabled`` gates the long-term memory tool. ``skills_dir`` (when set) is a directory
+    of SKILL.md files the agent loads via progressive disclosure.
     """
     model = ChatOpenAI(model=settings.DEFAULT_LLM_MODEL, temperature=0, api_key=settings.OPENAI_API_KEY)
     tools = make_memory_tools(user_id, agent_id) if memory_enabled else []
@@ -218,6 +221,9 @@ def _create_data_deep_agent(
         "system_prompt": _compose_system_prompt(system_prompt),
         "middleware": [PIIMiddleware("email")],
     }
+    if skills_dir is not None:
+        # deepagents loads SKILL.md files from this directory (progressive disclosure).
+        kwargs["skills"] = [skills_dir]
     # When a sandbox backend is provided (phase 2), the built-in filesystem tools
     # (ls/read_file/glob/grep) route into the isolated container.
     if backend is not None:

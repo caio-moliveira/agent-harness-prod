@@ -16,6 +16,7 @@ def build_data_agent(
     name: str = "Data Agent",
     web_search: bool = False,
     memory_enabled: bool = True,
+    skills_dir: Optional[str] = None,
 ) -> DataAgent:
     """Build a Data Agent for a session's live resources and stored agent config.
 
@@ -42,4 +43,5 @@ def build_data_agent(
         agent_id=agent_id,
         web_search=web_search,
         memory_enabled=memory_enabled,
+        skills_dir=skills_dir,
     )

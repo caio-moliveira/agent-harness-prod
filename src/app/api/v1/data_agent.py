@@ -7,6 +7,7 @@ connection held by the per-session registry, and never persisted or logged.
 import asyncio
 import json
 import os
+from typing import Optional
 
 from fastapi import (
     APIRouter,
@@ -40,7 +41,8 @@ from src.app.core.sandbox.docker_sandbox import DockerSandbox, create_container
 from src.app.core.sandbox.paths import is_within_allowed_roots, validate_grantable_folder
 from src.app.core.sandbox.registry import SessionResources
 from src.app.core.session.session_model import Session
-from src.app.init import agent_repository
+from src.app.core.skill.materialize import materialize_skills
+from src.app.init import agent_repository, skill_repository
 
 router = APIRouter()
 
@@ -202,6 +204,7 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
     name = "Data Agent"
     web_search = False
     memory_enabled = True
+    skills_dir = None
     if session.agent_id is not None:
         agent = await agent_repository.get_agent(session.agent_id)
         if agent is not None:
@@ -214,6 +217,7 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
                 await _ensure_agent_folder(res, session, config["folder"])
             if config.get("database"):
                 await _ensure_agent_database(res, session, config["database"])
+            skills_dir = await _materialize_agent_skills(session.agent_id, agent.user_id, config.get("skills"))
     return build_data_agent(
         res,
         user_id=session.user_id,
@@ -222,7 +226,21 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
         name=name,
         web_search=web_search,
         memory_enabled=memory_enabled,
+        skills_dir=skills_dir,
     )
+
+
+async def _materialize_agent_skills(agent_id: int, owner_id: int, skill_ids) -> Optional[str]:
+    """Write the agent's attached skills to a SKILL.md directory, or None if none.
+
+    Only skills owned by the agent's owner are materialized (defense in depth against a stale
+    or tampered id list referencing another user's skill).
+    """
+    if not skill_ids:
+        return None
+    skills = await skill_repository.get_skills_by_ids(list(skill_ids))
+    owned = [s for s in skills if s.user_id == owner_id]
+    return materialize_skills(agent_id, owned)
 
 
 async def _get_or_build_agent(session: Session):

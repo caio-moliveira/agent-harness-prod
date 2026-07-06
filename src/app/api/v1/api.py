@@ -21,6 +21,7 @@ from src.app.api.v1.auth import router as auth_router
 from src.app.api.v1.chatbot import router as chatbot_router
 from src.app.api.v1.data_agent import router as data_agent_router
 from src.app.api.v1.deep_research import router as deep_research_router
+from src.app.api.v1.skills import router as skills_router
 from src.app.api.v1.text_to_sql import router as text_to_sql_router
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
@@ -31,6 +32,7 @@ api_router = APIRouter()
 # Include routers
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
 api_router.include_router(agents_router, prefix="/agents", tags=["agents"])
+api_router.include_router(skills_router, prefix="/skills", tags=["skills"])
 api_router.include_router(chatbot_router, prefix="/chatbot", tags=["chatbot"])
 api_router.include_router(deep_research_router, prefix="/deep-research", tags=["deep-research"])
 api_router.include_router(text_to_sql_router, prefix="/text-to-sql", tags=["text-to-sql"])

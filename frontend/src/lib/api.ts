@@ -1,5 +1,6 @@
 import type {
   Agent,
+  Skill,
   DatabaseSummary,
   ChatResponse,
   ConnectDbRequest,
@@ -173,6 +174,46 @@ export async function unbindAgentDatabase(userToken: string, agentId: number): P
     headers: { Authorization: `Bearer ${userToken}` },
   });
   return (await ensureOk(res)).json();
+}
+
+export async function attachAgentSkills(
+  userToken: string,
+  agentId: number,
+  skillIds: number[],
+): Promise<Agent> {
+  const res = await fetch(`${BASE}/agents/${agentId}/skills`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ skill_ids: skillIds }),
+  });
+  return (await ensureOk(res)).json();
+}
+
+// --- Skills: the user's reusable instruction documents ---
+
+export async function listSkills(userToken: string): Promise<Skill[]> {
+  const res = await fetch(`${BASE}/skills`, { headers: { Authorization: `Bearer ${userToken}` } });
+  return (await ensureOk(res)).json();
+}
+
+export async function createSkill(
+  userToken: string,
+  body: { name: string; description: string; body: string },
+): Promise<Skill> {
+  const res = await fetch(`${BASE}/skills`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify(body),
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function deleteSkill(userToken: string, skillId: number): Promise<void> {
+  const res = await fetch(`${BASE}/skills/${skillId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  await ensureOk(res);
 }
 
 export async function listSessions(userToken: string): Promise<SessionResponse[]> {
