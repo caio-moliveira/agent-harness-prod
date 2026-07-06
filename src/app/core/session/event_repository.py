@@ -59,3 +59,11 @@ class SessionEventRepository:
                 .order_by(SessionEvent.created_at, SessionEvent.id)
             )
             return list(session.exec(statement).all())
+
+    async def get_agent_events(self, user_id: int, agent_id: Optional[int] = None) -> List[SessionEvent]:
+        """Return all of a user/agent's events across sessions (for reflection, #20)."""
+        with session_scope() as session:
+            statement = select(SessionEvent).where(SessionEvent.user_id == user_id)
+            if agent_id is not None:
+                statement = statement.where(SessionEvent.agent_id == agent_id)
+            return list(session.exec(statement.order_by(SessionEvent.created_at, SessionEvent.id)).all())

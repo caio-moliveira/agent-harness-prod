@@ -7,6 +7,7 @@ from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.agent import AgentRepository
 from src.app.core.db.database import database_factory
+from src.app.core.learning import CorrectionRepository, PreferenceRepository
 from src.app.core.mcp.session_manager import get_mcp_session_manager
 from src.app.core.session import SessionRepository
 from src.app.core.session.event_repository import SessionEventRepository
@@ -19,6 +20,8 @@ session_repository = SessionRepository(dbsession)
 agent_repository = AgentRepository(dbsession)
 skill_repository = SkillRepository(dbsession)
 session_event_repository = SessionEventRepository()
+correction_repository = CorrectionRepository()
+preference_repository = PreferenceRepository()
 
 
 def langfuse_init():
