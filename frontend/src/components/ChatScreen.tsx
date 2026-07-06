@@ -38,6 +38,15 @@ export default function ChatScreen() {
   const [sources, setSources] = useState<SourceStatus>({ db_connected: false });
   const scrollRef = useRef<HTMLDivElement>(null);
   const stepIdRef = useRef(0);
+  // Whether to keep the view pinned to the bottom. Turns false as soon as the user scrolls up,
+  // so streaming text never yanks their scrollbar back down; turns true when they return to bottom.
+  const stickToBottom = useRef(true);
+
+  function handleScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }
 
   async function refreshSources() {
     if (!sessionToken) return;
@@ -56,11 +65,14 @@ export default function ChatScreen() {
   }, [sessionToken]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    if (!stickToBottom.current) return; // user scrolled up — don't fight them
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight; // instant, so streaming doesn't jank
   }, [turns]);
 
   async function handleSend(text: string) {
     if (!sessionToken || sending) return;
+    stickToBottom.current = true; // re-engage auto-scroll when the user sends
     const history = turns
       .filter((t) => t.content)
       .map((t) => ({ role: t.role, content: t.content }));
@@ -150,7 +162,7 @@ export default function ChatScreen() {
           </div>
         </header>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4">
+        <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-4">
           {turns.length === 0 ? (
             <div className="mx-auto mt-16 max-w-md text-center text-sm text-slate-500">
               <p className="text-base text-slate-300">Converse com o agente.</p>
