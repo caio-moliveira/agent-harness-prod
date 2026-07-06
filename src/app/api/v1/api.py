@@ -21,6 +21,7 @@ from src.app.api.v1.auth import router as auth_router
 from src.app.api.v1.chatbot import router as chatbot_router
 from src.app.api.v1.data_agent import router as data_agent_router
 from src.app.api.v1.deep_research import router as deep_research_router
+from src.app.api.v1.hitl import router as hitl_router
 from src.app.api.v1.metrics import router as metrics_router
 from src.app.api.v1.sessions import router as sessions_router
 from src.app.api.v1.skills import router as skills_router
@@ -35,6 +36,7 @@ api_router = APIRouter()
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
 api_router.include_router(agents_router, prefix="/agents", tags=["agents"])
 api_router.include_router(sessions_router, prefix="/sessions", tags=["sessions"])
+api_router.include_router(hitl_router, prefix="/hitl", tags=["hitl"])
 api_router.include_router(metrics_router, prefix="/metrics", tags=["metrics"])
 api_router.include_router(skills_router, prefix="/skills", tags=["skills"])
 api_router.include_router(chatbot_router, prefix="/chatbot", tags=["chatbot"])

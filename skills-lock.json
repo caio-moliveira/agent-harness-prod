@@ -84,6 +84,12 @@
       "sourceType": "github",
       "skillPath": "config/skills/swarm/SKILL.md",
       "computedHash": "1839bb3cb12115e36b4f7873d9bc4b3d97c5cd1140860f4f0032672dc1ec5241"
+    },
+    "ux": {
+      "source": "lobehub/lobehub",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/ux/SKILL.md",
+      "computedHash": "26a364faf6dbe1fb3e7e35a539cbb1df3c93c87190f9055e8b2718163ec0ca82"
     }
   }
 }

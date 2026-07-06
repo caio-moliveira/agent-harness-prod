@@ -20,11 +20,11 @@ Set-Location $PSScriptRoot
 # 1. Ensure .env.development exists
 if (-not (Test-Path ".env.development")) {
     Copy-Item ".env.example" ".env.development"
-    Write-Host "Created .env.development from .env.example — fill OPENAI_API_KEY and JWT_SECRET_KEY." -ForegroundColor Yellow
+    Write-Host "Created .env.development from .env.example -- fill OPENAI_API_KEY and JWT_SECRET_KEY." -ForegroundColor Yellow
 }
 
 # 2. Ensure Postgres is up (pgvector). Config self-loads .env.development, so the app
-#    reads POSTGRES_* on its own — we only need the container running.
+#    reads POSTGRES_* on its own -- we only need the container running.
 $dbState = docker inspect --format='{{.State.Health.Status}}' agent-harness-db 2>$null
 if ($dbState -ne "healthy") {
     Write-Host "Starting Postgres (pgvector)..." -ForegroundColor Cyan

@@ -200,7 +200,7 @@ class Settings:
 
         # Vetted registry a user may fetch skills from (single allow-listed base URL). Empty =
         # fetch disabled (users can still author skills). Only this host may be fetched.
-        self.SKILL_REGISTRY_URL = os.getenv("SKILL_REGISTRY_URL", "")
+        self.SKILL_REGISTRY_URL = os.getenv("SKILL_REGISTRY_URL", "https://skillsmp.com/")
 
         # Rate Limiting Configuration
         self.RATE_LIMIT_DEFAULT = parse_list_from_env("RATE_LIMIT_DEFAULT", ["200 per day", "50 per hour"])
@@ -218,6 +218,7 @@ class Settings:
             "skills": ["60 per minute"],
             "session_events": ["60 per minute"],
             "success_metrics": ["60 per minute"],
+            "hitl": ["60 per minute"],
             "messages": ["50 per minute"],
             "register": ["10 per hour"],
             "login": ["20 per minute"],
