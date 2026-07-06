@@ -42,6 +42,36 @@ class DocumentChunkRepository:
             statement = statement.order_by(DocumentChunk.source_path, DocumentChunk.chunk_index)
             return list(session.exec(statement).all())
 
+    async def get_chunks_without_embedding(self, user_id: int, agent_id: Optional[int] = None) -> List[DocumentChunk]:
+        """Return a user's not-yet-embedded chunks (indexing work list), scoped to one agent."""
+        with session_scope() as session:
+            statement = select(DocumentChunk).where(
+                DocumentChunk.user_id == user_id, DocumentChunk.embedding.is_(None)
+            )
+            if agent_id is not None:
+                statement = statement.where(DocumentChunk.agent_id == agent_id)
+            return list(session.exec(statement).all())
+
+    async def get_embedded_chunks(self, user_id: int, agent_id: Optional[int] = None) -> List[DocumentChunk]:
+        """Return a user's embedded chunks for retrieval, scoped to one agent (query-level filter)."""
+        with session_scope() as session:
+            statement = select(DocumentChunk).where(
+                DocumentChunk.user_id == user_id, DocumentChunk.embedding.is_not(None)
+            )
+            if agent_id is not None:
+                statement = statement.where(DocumentChunk.agent_id == agent_id)
+            return list(session.exec(statement).all())
+
+    async def set_embedding(self, chunk_id: int, vector: List[float]) -> None:
+        """Attach a computed embedding to one chunk."""
+        with session_scope() as session:
+            chunk = session.get(DocumentChunk, chunk_id)
+            if chunk is None:
+                return
+            chunk.embedding = vector
+            session.add(chunk)
+            session.commit()
+
     async def delete_by_source(self, user_id: int, agent_id: Optional[int], source_path: str) -> int:
         """Delete all chunks of one source document for a user/agent (used by re-ingest, #15)."""
         with session_scope() as session:

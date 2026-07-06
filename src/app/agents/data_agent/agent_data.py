@@ -27,6 +27,7 @@ from src.app.core.middleware import (
     LoggingMiddleware,
     build_invoke_config,
 )
+from src.app.core.retrieval import make_retrieval_tools
 from src.app.core.session.event_recorder import bg_record_tool_event
 from src.app.core.session.event_repository import SessionEventRepository
 
@@ -233,6 +234,8 @@ def _create_data_deep_agent(
     """
     model = ChatOpenAI(model=settings.DEFAULT_LLM_MODEL, temperature=0, api_key=settings.OPENAI_API_KEY)
     tools = make_memory_tools(user_id, agent_id) if memory_enabled else []
+    # Semantic search over this agent's ingested documents (#14), scoped to (user, agent).
+    tools = tools + make_retrieval_tools(user_id, agent_id)
     if db is not None:
         tools = tools + make_readonly_sql_tools(db)
     if web_search:

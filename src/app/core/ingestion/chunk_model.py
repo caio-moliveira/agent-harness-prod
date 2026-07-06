@@ -26,6 +26,9 @@ class DocumentChunk(BaseModel, table=True):
         chunk_index: Zero-based order of this chunk within the document.
         content: The chunk text.
         meta: Extra metadata (author, needs_ocr, and future fields).
+        embedding: The chunk's dense vector, populated by the indexing step (#14). None until
+            indexed. Stored as JSON so it is portable across SQLite (tests) and Postgres; a
+            pgvector column + ANN index is a production-scale optimization to layer on later.
         created_at: When the chunk was ingested (from ``BaseModel``).
     """
 
@@ -38,3 +41,6 @@ class DocumentChunk(BaseModel, table=True):
     chunk_index: int = Field(default=0)
     content: str = Field(default="")
     meta: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    # none_as_null so an unindexed chunk is a real SQL NULL (not JSON 'null'), making the
+    # "IS NULL / IS NOT NULL" indexing filters work across SQLite and Postgres.
+    embedding: Optional[list] = Field(default=None, sa_column=Column(JSON(none_as_null=True)))
