@@ -34,6 +34,7 @@ export interface Agent {
   id: number;
   name: string;
   system_prompt: string;
+  folder?: string | null;
   config: Record<string, unknown>;
 }
 

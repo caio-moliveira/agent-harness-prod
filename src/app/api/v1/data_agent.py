@@ -37,6 +37,7 @@ from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
 from src.app.core.sandbox import registry
 from src.app.core.sandbox.docker_sandbox import DockerSandbox, create_container
+from src.app.core.sandbox.paths import is_within_allowed_roots, validate_grantable_folder
 from src.app.core.sandbox.registry import SessionResources
 from src.app.core.session.session_model import Session
 from src.app.init import agent_repository
@@ -53,20 +54,6 @@ def _build_db_url(body: ConnectDbRequest) -> str:
         sep = "&" if "?" in url else "?"
         url = f"{url}{sep}sslmode={body.sslmode}"
     return url
-
-
-def _is_within_allowed_roots(path: str, roots: list[str]) -> bool:
-    """True if ``path`` is inside one of the configured allow-listed roots."""
-    target = os.path.normcase(os.path.abspath(path))
-    for root in roots:
-        allowed_root = os.path.normcase(os.path.abspath(root))
-        try:
-            if os.path.commonpath([target, allowed_root]) == allowed_root:
-                return True
-        except ValueError:
-            # different drives on Windows -> not comparable
-            continue
-    return False
 
 
 @router.post("/connect-db", response_model=ConnectDbResponse)
@@ -111,21 +98,8 @@ async def grant_folder(
     session: Session = Depends(get_current_session),
 ) -> GrantFolderResponse:
     """Grant read-only access to a host folder by mounting it into an isolated sandbox."""
-    if not settings.SANDBOX_ENABLED:
-        raise HTTPException(status_code=503, detail="Sandbox desabilitado nesta instância.")
-
-    path = os.path.abspath(body.path)
-    if not os.path.isdir(path):
-        raise HTTPException(status_code=400, detail="Pasta não encontrada ou não é um diretório.")
-
-    # Security: only allow folders under configured roots (prevents mounting .env, home, C:\, ...).
-    if not settings.SANDBOX_ALLOWED_ROOTS:
-        raise HTTPException(
-            status_code=403,
-            detail="Concessão de pastas desabilitada. Configure SANDBOX_ALLOWED_ROOTS no servidor.",
-        )
-    if not _is_within_allowed_roots(path, settings.SANDBOX_ALLOWED_ROOTS):
-        raise HTTPException(status_code=403, detail="Pasta fora das raízes permitidas.")
+    # Security: folder must exist and resolve under a configured allow-listed root.
+    path = validate_grantable_folder(body.path)
 
     logger.info("folder_grant_requested", session_id=session.id, folder=path)
     try:
@@ -169,11 +143,38 @@ async def query_sources(
         raise HTTPException(status_code=500, detail="Erro ao processar a consulta.")
 
 
+async def _ensure_agent_folder(res: SessionResources, session: Session, folder: str) -> None:
+    """Materialize the agent's bound folder into this session's sandbox, if not already up.
+
+    Re-validates the folder against the allow-list on every use, so tightening
+    ``SANDBOX_ALLOWED_ROOTS`` immediately revokes a stale binding. Degrades gracefully:
+    a disabled sandbox or a Docker failure just leaves the agent without file tools rather
+    than failing the whole chat.
+    """
+    if res.sandbox_backend is not None:
+        return  # already materialized for this session
+    if not settings.SANDBOX_ENABLED or not settings.SANDBOX_ALLOWED_ROOTS:
+        return
+    abspath = os.path.abspath(folder)
+    if not os.path.isdir(abspath) or not is_within_allowed_roots(abspath, settings.SANDBOX_ALLOWED_ROOTS):
+        logger.warning("agent_folder_binding_invalid", session_id=session.id, folder=abspath)
+        return
+    try:
+        container_id = await create_container(abspath)
+        backend = DockerSandbox(container_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("agent_folder_sandbox_failed", session_id=session.id, error=str(e))
+        return
+    await registry.set_folder(session.id, abspath, container_id, backend)
+    logger.info("agent_folder_materialized", session_id=session.id, folder=abspath)
+
+
 async def _build_agent_for_session(res: SessionResources, session: Session):
     """Build a Data Agent from the session's live sources and its bound agent config.
 
-    When the session is bound to an agent, the agent's system prompt is applied and its id
-    scopes long-term memory (per-agent isolation). Works with zero sources.
+    When the session is bound to an agent, the agent's system prompt is applied, its bound
+    folder is materialized into the sandbox, and its id scopes long-term memory (per-agent
+    isolation). Works with zero sources.
     """
     system_prompt = None
     name = "Data Agent"
@@ -182,6 +183,9 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
         if agent is not None:
             system_prompt = agent.system_prompt or None
             name = agent.name or name
+            folder = (agent.config or {}).get("folder")
+            if folder:
+                await _ensure_agent_folder(res, session, folder)
     return build_data_agent(
         res,
         user_id=session.user_id,

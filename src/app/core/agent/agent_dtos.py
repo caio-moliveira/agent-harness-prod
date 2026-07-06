@@ -53,4 +53,18 @@ class AgentResponse(BaseModel):
     id: int
     name: str
     system_prompt: str
+    folder: Optional[str] = Field(default=None, description="Bound sandboxed folder path, if any")
     config: dict = Field(default_factory=dict)
+
+
+class BindFolderRequest(BaseModel):
+    """Request body to bind a sandboxed folder to an agent."""
+
+    path: str = Field(..., min_length=1, description="Host folder path to bind (read-only)")
+
+
+class BindFolderResponse(BaseModel):
+    """Response after binding/unbinding an agent's folder."""
+
+    id: int
+    folder: Optional[str] = None

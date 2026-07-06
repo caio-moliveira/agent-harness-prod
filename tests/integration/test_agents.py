@@ -230,3 +230,92 @@ class TestSystemPromptComposition:
 
         assert _compose_system_prompt("") == load_system_prompt()
         assert _compose_system_prompt(None) == load_system_prompt()
+
+
+# ---------------------------------------------------------------------------
+# Folder binding to an agent (#4) — persisted, re-validated vs allowed roots
+# ---------------------------------------------------------------------------
+
+class TestAgentFolderBinding:
+    def _patch_roots(self, tmp_path):
+        """Patch settings so a real temp dir is a valid grantable root (no Docker needed)."""
+        from src.app.core.common import config as config_module
+
+        return (
+            patch.object(config_module.settings, "SANDBOX_ENABLED", True),
+            patch.object(config_module.settings, "SANDBOX_ALLOWED_ROOTS", [str(tmp_path)]),
+        )
+
+    async def test_bind_folder_persists(self, client: AsyncClient, user_token, tmp_path):
+        agent = await _create_agent(client, user_token)
+        sub = tmp_path / "data"
+        sub.mkdir()
+        p_enabled, p_roots = self._patch_roots(tmp_path)
+        with p_enabled, p_roots:
+            resp = await client.put(
+                f"/api/v1/agents/{agent['id']}/folder",
+                json={"path": str(sub)},
+                headers=_auth(user_token),
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["folder"].endswith("data")
+
+        # The binding survives on the agent (visible on GET).
+        got = await client.get(f"/api/v1/agents/{agent['id']}", headers=_auth(user_token))
+        assert got.json()["folder"] is not None
+        assert got.json()["folder"].endswith("data")
+
+    async def test_bind_folder_outside_roots_rejected(self, client: AsyncClient, user_token, tmp_path):
+        agent = await _create_agent(client, user_token)
+        outside = tmp_path.parent / "outside_root"
+        outside.mkdir(exist_ok=True)
+        p_enabled, p_roots = self._patch_roots(tmp_path)  # allow only tmp_path
+        with p_enabled, p_roots:
+            resp = await client.put(
+                f"/api/v1/agents/{agent['id']}/folder",
+                json={"path": str(outside)},
+                headers=_auth(user_token),
+            )
+            assert resp.status_code == 403
+
+    async def test_bind_nonexistent_dir_rejected(self, client: AsyncClient, user_token, tmp_path):
+        agent = await _create_agent(client, user_token)
+        p_enabled, p_roots = self._patch_roots(tmp_path)
+        with p_enabled, p_roots:
+            resp = await client.put(
+                f"/api/v1/agents/{agent['id']}/folder",
+                json={"path": str(tmp_path / "does_not_exist")},
+                headers=_auth(user_token),
+            )
+            assert resp.status_code == 400
+
+    async def test_unbind_folder(self, client: AsyncClient, user_token, tmp_path):
+        agent = await _create_agent(client, user_token)
+        sub = tmp_path / "d"
+        sub.mkdir()
+        p_enabled, p_roots = self._patch_roots(tmp_path)
+        with p_enabled, p_roots:
+            await client.put(
+                f"/api/v1/agents/{agent['id']}/folder",
+                json={"path": str(sub)},
+                headers=_auth(user_token),
+            )
+        resp = await client.delete(f"/api/v1/agents/{agent['id']}/folder", headers=_auth(user_token))
+        assert resp.status_code == 200
+        assert resp.json()["folder"] is None
+        got = await client.get(f"/api/v1/agents/{agent['id']}", headers=_auth(user_token))
+        assert got.json()["folder"] is None
+
+    async def test_cannot_bind_folder_on_another_users_agent(self, client: AsyncClient, user_token, tmp_path):
+        agent = await _create_agent(client, user_token)
+        sub = tmp_path / "x"
+        sub.mkdir()
+        attacker = await _register_and_token(client, "folder-attacker@example.com")
+        p_enabled, p_roots = self._patch_roots(tmp_path)
+        with p_enabled, p_roots:
+            resp = await client.put(
+                f"/api/v1/agents/{agent['id']}/folder",
+                json={"path": str(sub)},
+                headers=_auth(attacker),
+            )
+            assert resp.status_code == 403

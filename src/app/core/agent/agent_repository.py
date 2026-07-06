@@ -60,6 +60,27 @@ class AgentRepository:
         logger.info("agent_updated", agent_id=agent_id)
         return agent
 
+    async def set_config_value(self, agent_id: int, key: str, value: object) -> Optional[Agent]:
+        """Set (or clear, when value is None) one key in an agent's JSON config.
+
+        Reassigns the dict so SQLAlchemy detects the change on the JSON column.
+        """
+        agent = self.session.get(Agent, agent_id)
+        if agent is None:
+            return None
+        config = dict(agent.config or {})
+        if value is None:
+            config.pop(key, None)
+        else:
+            config[key] = value
+        agent.config = config
+        agent.updated_at = datetime.now(UTC)
+        self.session.add(agent)
+        self.session.commit()
+        self.session.refresh(agent)
+        logger.info("agent_config_updated", agent_id=agent_id, key=key)
+        return agent
+
     async def delete_agent(self, agent_id: int) -> bool:
         """Delete an agent by ID. Returns False if not found."""
         agent = self.session.get(Agent, agent_id)

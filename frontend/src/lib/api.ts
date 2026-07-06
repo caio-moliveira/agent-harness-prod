@@ -110,6 +110,32 @@ export async function deleteAgent(userToken: string, agentId: number): Promise<v
   await ensureOk(res);
 }
 
+export interface BindFolderResult {
+  id: number;
+  folder: string | null;
+}
+
+export async function bindAgentFolder(
+  userToken: string,
+  agentId: number,
+  path: string,
+): Promise<BindFolderResult> {
+  const res = await fetch(`${BASE}/agents/${agentId}/folder`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ path }),
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function unbindAgentFolder(userToken: string, agentId: number): Promise<BindFolderResult> {
+  const res = await fetch(`${BASE}/agents/${agentId}/folder`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
 export async function listSessions(userToken: string): Promise<SessionResponse[]> {
   const res = await fetch(`${BASE}/auth/sessions`, {
     headers: { Authorization: `Bearer ${userToken}` },

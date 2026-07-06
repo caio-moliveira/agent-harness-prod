@@ -12,10 +12,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from src.app.api.security.limiter import limiter
 from src.app.api.v1.auth import get_current_user
-from src.app.core.agent.agent_dtos import AgentCreate, AgentResponse, AgentUpdate
+from src.app.core.agent.agent_dtos import (
+    AgentCreate,
+    AgentResponse,
+    AgentUpdate,
+    BindFolderRequest,
+    BindFolderResponse,
+)
 from src.app.core.agent.agent_model import Agent
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
+from src.app.core.sandbox.paths import validate_grantable_folder
 from src.app.core.user.user_model import User
 from src.app.init import agent_repository
 
@@ -26,11 +33,13 @@ _RATE = settings.RATE_LIMIT_ENDPOINTS["agents"][0]
 
 def _to_response(agent: Agent) -> AgentResponse:
     """Map an Agent entity to its API response."""
+    config = agent.config or {}
     return AgentResponse(
         id=agent.id,
         name=agent.name,
         system_prompt=agent.system_prompt,
-        config=agent.config or {},
+        folder=config.get("folder"),
+        config=config,
     )
 
 
@@ -84,6 +93,39 @@ async def update_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
     logger.info("agent_api_updated", agent_id=agent_id, user_id=user.id)
     return _to_response(updated)
+
+
+@router.put("/{agent_id}/folder", response_model=BindFolderResponse)
+@limiter.limit(_RATE)
+async def bind_folder(
+    request: Request, agent_id: int, body: BindFolderRequest, user: User = Depends(get_current_user)
+) -> BindFolderResponse:
+    """Bind a sandboxed folder to an agent (persisted; re-validated on every use).
+
+    The path is validated against ``SANDBOX_ALLOWED_ROOTS`` here and again when the sandbox is
+    materialized at chat time. Binding stores only the path — no container is created yet.
+    """
+    await _owned_agent_or_error(agent_id, user)
+    path = validate_grantable_folder(body.path)
+    updated = await agent_repository.set_config_value(agent_id, "folder", path)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    logger.info("agent_folder_bound", agent_id=agent_id, user_id=user.id, folder=path)
+    return BindFolderResponse(id=agent_id, folder=path)
+
+
+@router.delete("/{agent_id}/folder", response_model=BindFolderResponse)
+@limiter.limit(_RATE)
+async def unbind_folder(
+    request: Request, agent_id: int, user: User = Depends(get_current_user)
+) -> BindFolderResponse:
+    """Remove an agent's bound folder."""
+    await _owned_agent_or_error(agent_id, user)
+    updated = await agent_repository.set_config_value(agent_id, "folder", None)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    logger.info("agent_folder_unbound", agent_id=agent_id, user_id=user.id)
+    return BindFolderResponse(id=agent_id, folder=None)
 
 
 @router.delete("/{agent_id}")
