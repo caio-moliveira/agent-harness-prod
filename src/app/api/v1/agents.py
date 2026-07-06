@@ -61,6 +61,8 @@ def _to_response(agent: Agent) -> AgentResponse:
         id=agent.id,
         name=agent.name,
         system_prompt=agent.system_prompt,
+        web_search=bool(config.get("web_search", False)),
+        memory=bool(config.get("memory", True)),
         folder=config.get("folder"),
         database=_db_summary(config),
         config=safe_config,
@@ -84,7 +86,8 @@ async def create_agent(
     request: Request, body: AgentCreate, user: User = Depends(get_current_user)
 ) -> AgentResponse:
     """Create a new agent owned by the authenticated user."""
-    agent = await agent_repository.create_agent(user.id, body.name, body.system_prompt)
+    config = {"web_search": body.web_search, "memory": body.memory}
+    agent = await agent_repository.create_agent(user.id, body.name, body.system_prompt, config=config)
     logger.info("agent_api_created", agent_id=agent.id, user_id=user.id)
     return _to_response(agent)
 
@@ -110,11 +113,15 @@ async def get_agent(request: Request, agent_id: int, user: User = Depends(get_cu
 async def update_agent(
     request: Request, agent_id: int, body: AgentUpdate, user: User = Depends(get_current_user)
 ) -> AgentResponse:
-    """Update an agent's name and/or system prompt."""
+    """Update an agent's name, system prompt, and/or capability toggles."""
     await _owned_agent_or_error(agent_id, user)
     updated = await agent_repository.update_agent(agent_id, name=body.name, system_prompt=body.system_prompt)
     if updated is None:
         raise HTTPException(status_code=404, detail="Agent not found")
+    if body.web_search is not None:
+        updated = await agent_repository.set_config_value(agent_id, "web_search", body.web_search)
+    if body.memory is not None:
+        updated = await agent_repository.set_config_value(agent_id, "memory", body.memory)
     logger.info("agent_api_updated", agent_id=agent_id, user_id=user.id)
     return _to_response(updated)
 

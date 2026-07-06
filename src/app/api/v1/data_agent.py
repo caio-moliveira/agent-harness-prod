@@ -200,12 +200,16 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
     """
     system_prompt = None
     name = "Data Agent"
+    web_search = False
+    memory_enabled = True
     if session.agent_id is not None:
         agent = await agent_repository.get_agent(session.agent_id)
         if agent is not None:
             config = agent.config or {}
             system_prompt = agent.system_prompt or None
             name = agent.name or name
+            web_search = bool(config.get("web_search", False))
+            memory_enabled = bool(config.get("memory", True))
             if config.get("folder"):
                 await _ensure_agent_folder(res, session, config["folder"])
             if config.get("database"):
@@ -216,6 +220,8 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
         system_prompt=system_prompt,
         agent_id=session.agent_id,
         name=name,
+        web_search=web_search,
+        memory_enabled=memory_enabled,
     )
 
 

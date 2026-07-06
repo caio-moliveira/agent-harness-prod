@@ -81,11 +81,12 @@ export async function createAgent(
   userToken: string,
   name: string,
   systemPrompt: string,
+  opts?: { web_search?: boolean; memory?: boolean },
 ): Promise<Agent> {
   const res = await fetch(`${BASE}/agents`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
-    body: JSON.stringify({ name, system_prompt: systemPrompt }),
+    body: JSON.stringify({ name, system_prompt: systemPrompt, ...opts }),
   });
   return (await ensureOk(res)).json();
 }
@@ -93,7 +94,7 @@ export async function createAgent(
 export async function updateAgent(
   userToken: string,
   agentId: number,
-  body: { name?: string; system_prompt?: string },
+  body: { name?: string; system_prompt?: string; web_search?: boolean; memory?: boolean },
 ): Promise<Agent> {
   const res = await fetch(`${BASE}/agents/${agentId}`, {
     method: "PATCH",

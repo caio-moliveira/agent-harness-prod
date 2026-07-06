@@ -44,6 +44,8 @@ export interface Agent {
   id: number;
   name: string;
   system_prompt: string;
+  web_search: boolean;
+  memory: boolean;
   folder?: string | null;
   database?: DatabaseSummary | null;
   config: Record<string, unknown>;

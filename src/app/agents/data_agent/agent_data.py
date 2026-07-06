@@ -13,6 +13,7 @@ from langchain_community.utilities import SQLDatabase
 from langchain_openai import ChatOpenAI
 
 from src.app.agents.data_agent.tools import make_memory_tools
+from src.app.agents.tools.search_tool import SearchAPI, get_search_tool
 from src.app.core.common.config import settings
 from src.app.core.common.graph_utils import process_messages
 from src.app.core.common.model.message import Message
@@ -45,12 +46,17 @@ class DataAgent:
         user_id: Optional[int] = None,
         system_prompt: Optional[str] = None,
         agent_id: Optional[int] = None,
+        web_search: bool = False,
+        memory_enabled: bool = True,
     ):
         """Build a Data Agent over a session's sources, isolated to one user and agent."""
         self.name = name
         self.user_id = user_id
         self.agent_id = agent_id
-        self.agent = _create_data_deep_agent(db, backend, user_id, system_prompt, agent_id)
+        self.memory_enabled = memory_enabled
+        self.agent = _create_data_deep_agent(
+            db, backend, user_id, system_prompt, agent_id, web_search, memory_enabled
+        )
         self._pipeline = AgentPipeline(
             middlewares=[LoggingMiddleware(), ErrorHandlingMiddleware(), GuardrailMiddleware()],
             invoke_fn=self._core_invoke,
@@ -105,7 +111,7 @@ class DataAgent:
 
         # Auto-inject relevant long-term memory as leading context (scoped to this agent).
         payload_messages = history
-        if user_id is not None and last_user:
+        if self.memory_enabled and user_id is not None and last_user:
             relevant = await get_relevant_memory(user_id, last_user, agent_id=self.agent_id)
             if relevant:
                 payload_messages = [
@@ -136,7 +142,7 @@ class DataAgent:
                     yield {"type": "token", "content": text}
 
         # Store this exchange back into long-term memory (non-blocking), scoped to this agent.
-        if user_id is not None and last_user and answer:
+        if self.memory_enabled and user_id is not None and last_user and answer:
             bg_update_memory(
                 user_id,
                 [{"role": "user", "content": last_user}, {"role": "assistant", "content": answer}],
@@ -188,16 +194,23 @@ def _create_data_deep_agent(
     user_id: Optional[int],
     system_prompt: Optional[str] = None,
     agent_id: Optional[int] = None,
+    web_search: bool = False,
+    memory_enabled: bool = True,
 ) -> Any:
     """Build the underlying Deep Agent with read-only SQL, memory tools, and optional sandbox.
 
     ``system_prompt`` sets the agent's persona; the harness capabilities guidance is always
     appended so tool usage survives. ``agent_id`` scopes the memory tools per agent.
+    ``web_search`` adds a host-side web-search tool (the sandbox stays network-isolated);
+    ``memory_enabled`` gates the long-term memory tool.
     """
     model = ChatOpenAI(model=settings.DEFAULT_LLM_MODEL, temperature=0, api_key=settings.OPENAI_API_KEY)
-    tools = make_memory_tools(user_id, agent_id)
+    tools = make_memory_tools(user_id, agent_id) if memory_enabled else []
     if db is not None:
         tools = tools + make_readonly_sql_tools(db)
+    if web_search:
+        # Runs host-side (not inside the sandbox), so the file sandbox stays --network none.
+        tools = tools + get_search_tool(SearchAPI.DUCKDUCKGO)
 
     kwargs: dict[str, Any] = {
         "model": model,

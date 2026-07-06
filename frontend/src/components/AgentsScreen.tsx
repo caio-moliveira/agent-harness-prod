@@ -12,6 +12,8 @@ export default function AgentsScreen() {
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [folder, setFolder] = useState("");
+  const [webSearch, setWebSearch] = useState(false);
+  const [memory, setMemory] = useState(true);
   const [busy, setBusy] = useState(false);
 
   // Per-card folder editing.
@@ -46,7 +48,10 @@ export default function AgentsScreen() {
     if (!userToken || !name.trim() || busy) return;
     setBusy(true);
     try {
-      const agent = await api.createAgent(userToken, name.trim(), prompt.trim());
+      const agent = await api.createAgent(userToken, name.trim(), prompt.trim(), {
+        web_search: webSearch,
+        memory,
+      });
       let created = agent;
       if (folder.trim()) {
         const res = await api.bindAgentFolder(userToken, agent.id, folder.trim());
@@ -55,6 +60,8 @@ export default function AgentsScreen() {
       setName("");
       setPrompt("");
       setFolder("");
+      setWebSearch(false);
+      setMemory(true);
       setCreating(false);
       setAgents((prev) => [...prev, created]);
     } catch (err) {
@@ -132,6 +139,17 @@ export default function AgentsScreen() {
       setDbEditingId(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao remover o banco");
+    }
+  }
+
+  async function toggleCapability(agent: Agent, key: "web_search" | "memory") {
+    if (!userToken) return;
+    const next = key === "web_search" ? !agent.web_search : !agent.memory;
+    try {
+      const updated = await api.updateAgent(userToken, agent.id, { [key]: next });
+      setAgents((prev) => prev.map((a) => (a.id === agent.id ? updated : a)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao alterar a capacidade");
     }
   }
 
@@ -315,6 +333,21 @@ export default function AgentsScreen() {
                   </div>
                 )}
               </div>
+
+              <div className="mt-2 flex gap-2 text-xs">
+                <button
+                  onClick={() => void toggleCapability(agent, "web_search")}
+                  className={`rounded-full px-2 py-1 ${agent.web_search ? "bg-emerald-900 text-emerald-200" : "bg-slate-800 text-slate-500"}`}
+                >
+                  🌐 web {agent.web_search ? "on" : "off"}
+                </button>
+                <button
+                  onClick={() => void toggleCapability(agent, "memory")}
+                  className={`rounded-full px-2 py-1 ${agent.memory ? "bg-emerald-900 text-emerald-200" : "bg-slate-800 text-slate-500"}`}
+                >
+                  🧠 memória {agent.memory ? "on" : "off"}
+                </button>
+              </div>
             </div>
           ))
         )}
@@ -343,6 +376,16 @@ export default function AgentsScreen() {
               placeholder="Pasta (opcional) — caminho dentro de SANDBOX_ALLOWED_ROOTS"
               className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-indigo-600"
             />
+            <div className="flex gap-4 text-sm text-slate-300">
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} />
+                🌐 Busca na web
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={memory} onChange={(e) => setMemory(e.target.checked)} />
+                🧠 Memória
+              </label>
+            </div>
             <div className="flex gap-2">
               <button
                 type="submit"

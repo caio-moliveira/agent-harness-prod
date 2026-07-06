@@ -18,6 +18,8 @@ class AgentCreate(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=100, description="Agent name")
     system_prompt: str = Field(default="", max_length=10000, description="Agent system prompt")
+    web_search: bool = Field(default=False, description="Allow the agent to search the web")
+    memory: bool = Field(default=True, description="Enable long-term memory for the agent")
 
     @field_validator("name")
     @classmethod
@@ -34,6 +36,8 @@ class AgentUpdate(BaseModel):
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     system_prompt: Optional[str] = Field(default=None, max_length=10000)
+    web_search: Optional[bool] = Field(default=None, description="Allow the agent to search the web")
+    memory: Optional[bool] = Field(default=None, description="Enable long-term memory for the agent")
 
     @field_validator("name")
     @classmethod
@@ -53,6 +57,8 @@ class AgentResponse(BaseModel):
     id: int
     name: str
     system_prompt: str
+    web_search: bool = False
+    memory: bool = True
     folder: Optional[str] = Field(default=None, description="Bound sandboxed folder path, if any")
     database: Optional["DatabaseSummary"] = Field(default=None, description="Bound database summary, if any")
     config: dict = Field(default_factory=dict)

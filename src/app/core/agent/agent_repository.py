@@ -21,9 +21,11 @@ class AgentRepository:
         """Initialize agent repository with a database session."""
         self.session = session
 
-    async def create_agent(self, user_id: int, name: str, system_prompt: str = "") -> Agent:
+    async def create_agent(
+        self, user_id: int, name: str, system_prompt: str = "", config: Optional[dict] = None
+    ) -> Agent:
         """Create a new agent owned by a user."""
-        agent = Agent(user_id=user_id, name=name, system_prompt=system_prompt)
+        agent = Agent(user_id=user_id, name=name, system_prompt=system_prompt, config=config or {})
         self.session.add(agent)
         self.session.commit()
         self.session.refresh(agent)
