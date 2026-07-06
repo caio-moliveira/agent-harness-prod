@@ -45,6 +45,23 @@ const components: Components = {
   hr: () => <hr className="my-3 border-slate-800" />,
 };
 
+/**
+ * Heuristic: does this text look like intended markdown (vs. a raw SQL/CSV/JSON dump)?
+ * Used to decide whether to render or keep verbatim monospace, so aligned/tabular output
+ * doesn't get its whitespace collapsed.
+ */
+export function looksLikeMarkdown(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  // GFM table: a pipe row plus a dashed separator row.
+  if (/^\s*\|.*\|\s*$/m.test(t) && /^\s*\|?[\s:|-]*-{2,}[\s:|-]*$/m.test(t)) return true;
+  if (/^#{1,6}\s+\S/m.test(t)) return true; // headings
+  if (/^\s*[-*+]\s+\S/m.test(t) || /^\s*\d+\.\s+\S/m.test(t)) return true; // lists
+  if (/```/.test(t)) return true; // fenced code
+  if (/\*\*[^*]+\*\*/.test(t) || /\[[^\]]+\]\([^)]+\)/.test(t)) return true; // bold or links
+  return false;
+}
+
 /** Render a markdown string with the app's shared, Tailwind-styled elements. */
 export default function Markdown({ children }: { children: string }) {
   return (
