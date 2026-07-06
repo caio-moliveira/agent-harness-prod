@@ -17,6 +17,7 @@ def build_data_agent(
     web_search: bool = False,
     memory_enabled: bool = True,
     skills_dir: Optional[str] = None,
+    workspace_context: str = "",
 ) -> DataAgent:
     """Build a Data Agent for a session's live resources and stored agent config.
 
@@ -28,6 +29,8 @@ def build_data_agent(
         name: Display name for the agent.
         web_search: When True, attach a host-side web-search tool.
         memory_enabled: When False, disable long-term memory read/write for the agent.
+        skills_dir: Optional directory of SKILL.md files to load via progressive disclosure.
+        workspace_context: Optional briefing of attached sources, prepended to the system prompt.
 
     Returns:
         A compiled DataAgent with SQL tools (if a db is attached), the sandbox backend
@@ -44,4 +47,5 @@ def build_data_agent(
         web_search=web_search,
         memory_enabled=memory_enabled,
         skills_dir=skills_dir,
+        workspace_context=workspace_context,
     )

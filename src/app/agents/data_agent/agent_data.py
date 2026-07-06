@@ -49,6 +49,7 @@ class DataAgent:
         web_search: bool = False,
         memory_enabled: bool = True,
         skills_dir: Optional[str] = None,
+        workspace_context: str = "",
     ):
         """Build a Data Agent over a session's sources, isolated to one user and agent."""
         self.name = name
@@ -56,7 +57,7 @@ class DataAgent:
         self.agent_id = agent_id
         self.memory_enabled = memory_enabled
         self.agent = _create_data_deep_agent(
-            db, backend, user_id, system_prompt, agent_id, web_search, memory_enabled, skills_dir
+            db, backend, user_id, system_prompt, agent_id, web_search, memory_enabled, skills_dir, workspace_context
         )
         self._pipeline = AgentPipeline(
             middlewares=[LoggingMiddleware(), ErrorHandlingMiddleware(), GuardrailMiddleware()],
@@ -198,6 +199,7 @@ def _create_data_deep_agent(
     web_search: bool = False,
     memory_enabled: bool = True,
     skills_dir: Optional[str] = None,
+    workspace_context: str = "",
 ) -> Any:
     """Build the underlying Deep Agent with read-only SQL, memory tools, and optional sandbox.
 
@@ -205,7 +207,8 @@ def _create_data_deep_agent(
     appended so tool usage survives. ``agent_id`` scopes the memory tools per agent.
     ``web_search`` adds a host-side web-search tool (the sandbox stays network-isolated);
     ``memory_enabled`` gates the long-term memory tool. ``skills_dir`` (when set) is a directory
-    of SKILL.md files the agent loads via progressive disclosure.
+    of SKILL.md files the agent loads via progressive disclosure. ``workspace_context`` (when set)
+    is a briefing of the attached sources, prepended so the agent is grounded from the first turn.
     """
     model = ChatOpenAI(model=settings.DEFAULT_LLM_MODEL, temperature=0, api_key=settings.OPENAI_API_KEY)
     tools = make_memory_tools(user_id, agent_id) if memory_enabled else []
@@ -215,10 +218,14 @@ def _create_data_deep_agent(
         # Runs host-side (not inside the sandbox), so the file sandbox stays --network none.
         tools = tools + get_search_tool(SearchAPI.DUCKDUCKGO)
 
+    prompt = _compose_system_prompt(system_prompt)
+    if workspace_context:
+        prompt = f"{prompt}\n\n{workspace_context}"
+
     kwargs: dict[str, Any] = {
         "model": model,
         "tools": tools,
-        "system_prompt": _compose_system_prompt(system_prompt),
+        "system_prompt": prompt,
         "middleware": [PIIMiddleware("email")],
     }
     if skills_dir is not None:

@@ -659,6 +659,39 @@ class TestSkillRegistry:
 
 
 # ---------------------------------------------------------------------------
+# Workspace context priming — the agent is grounded in its sources at session start
+# ---------------------------------------------------------------------------
+
+class TestWorkspaceContext:
+    def test_folder_brief_lists_files_and_inlines_context_file(self, tmp_path):
+        from src.app.agents.data_agent.context import build_workspace_context
+
+        (tmp_path / "vendas.csv").write_text("mes,regiao,receita\njan,SP,1000\n", encoding="utf-8")
+        (tmp_path / "README.md").write_text("# Projeto Vendas\nDados por regiao.", encoding="utf-8")
+
+        ctx = build_workspace_context(str(tmp_path), None)
+        assert "/workspace" in ctx
+        assert "vendas.csv" in ctx
+        assert "Projeto Vendas" in ctx  # README content inlined
+
+    def test_empty_when_no_sources(self):
+        from src.app.agents.data_agent.context import build_workspace_context
+
+        assert build_workspace_context(None, None) == ""
+
+    def test_db_schema_included(self):
+        from unittest.mock import MagicMock
+
+        from src.app.agents.data_agent.context import build_workspace_context
+
+        fake_db = MagicMock()
+        fake_db.get_table_info.return_value = "CREATE TABLE vendas (mes TEXT, receita REAL)"
+        ctx = build_workspace_context(None, fake_db)
+        assert "Esquema do banco" in ctx
+        assert "CREATE TABLE vendas" in ctx
+
+
+# ---------------------------------------------------------------------------
 # DB session robustness (#8) — a failed query must not poison later operations
 # ---------------------------------------------------------------------------
 

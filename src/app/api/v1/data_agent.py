@@ -18,6 +18,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 
 from src.app.agents.data_agent import build_data_agent
+from src.app.agents.data_agent.context import build_workspace_context
 from src.app.api.security.limiter import limiter
 from src.app.api.v1.auth import get_current_session
 from src.app.api.v1.dtos.data_agent import (
@@ -205,6 +206,7 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
     web_search = False
     memory_enabled = True
     skills_dir = None
+    folder = None
     if session.agent_id is not None:
         agent = await agent_repository.get_agent(session.agent_id)
         if agent is not None:
@@ -212,12 +214,17 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
             system_prompt = agent.system_prompt or None
             name = agent.name or name
             web_search = bool(config.get("web_search", False))
-            memory_enabled = bool(config.get("memory", True))
-            if config.get("folder"):
-                await _ensure_agent_folder(res, session, config["folder"])
+            # Treat a missing OR null memory flag as enabled (default on).
+            memory_enabled = config.get("memory") is not False
+            folder = config.get("folder")
+            if folder:
+                await _ensure_agent_folder(res, session, folder)
             if config.get("database"):
                 await _ensure_agent_database(res, session, config["database"])
             skills_dir = await _materialize_agent_skills(session.agent_id, agent.user_id, config.get("skills"))
+    # Prime the agent with a briefing of its attached sources (files + DB schema) so it is
+    # grounded from the first turn without needing to call a tool.
+    workspace_context = build_workspace_context(folder, res.db)
     return build_data_agent(
         res,
         user_id=session.user_id,
@@ -227,6 +234,7 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
         web_search=web_search,
         memory_enabled=memory_enabled,
         skills_dir=skills_dir,
+        workspace_context=workspace_context,
     )
 
 

@@ -63,7 +63,7 @@ def _to_response(agent: Agent) -> AgentResponse:
         name=agent.name,
         system_prompt=agent.system_prompt,
         web_search=bool(config.get("web_search", False)),
-        memory=bool(config.get("memory", True)),
+        memory=config.get("memory") is not False,
         folder=config.get("folder"),
         database=_db_summary(config),
         skills=list(config.get("skills", [])),
