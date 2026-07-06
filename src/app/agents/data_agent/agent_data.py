@@ -190,8 +190,12 @@ Conforme as fontes que o usuário conectou, você pode ter:
 
 Regras: somente leitura; nunca modifique dados. Para perguntas sobre **arquivos**, use `ls`/`glob`
 em `/workspace` e `read_file` para ler o conteúdo (ex.: leia o CSV antes de responder sobre ele);
-nunca cite caminhos fora de `/workspace`. Para perguntas de **banco**, faça `list_tables`, depois
-`describe_tables` e então `run_sql`. Seja conciso e cite os arquivos/tabelas usados.
+nunca cite caminhos fora de `/workspace`. Para perguntas de **banco**, SEMPRE `list_tables` →
+`describe_tables` (das tabelas que vai usar) → `run_sql`, para a consulta nascer do schema real.
+Executar a consulta é a validação: se `run_sql` retornar erro, corrija a partir das tabelas
+disponíveis e execute de novo — **nunca invente tabelas ou colunas**, e não dê a resposta final
+até a consulta rodar sem erro. Cada resultado de `run_sql` traz uma linha `[proveniência]`;
+inclua essa fonte (tabela + consulta) na sua resposta. Seja conciso e cite os arquivos/tabelas usados.
 """
 
 

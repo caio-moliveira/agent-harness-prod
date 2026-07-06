@@ -9,6 +9,8 @@ import re
 from langchain_community.utilities import SQLDatabase
 from langchain_core.tools import BaseTool, tool
 
+from src.app.core.provenance import Source
+
 _ALLOWED_PREFIXES = ("select", "with", "explain", "show", "table", "values")
 _FORBIDDEN = re.compile(
     r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|"
@@ -68,14 +70,32 @@ def make_readonly_sql_tools(db: SQLDatabase) -> list[BaseTool]:
 
     @tool
     def run_sql(query: str) -> str:
-        """Run a READ-ONLY SQL query (SELECT/WITH/EXPLAIN/SHOW only) and return the rows."""
+        """Run a READ-ONLY SQL query (SELECT/WITH/EXPLAIN/SHOW only) and return the rows.
+
+        Executing the query IS the validation: on success the rows come back with a provenance
+        line (tables + statement + extraction time). On failure the available tables are listed
+        so you can correct the query — never invent tables or columns; fix and retry instead.
+        """
         try:
             assert_read_only(query)
         except SqlNotReadOnlyError as exc:
             return f"Consulta rejeitada: {exc}"
         try:
-            return db.run(query)
-        except Exception as exc:  # noqa: BLE001 - surface a readable message to the LLM
-            return f"Erro ao executar a consulta: {exc}"
+            rows = db.run(query)
+        except Exception as exc:  # noqa: BLE001 - surface a correction-friendly message to the LLM
+            available = ", ".join(db.get_usable_table_names()) or "(nenhuma)"
+            return (
+                f"Erro ao executar a consulta: {exc}\n"
+                f"Tabelas disponíveis: {available}. Verifique os nomes de tabela e coluna e tente "
+                f"novamente — não invente tabelas ou colunas."
+            )
+        source = Source.from_query(sql=query, tables=_referenced_tables(query, db.get_usable_table_names()))
+        return f"{rows}\n\n[proveniência] {source.render()}"
 
     return [list_tables, describe_tables, run_sql]
+
+
+def _referenced_tables(sql: str, known_tables: list[str]) -> list[str]:
+    """Best-effort: which known tables appear as whole words in the query (for provenance)."""
+    lowered = sql.lower()
+    return [t for t in known_tables if re.search(rf"\b{re.escape(t.lower())}\b", lowered)]
