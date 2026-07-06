@@ -38,6 +38,10 @@ def _to_response(skill: Skill) -> SkillResponse:
         name=skill.name,
         description=skill.description,
         body=skill.body,
+        when_to_use=skill.when_to_use,
+        sources=skill.sources,
+        steps=skill.steps,
+        output_format=skill.output_format,
         source=skill.source,
     )
 
@@ -59,7 +63,17 @@ async def create_skill(
     request: Request, body: SkillCreate, user: User = Depends(get_current_user)
 ) -> SkillResponse:
     """Author a new skill in the user's library."""
-    skill = await skill_repository.create_skill(user.id, body.name, body.description, body.body, source="authored")
+    skill = await skill_repository.create_skill(
+        user.id,
+        body.name,
+        body.description,
+        body.body,
+        source="authored",
+        when_to_use=body.when_to_use,
+        sources=body.sources,
+        steps=body.steps,
+        output_format=body.output_format,
+    )
     logger.info("skill_api_created", skill_id=skill.id, user_id=user.id)
     return _to_response(skill)
 
@@ -130,7 +144,14 @@ async def update_skill(
     """Update one of the user's skills."""
     await _owned_skill_or_error(skill_id, user)
     updated = await skill_repository.update_skill(
-        skill_id, name=body.name, description=body.description, body=body.body
+        skill_id,
+        name=body.name,
+        description=body.description,
+        body=body.body,
+        when_to_use=body.when_to_use,
+        sources=body.sources,
+        steps=body.steps,
+        output_format=body.output_format,
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Skill not found")

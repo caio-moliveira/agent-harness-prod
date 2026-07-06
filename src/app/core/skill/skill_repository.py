@@ -22,11 +22,30 @@ class SkillRepository:
         self.session = session
 
     async def create_skill(
-        self, user_id: int, name: str, description: str = "", body: str = "", source: str = "authored"
+        self,
+        user_id: int,
+        name: str,
+        description: str = "",
+        body: str = "",
+        source: str = "authored",
+        when_to_use: str = "",
+        sources: str = "",
+        steps: str = "",
+        output_format: str = "",
     ) -> Skill:
         """Create a new skill owned by a user."""
         with session_scope() as session:
-            skill = Skill(user_id=user_id, name=name, description=description, body=body, source=source)
+            skill = Skill(
+                user_id=user_id,
+                name=name,
+                description=description,
+                body=body,
+                source=source,
+                when_to_use=when_to_use,
+                sources=sources,
+                steps=steps,
+                output_format=output_format,
+            )
             session.add(skill)
             session.commit()
             session.refresh(skill)
@@ -58,8 +77,12 @@ class SkillRepository:
         name: Optional[str] = None,
         description: Optional[str] = None,
         body: Optional[str] = None,
+        when_to_use: Optional[str] = None,
+        sources: Optional[str] = None,
+        steps: Optional[str] = None,
+        output_format: Optional[str] = None,
     ) -> Optional[Skill]:
-        """Update a skill's fields. Returns None if not found."""
+        """Update a skill's fields. Omitted (None) fields are left unchanged. None if not found."""
         with session_scope() as session:
             skill = session.get(Skill, skill_id)
             if skill is None:
@@ -70,6 +93,14 @@ class SkillRepository:
                 skill.description = description
             if body is not None:
                 skill.body = body
+            if when_to_use is not None:
+                skill.when_to_use = when_to_use
+            if sources is not None:
+                skill.sources = sources
+            if steps is not None:
+                skill.steps = steps
+            if output_format is not None:
+                skill.output_format = output_format
             skill.updated_at = datetime.now(UTC)
             session.add(skill)
             session.commit()

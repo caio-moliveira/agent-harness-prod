@@ -41,8 +41,28 @@ def materialize_skills(agent_id: Optional[int], skills: list[Skill]) -> Optional
         os.makedirs(skill_dir, exist_ok=True)
         # Escape frontmatter-sensitive characters in the one-line description.
         description = (skill.description or "").replace("\n", " ").replace('"', "'")
-        content = f"---\nname: {skill.name}\ndescription: {description}\n---\n\n{skill.body or ''}\n"
+        content = f"---\nname: {skill.name}\ndescription: {description}\n---\n\n{_render_skill_body(skill)}\n"
         with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:
             f.write(content)
 
     return base
+
+
+def _render_skill_body(skill: Skill) -> str:
+    """Compose the SKILL.md body from the structured fields (RF-08), skipping empty ones.
+
+    The free-form ``body`` leads; the structured sections (when to use / sources / steps / output)
+    follow as headed sections so the agent can act on them during progressive disclosure.
+    """
+    parts: list[str] = []
+    if skill.body:
+        parts.append(skill.body.strip())
+    for heading, value in (
+        ("Quando usar", getattr(skill, "when_to_use", "")),
+        ("Fontes necessárias", getattr(skill, "sources", "")),
+        ("Passo a passo", getattr(skill, "steps", "")),
+        ("Formato de saída", getattr(skill, "output_format", "")),
+    ):
+        if value and value.strip():
+            parts.append(f"## {heading}\n{value.strip()}")
+    return "\n\n".join(parts)
