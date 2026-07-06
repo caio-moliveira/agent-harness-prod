@@ -11,7 +11,26 @@ from sqlmodel import Session as DBSession, select
 
 from src.app.core.common.logging import logger
 from src.app.core.db.database import session_scope
-from src.app.core.skill.skill_model import Skill
+from src.app.core.skill.skill_model import Skill, SkillVersion
+from src.app.core.skill.skill_status import DRAFT, can_transition
+
+
+def _snapshot(session: DBSession, skill: Skill) -> None:
+    """Append an immutable version snapshot of ``skill``'s current content."""
+    session.add(
+        SkillVersion(
+            skill_id=skill.id,
+            version=skill.version,
+            name=skill.name,
+            description=skill.description,
+            body=skill.body,
+            when_to_use=skill.when_to_use,
+            sources=skill.sources,
+            steps=skill.steps,
+            output_format=skill.output_format,
+            status=skill.status,
+        )
+    )
 
 
 class SkillRepository:
@@ -49,6 +68,8 @@ class SkillRepository:
             session.add(skill)
             session.commit()
             session.refresh(skill)
+            _snapshot(session, skill)  # version 1
+            session.commit()
             logger.info("skill_created", skill_id=skill.id, user_id=user_id, name=name, source=source)
             return skill
 
@@ -101,12 +122,44 @@ class SkillRepository:
                 skill.steps = steps
             if output_format is not None:
                 skill.output_format = output_format
+            # A content edit bumps the version and sends the skill back to draft: refinements
+            # must be re-approved before they can load again (RF-10/RF-20).
+            skill.version += 1
+            skill.status = DRAFT
             skill.updated_at = datetime.now(UTC)
             session.add(skill)
             session.commit()
             session.refresh(skill)
-            logger.info("skill_updated", skill_id=skill_id)
+            _snapshot(session, skill)
+            session.commit()
+            logger.info("skill_updated", skill_id=skill_id, version=skill.version)
             return skill
+
+    async def set_status(self, skill_id: int, target: str) -> Optional[Skill]:
+        """Transition a skill's approval status. Returns None if not found; raises on illegal move."""
+        with session_scope() as session:
+            skill = session.get(Skill, skill_id)
+            if skill is None:
+                return None
+            if not can_transition(skill.status, target):
+                raise ValueError(f"Transição de status inválida: {skill.status} → {target}")
+            skill.status = target
+            skill.updated_at = datetime.now(UTC)
+            session.add(skill)
+            session.commit()
+            session.refresh(skill)
+            logger.info("skill_status_changed", skill_id=skill_id, status=target)
+            return skill
+
+    async def get_versions(self, skill_id: int) -> List[SkillVersion]:
+        """Return a skill's version history, newest first."""
+        with session_scope() as session:
+            statement = (
+                select(SkillVersion)
+                .where(SkillVersion.skill_id == skill_id)
+                .order_by(SkillVersion.version.desc())  # type: ignore[attr-defined]
+            )
+            return list(session.exec(statement).all())
 
     async def delete_skill(self, skill_id: int) -> bool:
         """Delete a skill by ID. Returns False if not found."""

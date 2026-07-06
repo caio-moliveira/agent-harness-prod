@@ -63,7 +63,29 @@ class SkillResponse(BaseModel):
     sources: str = ""
     steps: str = ""
     output_format: str = ""
+    status: str = "draft"
+    version: int = 1
     source: str
+
+
+class SkillStatusRequest(BaseModel):
+    """Request body to transition a skill's approval status."""
+
+    status: str = Field(..., pattern="^(draft|in_review|approved)$")
+
+
+class SkillVersionResponse(BaseModel):
+    """One historical revision of a skill."""
+
+    version: int
+    name: str
+    description: str
+    body: str
+    when_to_use: str = ""
+    sources: str = ""
+    steps: str = ""
+    output_format: str = ""
+    status: str
 
 
 class AttachSkillsRequest(BaseModel):

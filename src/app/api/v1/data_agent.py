@@ -257,8 +257,9 @@ async def _materialize_agent_skills(agent_id: int, owner_id: int, skill_ids) -> 
     if not skill_ids:
         return None
     skills = await skill_repository.get_skills_by_ids(list(skill_ids))
-    owned = [s for s in skills if s.user_id == owner_id]
-    return materialize_skills(agent_id, owned)
+    # Only the owner's APPROVED skills load — draft/in_review never reach the agent (#17).
+    loadable = [s for s in skills if s.user_id == owner_id and s.status == "approved"]
+    return materialize_skills(agent_id, loadable)
 
 
 async def _get_or_build_agent(session: Session):
