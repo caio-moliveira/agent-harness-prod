@@ -54,6 +54,7 @@ class AgentResponse(BaseModel):
     name: str
     system_prompt: str
     folder: Optional[str] = Field(default=None, description="Bound sandboxed folder path, if any")
+    database: Optional["DatabaseSummary"] = Field(default=None, description="Bound database summary, if any")
     config: dict = Field(default_factory=dict)
 
 
@@ -68,3 +69,39 @@ class BindFolderResponse(BaseModel):
 
     id: int
     folder: Optional[str] = None
+
+
+class BindDatabaseRequest(BaseModel):
+    """Connection details for binding a read-only database to an agent."""
+
+    driver: str = Field(default="postgresql", description="SQLAlchemy driver, e.g. postgresql or mysql+pymysql")
+    host: str = Field(..., min_length=1)
+    port: int = Field(..., gt=0, lt=65536)
+    database: str = Field(..., min_length=1)
+    username: str = Field(..., min_length=1)
+    password: str = Field(..., description="Encrypted at rest when ENCRYPTION_KEY is configured")
+    sslmode: Optional[str] = None
+
+
+class DatabaseSummary(BaseModel):
+    """Non-secret summary of a bound database (never includes the password)."""
+
+    driver: str
+    host: str
+    port: int
+    database: str
+    username: str
+    sslmode: Optional[str] = None
+    password_persisted: bool = False
+
+
+class BindDatabaseResponse(BaseModel):
+    """Response after binding/unbinding an agent's database."""
+
+    id: int
+    database: Optional[DatabaseSummary] = None
+    password_persisted: bool = False
+
+
+# Resolve the forward reference to DatabaseSummary used by AgentResponse.
+AgentResponse.model_rebuild()

@@ -30,11 +30,22 @@ export interface SessionResponse {
   token: Token;
 }
 
+export interface DatabaseSummary {
+  driver: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  sslmode?: string | null;
+  password_persisted: boolean;
+}
+
 export interface Agent {
   id: number;
   name: string;
   system_prompt: string;
   folder?: string | null;
+  database?: DatabaseSummary | null;
   config: Record<string, unknown>;
 }
 

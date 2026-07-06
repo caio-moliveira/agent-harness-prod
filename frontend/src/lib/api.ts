@@ -1,5 +1,6 @@
 import type {
   Agent,
+  DatabaseSummary,
   ChatResponse,
   ConnectDbRequest,
   ConnectDbResponse,
@@ -130,6 +131,43 @@ export async function bindAgentFolder(
 
 export async function unbindAgentFolder(userToken: string, agentId: number): Promise<BindFolderResult> {
   const res = await fetch(`${BASE}/agents/${agentId}/folder`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
+export interface BindDatabaseInput {
+  driver: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  sslmode?: string | null;
+}
+
+export interface BindDatabaseResult {
+  id: number;
+  database: DatabaseSummary | null;
+  password_persisted: boolean;
+}
+
+export async function bindAgentDatabase(
+  userToken: string,
+  agentId: number,
+  body: BindDatabaseInput,
+): Promise<BindDatabaseResult> {
+  const res = await fetch(`${BASE}/agents/${agentId}/database`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify(body),
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function unbindAgentDatabase(userToken: string, agentId: number): Promise<BindDatabaseResult> {
+  const res = await fetch(`${BASE}/agents/${agentId}/database`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${userToken}` },
   });

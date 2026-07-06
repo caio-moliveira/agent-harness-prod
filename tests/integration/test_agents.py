@@ -319,3 +319,123 @@ class TestAgentFolderBinding:
                 headers=_auth(attacker),
             )
             assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Credential encryption seam (#3) — the one new pure-function seam
+# ---------------------------------------------------------------------------
+
+class TestEncryption:
+    def test_encrypt_roundtrip_and_not_plaintext(self):
+        from src.app.core.common import config as config_module
+        from src.app.core.security import encryption
+
+        with patch.object(config_module.settings, "ENCRYPTION_KEY", "a-dev-secret"):
+            token = encryption.encrypt("s3cr3t-password")
+            assert token != "s3cr3t-password"
+            assert encryption.decrypt(token) == "s3cr3t-password"
+
+    def test_unset_key_declines_to_encrypt(self):
+        from src.app.core.common import config as config_module
+        from src.app.core.security import encryption
+
+        with patch.object(config_module.settings, "ENCRYPTION_KEY", ""):
+            assert encryption.is_encryption_available() is False
+            with pytest.raises(RuntimeError):
+                encryption.encrypt("x")
+
+
+# ---------------------------------------------------------------------------
+# Database binding to an agent (#3) — persisted + encrypted, no password leak
+# ---------------------------------------------------------------------------
+
+class TestAgentDatabaseBinding:
+    _BODY = {
+        "driver": "postgresql",
+        "host": "db.example.com",
+        "port": 5432,
+        "database": "sales",
+        "username": "reader",
+        "password": "hunter2",
+    }
+
+    async def test_bind_db_encrypted_persists_summary_without_password(
+        self, client: AsyncClient, user_token
+    ):
+        from src.app.core.common import config as config_module
+
+        agent = await _create_agent(client, user_token)
+        with (
+            patch("src.app.api.v1.agents.connect_readonly", new=AsyncMock(return_value=object())),
+            patch.object(config_module.settings, "ENCRYPTION_KEY", "dev-key"),
+        ):
+            resp = await client.put(
+                f"/api/v1/agents/{agent['id']}/database",
+                json=self._BODY,
+                headers=_auth(user_token),
+            )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["password_persisted"] is True
+        assert data["database"]["host"] == "db.example.com"
+        assert "password" not in data["database"]
+
+        # GET the agent: summary present, and the encrypted password never leaks in config.
+        got = (await client.get(f"/api/v1/agents/{agent['id']}", headers=_auth(user_token))).json()
+        assert got["database"]["database"] == "sales"
+        assert "hunter2" not in str(got)
+        assert "password_encrypted" not in str(got.get("config", {}))
+
+    async def test_bind_db_without_key_does_not_persist_password(self, client: AsyncClient, user_token):
+        from src.app.core.common import config as config_module
+
+        agent = await _create_agent(client, user_token)
+        with (
+            patch("src.app.api.v1.agents.connect_readonly", new=AsyncMock(return_value=object())),
+            patch.object(config_module.settings, "ENCRYPTION_KEY", ""),
+        ):
+            resp = await client.put(
+                f"/api/v1/agents/{agent['id']}/database",
+                json=self._BODY,
+                headers=_auth(user_token),
+            )
+        assert resp.status_code == 200
+        assert resp.json()["password_persisted"] is False
+
+    async def test_bind_db_connection_failure_is_400(self, client: AsyncClient, user_token):
+        agent = await _create_agent(client, user_token)
+        with patch("src.app.api.v1.agents.connect_readonly", new=AsyncMock(side_effect=Exception("no route"))):
+            resp = await client.put(
+                f"/api/v1/agents/{agent['id']}/database",
+                json=self._BODY,
+                headers=_auth(user_token),
+            )
+        assert resp.status_code == 400
+
+    async def test_unbind_db(self, client: AsyncClient, user_token):
+        from src.app.core.common import config as config_module
+
+        agent = await _create_agent(client, user_token)
+        with (
+            patch("src.app.api.v1.agents.connect_readonly", new=AsyncMock(return_value=object())),
+            patch.object(config_module.settings, "ENCRYPTION_KEY", "dev-key"),
+        ):
+            await client.put(
+                f"/api/v1/agents/{agent['id']}/database", json=self._BODY, headers=_auth(user_token)
+            )
+        resp = await client.delete(f"/api/v1/agents/{agent['id']}/database", headers=_auth(user_token))
+        assert resp.status_code == 200
+        assert resp.json()["database"] is None
+        got = (await client.get(f"/api/v1/agents/{agent['id']}", headers=_auth(user_token))).json()
+        assert got["database"] is None
+
+    async def test_cannot_bind_db_on_another_users_agent(self, client: AsyncClient, user_token):
+        agent = await _create_agent(client, user_token)
+        attacker = await _register_and_token(client, "db-attacker@example.com")
+        with patch("src.app.api.v1.agents.connect_readonly", new=AsyncMock(return_value=object())):
+            resp = await client.put(
+                f"/api/v1/agents/{agent['id']}/database",
+                json=self._BODY,
+                headers=_auth(attacker),
+            )
+        assert resp.status_code == 403

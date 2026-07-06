@@ -18,6 +18,11 @@ export default function AgentsScreen() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [folderInput, setFolderInput] = useState("");
 
+  // Per-card database editing.
+  const [dbEditingId, setDbEditingId] = useState<number | null>(null);
+  const emptyDb = { driver: "postgresql", host: "", port: "5432", database: "", username: "", password: "" };
+  const [dbForm, setDbForm] = useState(emptyDb);
+
   async function refresh() {
     if (!userToken) return;
     setLoading(true);
@@ -85,6 +90,48 @@ export default function AgentsScreen() {
       setEditingId(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao definir a pasta");
+    }
+  }
+
+  function startEditDb(agent: Agent) {
+    setDbEditingId(agent.id);
+    const d = agent.database;
+    setDbForm(
+      d
+        ? { driver: d.driver, host: d.host, port: String(d.port), database: d.database, username: d.username, password: "" }
+        : emptyDb,
+    );
+  }
+
+  async function saveDb(agent: Agent) {
+    if (!userToken) return;
+    try {
+      const res = await api.bindAgentDatabase(userToken, agent.id, {
+        driver: dbForm.driver,
+        host: dbForm.host.trim(),
+        port: Number(dbForm.port),
+        database: dbForm.database.trim(),
+        username: dbForm.username.trim(),
+        password: dbForm.password,
+      });
+      setAgents((prev) => prev.map((a) => (a.id === agent.id ? { ...a, database: res.database } : a)));
+      if (!res.password_persisted) {
+        setError("Banco vinculado, mas a senha NÃO foi salva (ENCRYPTION_KEY ausente). Reconecte a senha por sessão.");
+      }
+      setDbEditingId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao vincular o banco");
+    }
+  }
+
+  async function removeDb(agent: Agent) {
+    if (!userToken) return;
+    try {
+      await api.unbindAgentDatabase(userToken, agent.id);
+      setAgents((prev) => prev.map((a) => (a.id === agent.id ? { ...a, database: null } : a)));
+      setDbEditingId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao remover o banco");
     }
   }
 
@@ -181,6 +228,91 @@ export default function AgentsScreen() {
                       {agent.folder ? "Alterar" : "Vincular"}
                     </button>
                   </>
+                )}
+              </div>
+
+              <div className="mt-2 text-xs">
+                {dbEditingId === agent.id ? (
+                  <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-950/40 p-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <select
+                        value={dbForm.driver}
+                        onChange={(e) => setDbForm({ ...dbForm, driver: e.target.value })}
+                        className="rounded border border-slate-700 bg-slate-900 px-2 py-1"
+                      >
+                        <option value="postgresql">PostgreSQL</option>
+                        <option value="mysql+pymysql">MySQL</option>
+                      </select>
+                      <input
+                        value={dbForm.port}
+                        onChange={(e) => setDbForm({ ...dbForm, port: e.target.value })}
+                        placeholder="Porta"
+                        className="rounded border border-slate-700 bg-slate-900 px-2 py-1"
+                      />
+                      <input
+                        value={dbForm.host}
+                        onChange={(e) => setDbForm({ ...dbForm, host: e.target.value })}
+                        placeholder="Host"
+                        className="col-span-2 rounded border border-slate-700 bg-slate-900 px-2 py-1"
+                      />
+                      <input
+                        value={dbForm.database}
+                        onChange={(e) => setDbForm({ ...dbForm, database: e.target.value })}
+                        placeholder="Banco"
+                        className="rounded border border-slate-700 bg-slate-900 px-2 py-1"
+                      />
+                      <input
+                        value={dbForm.username}
+                        onChange={(e) => setDbForm({ ...dbForm, username: e.target.value })}
+                        placeholder="Usuário"
+                        className="rounded border border-slate-700 bg-slate-900 px-2 py-1"
+                      />
+                      <input
+                        type="password"
+                        value={dbForm.password}
+                        onChange={(e) => setDbForm({ ...dbForm, password: e.target.value })}
+                        placeholder="Senha"
+                        className="col-span-2 rounded border border-slate-700 bg-slate-900 px-2 py-1"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => void saveDb(agent)}
+                        className="rounded border border-indigo-700 bg-indigo-950/40 px-2 py-1 text-indigo-200 hover:bg-indigo-900/50"
+                      >
+                        Salvar
+                      </button>
+                      {agent.database && (
+                        <button
+                          onClick={() => void removeDb(agent)}
+                          className="rounded border border-slate-700 px-2 py-1 text-slate-400 hover:bg-slate-800"
+                        >
+                          Remover
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setDbEditingId(null)}
+                        className="rounded border border-slate-700 px-2 py-1 hover:bg-slate-800"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-500">🛢️</span>
+                    <span className="min-w-0 flex-1 truncate text-slate-400">
+                      {agent.database
+                        ? `${agent.database.database} @ ${agent.database.host}${agent.database.password_persisted ? "" : " (senha não salva)"}`
+                        : "nenhum banco vinculado"}
+                    </span>
+                    <button
+                      onClick={() => startEditDb(agent)}
+                      className="rounded border border-slate-700 px-2 py-1 text-slate-400 hover:bg-slate-800"
+                    >
+                      {agent.database ? "Alterar" : "Vincular"}
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
