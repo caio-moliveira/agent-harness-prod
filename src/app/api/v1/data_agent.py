@@ -7,7 +7,7 @@ connection held by the per-session registry, and never persisted or logged.
 import asyncio
 import json
 import os
-from urllib.parse import quote_plus
+from typing import Optional
 
 from fastapi import (
     APIRouter,
@@ -16,9 +16,9 @@ from fastapi import (
     Request,
 )
 from fastapi.responses import StreamingResponse
-from langchain_community.utilities import SQLDatabase
 
 from src.app.agents.data_agent import build_data_agent
+from src.app.agents.data_agent.context import build_workspace_context
 from src.app.api.security.limiter import limiter
 from src.app.api.v1.auth import get_current_session
 from src.app.api.v1.dtos.data_agent import (
@@ -35,36 +35,17 @@ from src.app.api.v1.dtos.data_agent import (
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
+from src.app.core.db.connect import build_db_url, connect_readonly
+from src.app.core.security import decrypt
 from src.app.core.sandbox import registry
 from src.app.core.sandbox.docker_sandbox import DockerSandbox, create_container
+from src.app.core.sandbox.paths import is_within_allowed_roots, validate_grantable_folder
+from src.app.core.sandbox.registry import SessionResources
 from src.app.core.session.session_model import Session
+from src.app.core.skill.materialize import materialize_skills
+from src.app.init import agent_repository, skill_repository
 
 router = APIRouter()
-
-
-def _build_db_url(body: ConnectDbRequest) -> str:
-    """Build a SQLAlchemy URL from connection credentials (URL-encoded)."""
-    user = quote_plus(body.username)
-    pwd = quote_plus(body.password.get_secret_value())
-    url = f"{body.driver}://{user}:{pwd}@{body.host}:{body.port}/{body.database}"
-    if body.sslmode:
-        sep = "&" if "?" in url else "?"
-        url = f"{url}{sep}sslmode={body.sslmode}"
-    return url
-
-
-def _is_within_allowed_roots(path: str, roots: list[str]) -> bool:
-    """True if ``path`` is inside one of the configured allow-listed roots."""
-    target = os.path.normcase(os.path.abspath(path))
-    for root in roots:
-        allowed_root = os.path.normcase(os.path.abspath(root))
-        try:
-            if os.path.commonpath([target, allowed_root]) == allowed_root:
-                return True
-        except ValueError:
-            # different drives on Windows -> not comparable
-            continue
-    return False
 
 
 @router.post("/connect-db", response_model=ConnectDbResponse)
@@ -85,9 +66,11 @@ async def connect_db(
         username=body.username,
     )
 
-    url = _build_db_url(body)
+    url = build_db_url(
+        body.driver, body.username, body.password.get_secret_value(), body.host, body.port, body.database, body.sslmode
+    )
     try:
-        db = await asyncio.to_thread(SQLDatabase.from_uri, url, None, sample_rows_in_table_info=3)
+        db = await connect_readonly(url)
         tables = await asyncio.to_thread(db.get_usable_table_names)
     except Exception as e:
         logger.warning("db_connect_failed", session_id=session.id, error_type=type(e).__name__)
@@ -109,21 +92,8 @@ async def grant_folder(
     session: Session = Depends(get_current_session),
 ) -> GrantFolderResponse:
     """Grant read-only access to a host folder by mounting it into an isolated sandbox."""
-    if not settings.SANDBOX_ENABLED:
-        raise HTTPException(status_code=503, detail="Sandbox desabilitado nesta instância.")
-
-    path = os.path.abspath(body.path)
-    if not os.path.isdir(path):
-        raise HTTPException(status_code=400, detail="Pasta não encontrada ou não é um diretório.")
-
-    # Security: only allow folders under configured roots (prevents mounting .env, home, C:\, ...).
-    if not settings.SANDBOX_ALLOWED_ROOTS:
-        raise HTTPException(
-            status_code=403,
-            detail="Concessão de pastas desabilitada. Configure SANDBOX_ALLOWED_ROOTS no servidor.",
-        )
-    if not _is_within_allowed_roots(path, settings.SANDBOX_ALLOWED_ROOTS):
-        raise HTTPException(status_code=403, detail="Pasta fora das raízes permitidas.")
+    # Security: folder must exist and resolve under a configured allow-listed root.
+    path = validate_grantable_folder(body.path)
 
     logger.info("folder_grant_requested", session_id=session.id, folder=path)
     try:
@@ -155,7 +125,7 @@ async def query_sources(
 
     try:
         if res.agent is None:
-            res.agent = build_data_agent(res, session.user_id)
+            res.agent = await _build_agent_for_session(res, session)
         messages = [Message(role="user", content=body.query)]
         result = await res.agent.agent_invoke(messages, session.id, user_id=session.user_id)
         logger.info("data_query_processed", session_id=session.id)
@@ -167,11 +137,135 @@ async def query_sources(
         raise HTTPException(status_code=500, detail="Erro ao processar a consulta.")
 
 
-async def _get_or_build_agent(session_id: str, user_id: int):
+async def _ensure_agent_folder(res: SessionResources, session: Session, folder: str) -> None:
+    """Materialize the agent's bound folder into this session's sandbox, if not already up.
+
+    Re-validates the folder against the allow-list on every use, so tightening
+    ``SANDBOX_ALLOWED_ROOTS`` immediately revokes a stale binding. Degrades gracefully:
+    a disabled sandbox or a Docker failure just leaves the agent without file tools rather
+    than failing the whole chat.
+    """
+    if res.sandbox_backend is not None:
+        return  # already materialized for this session
+    if not settings.SANDBOX_ENABLED or not settings.SANDBOX_ALLOWED_ROOTS:
+        return
+    abspath = os.path.abspath(folder)
+    if not os.path.isdir(abspath) or not is_within_allowed_roots(abspath, settings.SANDBOX_ALLOWED_ROOTS):
+        logger.warning("agent_folder_binding_invalid", session_id=session.id, folder=abspath)
+        return
+    try:
+        container_id = await create_container(abspath)
+        backend = DockerSandbox(container_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("agent_folder_sandbox_failed", session_id=session.id, error=str(e))
+        return
+    await registry.set_folder(session.id, abspath, container_id, backend)
+    logger.info("agent_folder_materialized", session_id=session.id, folder=abspath)
+
+
+async def _ensure_agent_database(res: SessionResources, session: Session, db_conf: dict) -> None:
+    """Materialize the agent's bound database into this session, if not already connected.
+
+    The password is decrypted in memory only; if it was never persisted (no encryption key at
+    bind time) or the connection fails, the agent simply runs without SQL tools rather than
+    failing the chat.
+    """
+    if res.db is not None:
+        return
+    token = db_conf.get("password_encrypted")
+    if not token:
+        return  # password was not persisted (secure fallback) — nothing to connect with
+    try:
+        password = decrypt(token)
+        url = build_db_url(
+            db_conf["driver"],
+            db_conf["username"],
+            password,
+            db_conf["host"],
+            int(db_conf["port"]),
+            db_conf["database"],
+            db_conf.get("sslmode"),
+        )
+        db = await connect_readonly(url)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("agent_database_materialize_failed", session_id=session.id, error_type=type(e).__name__)
+        return
+    await registry.set_database(session.id, db, db.dialect)
+    logger.info("agent_database_materialized", session_id=session.id, dialect=db.dialect)
+
+
+async def _build_agent_for_session(res: SessionResources, session: Session):
+    """Build a Data Agent from the session's live sources and its bound agent config.
+
+    When the session is bound to an agent, the agent's system prompt is applied, its bound
+    folder and database are materialized, capability toggles are honored, and its id scopes
+    long-term memory (per-agent isolation). Works with zero sources.
+    """
+    system_prompt = None
+    name = "Data Agent"
+    web_search = False
+    memory_enabled = True
+    skills_dir = None
+    folder = None
+    if session.agent_id is not None:
+        # Isolation choke point (#11): resolve the bound agent through the ownership filter, so a
+        # session can never materialize another user's folder, DB password, or skills. A non-owned
+        # (or absent) agent falls through to plain defaults — fail-closed, no foreign resources.
+        agent = await agent_repository.get_owned_agent(session.agent_id, session.user_id)
+        if agent is None:
+            logger.warning(
+                "session_agent_ownership_mismatch",
+                session_id=session.id,
+                user_id=session.user_id,
+                agent_id=session.agent_id,
+            )
+        if agent is not None:
+            config = agent.config or {}
+            system_prompt = agent.system_prompt or None
+            name = agent.name or name
+            web_search = bool(config.get("web_search", False))
+            # Treat a missing OR null memory flag as enabled (default on).
+            memory_enabled = config.get("memory") is not False
+            folder = config.get("folder")
+            if folder:
+                await _ensure_agent_folder(res, session, folder)
+            if config.get("database"):
+                await _ensure_agent_database(res, session, config["database"])
+            skills_dir = await _materialize_agent_skills(session.agent_id, agent.user_id, config.get("skills"))
+    # Prime the agent with a briefing of its attached sources (files + DB schema) so it is
+    # grounded from the first turn without needing to call a tool.
+    workspace_context = build_workspace_context(folder, res.db)
+    return build_data_agent(
+        res,
+        user_id=session.user_id,
+        system_prompt=system_prompt,
+        agent_id=session.agent_id,
+        name=name,
+        web_search=web_search,
+        memory_enabled=memory_enabled,
+        skills_dir=skills_dir,
+        workspace_context=workspace_context,
+    )
+
+
+async def _materialize_agent_skills(agent_id: int, owner_id: int, skill_ids) -> Optional[str]:
+    """Write the agent's attached skills to a SKILL.md directory, or None if none.
+
+    Only skills owned by the agent's owner are materialized (defense in depth against a stale
+    or tampered id list referencing another user's skill).
+    """
+    if not skill_ids:
+        return None
+    skills = await skill_repository.get_skills_by_ids(list(skill_ids))
+    owned = [s for s in skills if s.user_id == owner_id]
+    return materialize_skills(agent_id, owned)
+
+
+async def _get_or_build_agent(session: Session):
     """Return the session's Data Agent, building it if needed (works with zero sources)."""
-    res = await registry.ensure(session_id)
+    res = await registry.ensure(session.id)
     if res.agent is None:
-        res.agent = build_data_agent(res, user_id)
+        res.agent = await _build_agent_for_session(res, session)
     return res.agent
 
 
@@ -183,7 +277,7 @@ async def query_stream(
     session: Session = Depends(get_current_session),
 ) -> StreamingResponse:
     """Stream the Data Agent's work (tool calls, reasoning, tokens) as SSE events."""
-    agent = await _get_or_build_agent(session.id, session.user_id)
+    agent = await _get_or_build_agent(session)
     logger.info("data_stream_started", session_id=session.id, message_count=len(body.messages))
 
     async def event_generator():

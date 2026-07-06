@@ -1,6 +1,7 @@
 """This file contains the authentication schema for the application."""
 
 import re
+from typing import Optional
 
 from pydantic import (
     BaseModel,
@@ -16,11 +17,13 @@ class SessionResponse(BaseModel):
 
     Attributes:
         session_id: The unique identifier for the chat session
+        agent_id: The agent this session is bound to (if any)
         name: Name of the session (defaults to empty string)
         token: The authentication token for the session
     """
 
     session_id: str = Field(..., description="The unique identifier for the chat session")
+    agent_id: Optional[int] = Field(default=None, description="The agent this session is bound to")
     name: str = Field(default="", description="Name of the session", max_length=100)
     token: Token = Field(..., description="The authentication token for the session")
 

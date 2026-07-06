@@ -25,8 +25,45 @@ export interface TokenResponse {
 
 export interface SessionResponse {
   session_id: string;
+  agent_id?: number | null;
   name: string;
   token: Token;
+}
+
+export interface DatabaseSummary {
+  driver: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  sslmode?: string | null;
+  password_persisted: boolean;
+}
+
+export interface Skill {
+  id: number;
+  name: string;
+  description: string;
+  body: string;
+  source: string;
+}
+
+export interface RegistrySkill {
+  slug: string;
+  name: string;
+  description: string;
+}
+
+export interface Agent {
+  id: number;
+  name: string;
+  system_prompt: string;
+  web_search: boolean;
+  memory: boolean;
+  folder?: string | null;
+  database?: DatabaseSummary | null;
+  skills: number[];
+  config: Record<string, unknown>;
 }
 
 export interface ChatResponse {

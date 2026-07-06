@@ -1,5 +1,6 @@
 import { createContext, useContext, useState } from "react";
 import type { ReactNode } from "react";
+import type { Agent } from "../lib/types";
 import * as api from "../lib/api";
 
 interface AuthState {
@@ -7,19 +8,31 @@ interface AuthState {
   userToken: string | null;
   sessionToken: string | null;
   sessionId: string | null;
+  agentId: number | null;
+  agentName: string | null;
 }
 
 interface AuthContextValue extends AuthState {
   isAuthenticated: boolean;
+  hasActiveAgent: boolean;
   register: (email: string, password: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
+  selectAgent: (agent: Agent) => Promise<void>;
+  leaveAgent: () => void;
   newSession: () => Promise<void>;
   setActiveSession: (sessionId: string, sessionToken: string) => void;
   logout: () => void;
 }
 
 const STORAGE_KEY = "agent_harness_auth";
-const EMPTY: AuthState = { email: null, userToken: null, sessionToken: null, sessionId: null };
+const EMPTY: AuthState = {
+  email: null,
+  userToken: null,
+  sessionToken: null,
+  sessionId: null,
+  agentId: null,
+  agentName: null,
+};
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -41,31 +54,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   }
 
-  // Exchange a user token for a fresh chat session (the session token is what
-  // the chat endpoints require).
-  async function establishSession(email: string, userToken: string) {
-    const session = await api.createSession(userToken);
-    persist({
-      email,
-      userToken,
-      sessionToken: session.token.access_token,
-      sessionId: session.session_id,
-    });
-  }
-
+  // Log in / register only establishes the user token. The chat session is created
+  // later, bound to a chosen agent, so memory and history stay isolated per agent.
   async function register(email: string, password: string) {
     const user = await api.register(email, password);
-    await establishSession(email, user.token.access_token);
+    persist({ ...EMPTY, email, userToken: user.token.access_token });
   }
 
   async function login(email: string, password: string) {
     const token = await api.login(email, password);
-    await establishSession(email, token.access_token);
+    persist({ ...EMPTY, email, userToken: token.access_token });
+  }
+
+  // Bind a fresh chat session to the selected agent.
+  async function selectAgent(agent: Agent) {
+    if (!state.userToken || !state.email) return;
+    const session = await api.createSession(state.userToken, agent.id);
+    persist({
+      ...state,
+      sessionToken: session.token.access_token,
+      sessionId: session.session_id,
+      agentId: agent.id,
+      agentName: agent.name,
+    });
+  }
+
+  // Return to the agent picker, dropping the active session.
+  function leaveAgent() {
+    persist({ ...state, sessionToken: null, sessionId: null, agentId: null, agentName: null });
   }
 
   async function newSession() {
-    if (!state.userToken || !state.email) return;
-    await establishSession(state.email, state.userToken);
+    if (!state.userToken || state.agentId == null) return;
+    const session = await api.createSession(state.userToken, state.agentId);
+    persist({ ...state, sessionToken: session.token.access_token, sessionId: session.session_id });
   }
 
   // Switch the active session to an existing one (token comes from the sessions list).
@@ -82,9 +104,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{
         ...state,
-        isAuthenticated: Boolean(state.sessionToken),
+        isAuthenticated: Boolean(state.userToken),
+        hasActiveAgent: Boolean(state.sessionToken),
         register,
         login,
+        selectAgent,
+        leaveAgent,
         newSession,
         setActiveSession,
         logout,

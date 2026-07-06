@@ -193,6 +193,15 @@ class Settings:
         # (secure by default). A granted folder must live under one of these roots.
         self.SANDBOX_ALLOWED_ROOTS = parse_list_from_env("SANDBOX_ALLOWED_ROOTS", [])
 
+        # Application-level secret for encrypting persisted credentials (e.g. a bound database
+        # password). Empty = secure-by-default: passwords are NOT persisted at rest and must be
+        # re-entered per session. Any non-empty string works (a Fernet key is derived from it).
+        self.ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
+
+        # Vetted registry a user may fetch skills from (single allow-listed base URL). Empty =
+        # fetch disabled (users can still author skills). Only this host may be fetched.
+        self.SKILL_REGISTRY_URL = os.getenv("SKILL_REGISTRY_URL", "")
+
         # Rate Limiting Configuration
         self.RATE_LIMIT_DEFAULT = parse_list_from_env("RATE_LIMIT_DEFAULT", ["200 per day", "50 per hour"])
 
@@ -205,6 +214,9 @@ class Settings:
             "text_to_sql": ["15 per minute"],
             "data_agent": ["15 per minute"],
             "data_connect": ["10 per minute"],
+            "agents": ["60 per minute"],
+            "skills": ["60 per minute"],
+            "session_events": ["60 per minute"],
             "messages": ["50 per minute"],
             "register": ["10 per hour"],
             "login": ["20 per minute"],

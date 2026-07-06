@@ -5,14 +5,22 @@ from langfuse.langchain import CallbackHandler
 
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
+from src.app.core.agent import AgentRepository
 from src.app.core.db.database import database_factory
+from src.app.core.ingestion import DocumentChunkRepository
 from src.app.core.mcp.session_manager import get_mcp_session_manager
 from src.app.core.session import SessionRepository
+from src.app.core.session.event_repository import SessionEventRepository
+from src.app.core.skill import SkillRepository
 from src.app.core.user import UserRepository
 
 dbsession = database_factory.get_session_maker()
 user_repository =  UserRepository(dbsession)
 session_repository = SessionRepository(dbsession)
+agent_repository = AgentRepository(dbsession)
+skill_repository = SkillRepository(dbsession)
+session_event_repository = SessionEventRepository()
+document_chunk_repository = DocumentChunkRepository()
 
 
 def langfuse_init():

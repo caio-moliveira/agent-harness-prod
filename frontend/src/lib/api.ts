@@ -1,4 +1,8 @@
 import type {
+  Agent,
+  Skill,
+  RegistrySkill,
+  DatabaseSummary,
   ChatResponse,
   ConnectDbRequest,
   ConnectDbResponse,
@@ -57,10 +61,172 @@ export async function login(email: string, password: string): Promise<TokenRespo
   return (await ensureOk(res)).json();
 }
 
-export async function createSession(userToken: string): Promise<SessionResponse> {
-  const res = await fetch(`${BASE}/auth/session`, {
+export async function createSession(userToken: string, agentId?: number): Promise<SessionResponse> {
+  const url = agentId != null ? `${BASE}/auth/session?agent_id=${agentId}` : `${BASE}/auth/session`;
+  const res = await fetch(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
+// --- Agents: the user's persisted agent configurations ---
+
+export async function listAgents(userToken: string): Promise<Agent[]> {
+  const res = await fetch(`${BASE}/agents`, {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function createAgent(
+  userToken: string,
+  name: string,
+  systemPrompt: string,
+  opts?: { web_search?: boolean; memory?: boolean },
+): Promise<Agent> {
+  const res = await fetch(`${BASE}/agents`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ name, system_prompt: systemPrompt, ...opts }),
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function updateAgent(
+  userToken: string,
+  agentId: number,
+  body: { name?: string; system_prompt?: string; web_search?: boolean; memory?: boolean },
+): Promise<Agent> {
+  const res = await fetch(`${BASE}/agents/${agentId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify(body),
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function deleteAgent(userToken: string, agentId: number): Promise<void> {
+  const res = await fetch(`${BASE}/agents/${agentId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  await ensureOk(res);
+}
+
+export interface BindFolderResult {
+  id: number;
+  folder: string | null;
+}
+
+export async function bindAgentFolder(
+  userToken: string,
+  agentId: number,
+  path: string,
+): Promise<BindFolderResult> {
+  const res = await fetch(`${BASE}/agents/${agentId}/folder`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ path }),
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function unbindAgentFolder(userToken: string, agentId: number): Promise<BindFolderResult> {
+  const res = await fetch(`${BASE}/agents/${agentId}/folder`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
+export interface BindDatabaseInput {
+  driver: string;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  sslmode?: string | null;
+}
+
+export interface BindDatabaseResult {
+  id: number;
+  database: DatabaseSummary | null;
+  password_persisted: boolean;
+}
+
+export async function bindAgentDatabase(
+  userToken: string,
+  agentId: number,
+  body: BindDatabaseInput,
+): Promise<BindDatabaseResult> {
+  const res = await fetch(`${BASE}/agents/${agentId}/database`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify(body),
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function unbindAgentDatabase(userToken: string, agentId: number): Promise<BindDatabaseResult> {
+  const res = await fetch(`${BASE}/agents/${agentId}/database`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function attachAgentSkills(
+  userToken: string,
+  agentId: number,
+  skillIds: number[],
+): Promise<Agent> {
+  const res = await fetch(`${BASE}/agents/${agentId}/skills`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ skill_ids: skillIds }),
+  });
+  return (await ensureOk(res)).json();
+}
+
+// --- Skills: the user's reusable instruction documents ---
+
+export async function listSkills(userToken: string): Promise<Skill[]> {
+  const res = await fetch(`${BASE}/skills`, { headers: { Authorization: `Bearer ${userToken}` } });
+  return (await ensureOk(res)).json();
+}
+
+export async function createSkill(
+  userToken: string,
+  body: { name: string; description: string; body: string },
+): Promise<Skill> {
+  const res = await fetch(`${BASE}/skills`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify(body),
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function deleteSkill(userToken: string, skillId: number): Promise<void> {
+  const res = await fetch(`${BASE}/skills/${skillId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  await ensureOk(res);
+}
+
+export async function listRegistry(userToken: string): Promise<RegistrySkill[]> {
+  const res = await fetch(`${BASE}/skills/registry`, { headers: { Authorization: `Bearer ${userToken}` } });
+  return (await ensureOk(res)).json();
+}
+
+export async function fetchSkill(userToken: string, slug: string): Promise<Skill> {
+  const res = await fetch(`${BASE}/skills/fetch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ slug }),
   });
   return (await ensureOk(res)).json();
 }

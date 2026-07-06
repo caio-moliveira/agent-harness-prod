@@ -18,6 +18,7 @@ from fastapi import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import (
+    SQLModel,
     select,
 )
 from starlette.responses import JSONResponse
@@ -50,6 +51,9 @@ async def lifespan(app: FastAPI):
         version=settings.VERSION,
         api_prefix=settings.API_V1_STR,
     )
+    # Ensure tables for all models registered by the fully-imported app exist.
+    # Idempotent; robust against model-import ordering (e.g. the Agent table).
+    SQLModel.metadata.create_all(database_factory.engine)
     await mcp_dependencies_init()
     # Background reaper for idle per-session data sources
     reaper_task = asyncio.create_task(reaper_loop())

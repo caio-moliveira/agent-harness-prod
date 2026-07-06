@@ -31,13 +31,22 @@ function closeStep(steps: ToolStep[], name: string, output?: string): ToolStep[]
 }
 
 export default function ChatScreen() {
-  const { email, sessionToken, logout } = useAuth();
+  const { agentName, sessionToken, leaveAgent, logout } = useAuth();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [sending, setSending] = useState(false);
   const [showSources, setShowSources] = useState(false);
   const [sources, setSources] = useState<SourceStatus>({ db_connected: false });
   const scrollRef = useRef<HTMLDivElement>(null);
   const stepIdRef = useRef(0);
+  // Whether to keep the view pinned to the bottom. Turns false as soon as the user scrolls up,
+  // so streaming text never yanks their scrollbar back down; turns true when they return to bottom.
+  const stickToBottom = useRef(true);
+
+  function handleScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }
 
   async function refreshSources() {
     if (!sessionToken) return;
@@ -56,11 +65,14 @@ export default function ChatScreen() {
   }, [sessionToken]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    if (!stickToBottom.current) return; // user scrolled up — don't fight them
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight; // instant, so streaming doesn't jank
   }, [turns]);
 
   async function handleSend(text: string) {
     if (!sessionToken || sending) return;
+    stickToBottom.current = true; // re-engage auto-scroll when the user sends
     const history = turns
       .filter((t) => t.content)
       .map((t) => ({ role: t.role, content: t.content }));
@@ -118,9 +130,18 @@ export default function ChatScreen() {
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-          <div className="min-w-0">
-            <h1 className="text-sm font-semibold">Agent Harness</h1>
-            <p className="truncate text-xs text-slate-500">{email}</p>
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              onClick={leaveAgent}
+              title="Trocar de agente"
+              className="rounded-lg border border-slate-700 px-2 py-1.5 text-xs hover:bg-slate-800"
+            >
+              ←
+            </button>
+            <div className="min-w-0">
+              <h1 className="truncate text-sm font-semibold">{agentName ?? "Agente"}</h1>
+              <p className="truncate text-xs text-slate-500">Agent Harness</p>
+            </div>
           </div>
           <div className="flex items-center gap-2 text-xs">
             <span className={`rounded-full px-2 py-1 ${sources.db_connected ? "bg-emerald-900 text-emerald-200" : "bg-slate-800 text-slate-500"}`}>
@@ -141,7 +162,7 @@ export default function ChatScreen() {
           </div>
         </header>
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4">
+        <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-4">
           {turns.length === 0 ? (
             <div className="mx-auto mt-16 max-w-md text-center text-sm text-slate-500">
               <p className="text-base text-slate-300">Converse com o agente.</p>

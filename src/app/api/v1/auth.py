@@ -41,7 +41,7 @@ from src.app.core.session.session_dto import (
 from src.app.core.session.session_model import Session
 from src.app.core.user.user_dtos import UserResponse, UserCreate
 from src.app.core.user.user_model import User
-from src.app.init import user_repository, session_repository
+from src.app.init import user_repository, session_repository, agent_repository
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
@@ -243,20 +243,33 @@ async def login(
 
 
 @router.post("/session", response_model=SessionResponse)
-async def create_session(user: User = Depends(get_current_user)):
-    """Create a new chat session for the authenticated user.
+async def create_session(agent_id: Optional[int] = None, user: User = Depends(get_current_user)):
+    """Create a new chat session for the authenticated user, optionally bound to an agent.
 
     Args:
+        agent_id: Optional agent to bind this session to. Must be owned by the user.
         user: The authenticated user
 
     Returns:
-        SessionResponse: The session ID, name, and access token
+        SessionResponse: The session ID, agent ID, name, and access token
+
+    Raises:
+        HTTPException: 403 if the agent is not owned by the user, 404 if it does not exist.
     """
     try:
+        # Guard clause: a bound agent must exist and belong to the requesting user.
+        if agent_id is not None:
+            agent = await agent_repository.get_agent(agent_id)
+            if agent is None:
+                raise HTTPException(status_code=404, detail="Agent not found")
+            if agent.user_id != user.id:
+                logger.warning("agent_access_denied", agent_id=agent_id, user_id=user.id)
+                raise HTTPException(status_code=403, detail="Cannot use another user's agent")
+
         # Generate a unique session ID
         session_id = str(uuid.uuid4())
 
-        session = await session_repository.create_session(session_id, user.id)
+        session = await session_repository.create_session(session_id, user.id, agent_id=agent_id)
 
         # Create access token for the session
         token = create_access_token(session_id)
@@ -265,11 +278,12 @@ async def create_session(user: User = Depends(get_current_user)):
             "session_created",
             session_id=session_id,
             user_id=user.id,
+            agent_id=agent_id,
             name=session.name,
             expires_at=token.expires_at.isoformat(),
         )
 
-        return SessionResponse(session_id=session_id, name=session.name, token=token)
+        return SessionResponse(session_id=session_id, agent_id=agent_id, name=session.name, token=token)
     except ValueError as ve:
         logger.error("session_creation_validation_failed", error=str(ve), user_id=user.id, exc_info=True)
         raise HTTPException(status_code=422, detail=str(ve))
@@ -304,7 +318,9 @@ async def update_session_name(
         # Create a new token (not strictly necessary but maintains consistency)
         token = create_access_token(sanitized_session_id)
 
-        return SessionResponse(session_id=sanitized_session_id, name=session.name, token=token)
+        return SessionResponse(
+            session_id=sanitized_session_id, agent_id=session.agent_id, name=session.name, token=token
+        )
     except ValueError as ve:
         logger.error("session_update_validation_failed", error=str(ve), session_id=session_id, exc_info=True)
         raise HTTPException(status_code=422, detail=str(ve))
@@ -339,20 +355,22 @@ async def delete_session(session_id: str, current_session: Session = Depends(get
 
 
 @router.get("/sessions", response_model=List[SessionResponse])
-async def get_user_sessions(user: User = Depends(get_current_user)):
-    """Get all session IDs for the authenticated user.
+async def get_user_sessions(agent_id: Optional[int] = None, user: User = Depends(get_current_user)):
+    """Get all sessions for the authenticated user, optionally scoped to one agent.
 
     Args:
+        agent_id: When provided, only sessions bound to this agent are returned.
         user: The authenticated user
 
     Returns:
-        List[SessionResponse]: List of session IDs
+        List[SessionResponse]: List of sessions
     """
     try:
-        sessions = await session_repository.get_user_sessions(user.id)
+        sessions = await session_repository.get_user_sessions(user.id, agent_id=agent_id)
         return [
             SessionResponse(
                 session_id=sanitize_string(session.id),
+                agent_id=session.agent_id,
                 name=sanitize_string(session.name),
                 token=create_access_token(session.id),
             )
