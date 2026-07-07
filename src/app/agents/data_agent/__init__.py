@@ -19,6 +19,7 @@ def build_data_agent(
     skills_dir: Optional[str] = None,
     workspace_context: str = "",
     folder_writable: bool = False,
+    session_id: Optional[str] = None,
 ) -> DataAgent:
     """Build a Data Agent for a session's live resources and stored agent config.
 
@@ -34,6 +35,7 @@ def build_data_agent(
         workspace_context: Optional briefing of attached sources, prepended to the system prompt.
         folder_writable: When True, the granted folder allows writes (still confined to it);
             defaults to read-only.
+        session_id: The session id, bound to the artifact tool for episodic-log attribution.
 
     Returns:
         A compiled DataAgent with SQL tools (if a db is attached), a per-session
@@ -51,4 +53,5 @@ def build_data_agent(
         skills_dir=skills_dir,
         workspace_context=workspace_context,
         folder_writable=folder_writable,
+        session_id=session_id,
     )

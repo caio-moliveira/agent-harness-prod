@@ -20,12 +20,15 @@ from src.app.core.agent.agent_dtos import (
     BindDatabaseResponse,
     BindFolderRequest,
     BindFolderResponse,
+    CorrectionResponse,
     DatabaseSummary,
+    SubmitCorrectionRequest,
 )
 from src.app.core.agent.agent_model import Agent
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.db.connect import build_db_url, connect_readonly
+from src.app.core.learning import propose_refinement
 from src.app.core.sandbox.paths import validate_grantable_folder
 from src.app.core.security import encrypt, is_encryption_available
 from src.app.core.skill.skill_dtos import AttachSkillsRequest
@@ -169,6 +172,39 @@ async def unbind_folder(
     await agent_repository.set_config_value(agent_id, "folder_writable", False)
     logger.info("agent_folder_unbound", agent_id=agent_id, user_id=user.id)
     return BindFolderResponse(id=agent_id, folder=None, folder_writable=False)
+
+
+@router.post("/{agent_id}/corrections", response_model=CorrectionResponse)
+@limiter.limit(_RATE)
+async def submit_correction(
+    request: Request, agent_id: int, body: SubmitCorrectionRequest, user: User = Depends(get_current_user)
+) -> CorrectionResponse:
+    """Record a correction (#20) and propose a DRAFT refinement to the skill behind an artifact.
+
+    The correction signal is persisted (feeds the rework-rate metric #21) and the skill drafts a new
+    version reset to ``draft`` — it must be re-approved (#17) before it loads again; nothing reaches
+    production automatically. Owner-scoped on both the agent and the skill.
+    """
+    await _owned_agent_or_error(agent_id, user)
+    skill = await skill_repository.get_skill(body.skill_id)
+    if skill is None:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    if skill.user_id != user.id:
+        logger.warning("correction_skill_access_denied", skill_id=body.skill_id, user_id=user.id)
+        raise HTTPException(status_code=403, detail="Cannot correct another user's skill")
+
+    refined = await propose_refinement(
+        user_id=user.id,
+        agent_id=agent_id,
+        skill_id=body.skill_id,
+        proposed_body=body.proposed_body,
+        correction_note=body.note,
+        artifact_ref=body.artifact_ref,
+    )
+    if refined is None:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    logger.info("agent_correction_submitted", agent_id=agent_id, user_id=user.id, skill_id=body.skill_id)
+    return CorrectionResponse(skill_id=refined.id, version=refined.version, status=refined.status)
 
 
 @router.put("/{agent_id}/database", response_model=BindDatabaseResponse)

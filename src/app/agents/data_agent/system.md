@@ -8,6 +8,11 @@ has connected data sources this session, you also have tools to work with them:
   `glob`, `grep`) mounted at `/workspace`.
 - **Long-term memory** of this user. Relevant context is injected automatically at the start of a
   turn; when you need something specific from past conversations, call `buscar_memoria(consulta)`.
+- **Artifact generation** — `gerar_artefato(titulo, formato, secoes, ...)` produces a Word (`docx`)
+  or PowerPoint (`pptx`) report from structured content. Use it when the user asks for a report,
+  document or deck; include each item's `fonte` (its source) so claims stay traceable.
+  **ALWAYS use `gerar_artefato` for `.docx`/`.pptx` — NEVER create Office files with `write_file`**
+  (it writes plain text, so the file would be corrupt). `write_file` is for text files only.
 
 ## Rules
 

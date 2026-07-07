@@ -346,6 +346,54 @@ class TestAgentFolderBinding:
 
 
 # ---------------------------------------------------------------------------
+# Corrections (#20) — a correction drafts a gated skill refinement + records the signal
+# ---------------------------------------------------------------------------
+
+
+async def _create_skill_for_correction(client: AsyncClient, token: str, name: str = "Resumo", body: str = "v1"):
+    resp = await client.post(
+        "/api/v1/skills",
+        json={"name": name, "description": "how to", "body": body},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+class TestAgentCorrections:
+    async def test_submit_correction_drafts_skill_and_records_signal(self, client: AsyncClient, user_token):
+        from src.app.core.learning import CorrectionRepository
+
+        agent = await _create_agent(client, user_token)
+        skill = await _create_skill_for_correction(client, user_token)
+        resp = await client.post(
+            f"/api/v1/agents/{agent['id']}/corrections",
+            json={"skill_id": skill["id"], "proposed_body": "v2 melhorada", "note": "estava incompleto"},
+            headers=_auth(user_token),
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["skill_id"] == skill["id"]
+        assert data["status"] == "draft"  # #17 gate — reset to draft, needs re-approval
+        assert data["version"] >= 2
+
+        # The correction signal is persisted (feeds the rework-rate metric #21).
+        signals = await CorrectionRepository().list_for_agent(1, agent["id"])
+        assert any(s.skill_id == skill["id"] for s in signals)
+
+    async def test_cannot_correct_another_users_skill(self, client: AsyncClient, user_token):
+        agent = await _create_agent(client, user_token)  # user 1's agent
+        other = await _register_and_token(client, "corr-other@example.com")  # user 2
+        other_skill = await _create_skill_for_correction(client, other, name="Alheia")
+        resp = await client.post(
+            f"/api/v1/agents/{agent['id']}/corrections",
+            json={"skill_id": other_skill["id"], "proposed_body": "x"},
+            headers=_auth(user_token),
+        )
+        assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
 # Credential encryption seam (#3) — the one new pure-function seam
 # ---------------------------------------------------------------------------
 
