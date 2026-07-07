@@ -41,10 +41,6 @@ class DataQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000)
 
 
-class DataStreamRequest(BaseModel):
-    messages: List[Message] = Field(..., min_length=1, description="Full conversation history")
-
-
 class DataQueryResponse(BaseModel):
     messages: List[Message]
 

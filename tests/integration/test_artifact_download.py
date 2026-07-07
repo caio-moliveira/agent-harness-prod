@@ -92,7 +92,7 @@ class TestArtifactDownload:
         action = await self._confirmed_action(session["session_id"], str(f))
 
         resp = await client.get(
-            f"/api/v1/data-agent/artifacts/{action.id}/download",
+            f"/api/v1/data-agent/{session['session_id']}/artifacts/{action.id}/download",
             headers=_auth(session["token"]["access_token"]),
         )
         assert resp.status_code == 200, resp.text
@@ -108,7 +108,7 @@ class TestArtifactDownload:
             1, session["session_id"], "export_artifact", {"path": str(f), "fmt": "docx"}
         )
         resp = await client.get(
-            f"/api/v1/data-agent/artifacts/{action.id}/download",
+            f"/api/v1/data-agent/{session['session_id']}/artifacts/{action.id}/download",
             headers=_auth(session["token"]["access_token"]),
         )
         assert resp.status_code == 409, resp.text
@@ -116,7 +116,7 @@ class TestArtifactDownload:
     async def test_missing_action_404(self, client: AsyncClient, user_token):
         session = await _session(client, user_token)
         resp = await client.get(
-            "/api/v1/data-agent/artifacts/999999/download",
+            f"/api/v1/data-agent/{session['session_id']}/artifacts/999999/download",
             headers=_auth(session["token"]["access_token"]),
         )
         assert resp.status_code == 404
@@ -129,8 +129,9 @@ class TestArtifactDownload:
 
         attacker = await _register_and_token(client, "artifact-attacker@example.com")
         attacker_session = await _session(client, attacker)
+        # Path is the attacker's own session (passes the session guard) — the ownership check denies it.
         resp = await client.get(
-            f"/api/v1/data-agent/artifacts/{action.id}/download",
+            f"/api/v1/data-agent/{attacker_session['session_id']}/artifacts/{action.id}/download",
             headers=_auth(attacker_session["token"]["access_token"]),
         )
         assert resp.status_code == 403

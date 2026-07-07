@@ -27,7 +27,6 @@ from src.app.api.v1.dtos.data_agent import (
     ConnectDbResponse,
     DataQueryRequest,
     DataQueryResponse,
-    DataStreamRequest,
     DisconnectResponse,
     GrantFolderRequest,
     GrantFolderResponse,
@@ -281,18 +280,18 @@ async def _get_or_build_agent(session: Session):
     return res.agent
 
 
-async def _persist_incoming(session: Session, messages: list[Message]) -> None:
-    """Persist the new user message and name the session from it on the first turn.
+def _require_session(session_id: str, session: Session) -> None:
+    """Guard: the path session must be the caller's authenticated session (traceability + safety)."""
+    if session_id != session.id:
+        logger.warning("session_path_mismatch", path_session_id=session_id, token_session_id=session.id)
+        raise HTTPException(status_code=403, detail="Sessão não corresponde ao token.")
 
-    Only the trailing user message is stored — prior turns were persisted on their own request, so a
-    full-history resend never double-writes.
-    """
-    last = messages[-1]
-    if last.role != ChatMessageRole.USER:
-        return
-    await chat_message_repository.add_message(session.id, session.user_id, ChatMessageRole.USER, last.content)
+
+async def _persist_user_message(session: Session, query: str) -> None:
+    """Persist the user's new message and name the session from it on the first turn."""
+    await chat_message_repository.add_message(session.id, session.user_id, ChatMessageRole.USER, query)
     if not session.name:
-        name = last.content.strip().splitlines()[0][:60] or "Nova conversa"
+        name = query.strip().splitlines()[0][:60] or "Nova conversa"
         await session_repository.update_session_name(session.id, name)
 
 
@@ -344,24 +343,31 @@ async def _new_hitl_events(session: Session, known_ids: set[int]) -> list[dict]:
     return [_hitl_event(a) for a in pending if a.session_id == session.id and a.id not in known_ids]
 
 
-@router.post("/query/stream")
+@router.post("/{session_id}/query/stream")
 @limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
 async def query_stream(
     request: Request,
-    body: DataStreamRequest,
+    session_id: str,
+    body: DataQueryRequest,
     session: Session = Depends(get_current_session),
 ) -> StreamingResponse:
-    """Stream the Data Agent's work (tool calls, reasoning, tokens) as SSE events."""
+    """Stream the Data Agent's work (tool calls, reasoning, tokens) as SSE events.
+
+    Only the new message is sent — the conversation is not replayed to the agent; its context comes
+    from long-term memory and the learned preferences it maintains across turns.
+    """
+    _require_session(session_id, session)
     agent = await _get_or_build_agent(session)
-    logger.info("data_stream_started", session_id=session.id, message_count=len(body.messages))
+    logger.info("data_stream_started", session_id=session.id)
+    new_messages = [Message(role="user", content=body.query)]
 
     async def event_generator():
         answer_parts: list[str] = []
         steps: list[dict] = []
         try:
             known_ids = await _session_pending_ids(session)
-            await _persist_incoming(session, body.messages)
-            async for ev in agent.astream_query_events(body.messages, session.id, session.user_id):
+            await _persist_user_message(session, body.query)
+            async for ev in agent.astream_query_events(new_messages, session.id, session.user_id):
                 etype = ev.get("type")
                 if etype == "token":
                     answer_parts.append(ev.get("content", ""))
@@ -382,13 +388,15 @@ async def query_stream(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@router.get("/messages", response_model=ChatHistoryResponse)
+@router.get("/{session_id}/messages", response_model=ChatHistoryResponse)
 @limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
 async def messages(
     request: Request,
+    session_id: str,
     session: Session = Depends(get_current_session),
 ) -> ChatHistoryResponse:
     """Return this session's persisted conversation (oldest first), with each turn's tool activity."""
+    _require_session(session_id, session)
     rows = await chat_message_repository.get_messages(session.id)
     steps = await chat_message_step_repository.get_for_session(session.id)
     by_message: dict[int, list[HistoryStep]] = {}
@@ -401,14 +409,16 @@ async def messages(
     )
 
 
-@router.get("/artifacts/{action_id}/download")
+@router.get("/{session_id}/artifacts/{action_id}/download")
 @limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
 async def download_artifact(
     request: Request,
+    session_id: str,
     action_id: int,
     session: Session = Depends(get_current_session),
 ) -> FileResponse:
     """Download a confirmed artifact. Owner-scoped; the file exists only after approval."""
+    _require_session(session_id, session)
     action = await pending_action_repository.get(action_id)
     if action is None or action.action_type != "export_artifact":
         raise HTTPException(status_code=404, detail="Artefato não encontrado.")

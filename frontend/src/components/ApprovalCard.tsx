@@ -11,11 +11,13 @@ export default function ApprovalCard({
   approval,
   userToken,
   sessionToken,
+  sessionId,
   onDecided,
 }: {
   approval: Approval;
   userToken: string;
   sessionToken: string;
+  sessionId: string;
   onDecided: (id: number, status: "approved" | "rejected", error?: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -51,7 +53,7 @@ export default function ApprovalCard({
     setDownloading(true);
     setDownloadError(null);
     try {
-      const { blob, filename } = await api.downloadArtifact(sessionToken, approval.id);
+      const { blob, filename } = await api.downloadArtifact(sessionToken, sessionId, approval.id);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;

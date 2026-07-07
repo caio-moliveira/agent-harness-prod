@@ -96,13 +96,13 @@ export default function ChatScreen() {
   useEffect(() => {
     let cancelled = false;
     async function loadHistory() {
-      if (!sessionToken) {
+      if (!sessionToken || !sessionId) {
         setTurns([]);
         return;
       }
       setLoadingHistory(true);
       try {
-        const msgs = await api.getDataAgentMessages(sessionToken);
+        const msgs = await api.getDataAgentMessages(sessionToken, sessionId);
         if (cancelled) return;
         // Continue the live step-id counter so restored ids never collide with new ones.
         let nextStepId = stepIdRef.current;
@@ -160,13 +160,9 @@ export default function ChatScreen() {
   }, [turns]);
 
   async function handleSend(text: string) {
-    if (!sessionToken || sending) return;
+    if (!sessionToken || !sessionId || sending) return;
     const isFirstMessage = turns.length === 0; // the server names the session from its first message
     stickToBottom.current = true; // re-engage auto-scroll when the user sends
-    const history = turns
-      .filter((t) => t.content)
-      .map((t) => ({ role: t.role, content: t.content }));
-    const outgoing = [...history, { role: "user", content: text }];
 
     setTurns((prev) => [
       ...prev,
@@ -176,7 +172,8 @@ export default function ChatScreen() {
     setSending(true);
 
     try {
-      for await (const ev of api.streamDataQuery(sessionToken, outgoing)) {
+      // Only the new message is sent — the agent keeps context via its long-term memory, not a replay.
+      for await (const ev of api.streamDataQuery(sessionToken, sessionId, text)) {
         if (ev.type === "tool_start") {
           const id = stepIdRef.current++;
           setTurns((prev) =>
@@ -317,7 +314,7 @@ export default function ChatScreen() {
                   </div>
                 ),
               )}
-              {userToken && sessionToken && approvals.length > 0 && (
+              {userToken && sessionToken && sessionId && approvals.length > 0 && (
                 <div className="space-y-2">
                   {approvals.map((a) => (
                     <ApprovalCard
@@ -325,6 +322,7 @@ export default function ChatScreen() {
                       approval={a}
                       userToken={userToken}
                       sessionToken={sessionToken}
+                      sessionId={sessionId}
                       onDecided={decideApproval}
                     />
                   ))}

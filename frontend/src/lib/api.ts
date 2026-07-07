@@ -341,8 +341,8 @@ export async function grantFolder(sessionToken: string, path: string): Promise<G
 }
 
 /** A session's persisted conversation history (Data Agent), oldest first, with per-turn activity. */
-export async function getDataAgentMessages(sessionToken: string): Promise<HistoryMessage[]> {
-  const res = await fetch(`${BASE}/data-agent/messages`, {
+export async function getDataAgentMessages(sessionToken: string, sessionId: string): Promise<HistoryMessage[]> {
+  const res = await fetch(`${BASE}/data-agent/${sessionId}/messages`, {
     headers: { Authorization: `Bearer ${sessionToken}` },
   });
   const data: { messages?: HistoryMessage[] } = await (await ensureOk(res)).json();
@@ -352,9 +352,10 @@ export async function getDataAgentMessages(sessionToken: string): Promise<Histor
 /** Fetch a confirmed artifact as a blob (the endpoint requires the session bearer token). */
 export async function downloadArtifact(
   sessionToken: string,
+  sessionId: string,
   actionId: number,
 ): Promise<{ blob: Blob; filename: string }> {
-  const res = await fetch(`${BASE}/data-agent/artifacts/${actionId}/download`, {
+  const res = await fetch(`${BASE}/data-agent/${sessionId}/artifacts/${actionId}/download`, {
     headers: { Authorization: `Bearer ${sessionToken}` },
   });
   await ensureOk(res);
@@ -397,15 +398,20 @@ export async function disconnectSources(sessionToken: string): Promise<void> {
   await ensureOk(res);
 }
 
-/** Stream the Data Agent's work as structured events (tool calls, tokens). */
+/**
+ * Stream the Data Agent's work as structured events (tool calls, tokens).
+ * Only the new message is sent — the conversation is not replayed; the agent's context comes from
+ * its long-term memory and learned preferences, kept up to date across turns.
+ */
 export async function* streamDataQuery(
   sessionToken: string,
-  messages: { role: string; content: string }[],
+  sessionId: string,
+  query: string,
 ): AsyncGenerator<StreamEvent, void, unknown> {
-  const res = await fetch(`${BASE}/data-agent/query/stream`, {
+  const res = await fetch(`${BASE}/data-agent/${sessionId}/query/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ query }),
   });
   await ensureOk(res);
 

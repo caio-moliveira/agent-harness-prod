@@ -95,7 +95,8 @@ class TestDataAgentMessagesEndpoint:
         await repo.add_message(session["session_id"], user_id=1, role="user", content="oi")
         await repo.add_message(session["session_id"], user_id=1, role="assistant", content="olá!")
 
-        resp = await client.get("/api/v1/data-agent/messages", headers=_auth(session["token"]["access_token"]))
+        sid = session["session_id"]
+        resp = await client.get(f"/api/v1/data-agent/{sid}/messages", headers=_auth(session["token"]["access_token"]))
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert [(m["role"], m["content"]) for m in body["messages"]] == [
@@ -104,12 +105,13 @@ class TestDataAgentMessagesEndpoint:
         ]
 
     async def test_requires_auth(self, client: AsyncClient):
-        resp = await client.get("/api/v1/data-agent/messages")
+        resp = await client.get("/api/v1/data-agent/any-session/messages")
         assert resp.status_code == 401
 
     async def test_new_session_history_is_empty(self, client: AsyncClient, user_token):
         session = await self._make_session(client, user_token)
-        resp = await client.get("/api/v1/data-agent/messages", headers=_auth(session["token"]["access_token"]))
+        sid = session["session_id"]
+        resp = await client.get(f"/api/v1/data-agent/{sid}/messages", headers=_auth(session["token"]["access_token"]))
         assert resp.status_code == 200, resp.text
         assert resp.json()["messages"] == []
 
@@ -129,7 +131,7 @@ class TestDataAgentMessagesEndpoint:
             ],
         )
 
-        resp = await client.get("/api/v1/data-agent/messages", headers=_auth(session["token"]["access_token"]))
+        resp = await client.get(f"/api/v1/data-agent/{sid}/messages", headers=_auth(session["token"]["access_token"]))
         assert resp.status_code == 200, resp.text
         msgs = resp.json()["messages"]
         assert [m["role"] for m in msgs] == ["user", "assistant"]
