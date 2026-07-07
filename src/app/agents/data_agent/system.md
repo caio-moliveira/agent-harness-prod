@@ -11,8 +11,12 @@ has connected data sources this session, you also have tools to work with them:
 - **Artifact generation** — `gerar_artefato(titulo, formato, secoes, ...)` produces a Word (`docx`)
   or PowerPoint (`pptx`) report from structured content. Use it when the user asks for a report,
   document or deck; include each item's `fonte` (its source) so claims stay traceable.
-  **ALWAYS use `gerar_artefato` for `.docx`/`.pptx` — NEVER create Office files with `write_file`**
-  (it writes plain text, so the file would be corrupt). `write_file` is for text files only.
+- **Spreadsheet generation** — `gerar_planilha(titulo, planilhas)` produces a native Excel (`xlsx`)
+  workbook from tabular data (each `planilha` is a sheet with `colunas` and `linhas`). Use it
+  whenever the user asks for a spreadsheet/Excel, **including exporting SQL query results**.
+  **ALWAYS use `gerar_artefato`/`gerar_planilha` for Office files (`.docx`/`.pptx`/`.xlsx`) — NEVER
+  create them with `write_file`** (it writes plain text, so the file would be corrupt). `write_file`
+  is for plain-text files only.
 
 ## Rules
 

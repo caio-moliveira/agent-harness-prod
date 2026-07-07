@@ -8,7 +8,7 @@ integrations (email, publish) register their own executor for their action type 
 
 import os
 
-from src.app.core.artifacts import ArtifactSpec, generate_artifact
+from src.app.core.artifacts import ArtifactSpec, SpreadsheetSpec, generate_artifact, generate_spreadsheet
 from src.app.core.common.logging import logger
 from src.app.core.hitl.pending_model import PendingAction
 from src.app.core.hitl.service import register_executor
@@ -25,15 +25,23 @@ async def _export_artifact(action: PendingAction) -> dict:
         return {"exported": True, "path": path}
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    spec = ArtifactSpec(**spec_data)
-    await generate_artifact(
-        spec,
-        fmt,
-        path,
-        user_id=action.user_id,
-        agent_id=payload.get("agent_id"),
-        session_id=action.session_id,
-    )
+    if payload.get("kind") == "spreadsheet":
+        await generate_spreadsheet(
+            SpreadsheetSpec(**spec_data),
+            path,
+            user_id=action.user_id,
+            agent_id=payload.get("agent_id"),
+            session_id=action.session_id,
+        )
+    else:
+        await generate_artifact(
+            ArtifactSpec(**spec_data),
+            fmt,
+            path,
+            user_id=action.user_id,
+            agent_id=payload.get("agent_id"),
+            session_id=action.session_id,
+        )
     logger.info("artifact_export_executed", action_id=action.id, path=path, fmt=fmt)
     # A new artifact_generated event just landed — refresh the agent's learned preferences (#20).
     bg_run_reflection(action.user_id, payload.get("agent_id"))
