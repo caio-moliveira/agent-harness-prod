@@ -292,7 +292,12 @@ async def _persist_incoming(session: Session, messages: list[Message]) -> None:
 
 
 async def _persist_answer(session: Session, answer: str) -> None:
-    """Persist the assistant's final answer for this turn (skips an empty completion)."""
+    """Persist the assistant's reply for this turn (skips an empty completion).
+
+    ``answer`` is the concatenation of the same ``token`` events the client renders into the
+    assistant bubble (and that ``astream_query_events`` already accumulates for long-term memory), so
+    the stored message is exactly what the user saw — a restored conversation matches the live one.
+    """
     text = answer.strip()
     if not text:
         return
@@ -386,7 +391,7 @@ async def download_artifact(
 
     payload = action.payload or {}
     path = payload.get("path")
-    if not path or not os.path.isfile(path):
+    if not path or not await asyncio.to_thread(os.path.isfile, path):
         raise HTTPException(status_code=404, detail="Arquivo do artefato indisponível.")
 
     media_type = _ARTIFACT_MEDIA_TYPES.get(payload.get("fmt"), "application/octet-stream")

@@ -2,7 +2,11 @@
 
 Append-only and scoped by ``session_id``. Reads are chronological with cursor pagination
 (``before_id``) so a long conversation can be loaded in bounded pages, newest-page-first.
-Each method runs in its own short-lived ``session_scope`` (same convention as the sibling repos).
+
+Follows the established repository pattern in this package (``SessionRepository`` /
+``SessionEventRepository`` / ``PendingActionRepository``): a synchronous ``session_scope`` per call.
+The pattern is deliberately consistent across the repos (and the in-memory test harness relies on
+single-connection access); moving DB work off the loop is tracked repo-wide, not diverged here.
 """
 
 from typing import List, Optional
