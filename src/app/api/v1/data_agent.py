@@ -15,7 +15,7 @@ from fastapi import (
     HTTPException,
     Request,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from src.app.agents.data_agent import build_data_agent
 from src.app.agents.data_agent.context import build_workspace_context
@@ -35,6 +35,7 @@ from src.app.api.v1.dtos.data_agent import (
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
+from src.app.core.hitl.pending_model import PendingActionStatus
 from src.app.core.db.connect import build_db_url, connect_readonly
 from src.app.core.security import decrypt
 from src.app.core.sandbox import registry
@@ -46,9 +47,15 @@ from src.app.core.skill.materialize import materialize_skills
 from src.app.init import (
     agent_repository,
     chat_message_repository,
+    pending_action_repository,
     session_repository,
     skill_repository,
 )
+
+_ARTIFACT_MEDIA_TYPES = {
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
 
 router = APIRouter()
 
@@ -292,6 +299,31 @@ async def _persist_answer(session: Session, answer: str) -> None:
     await chat_message_repository.add_message(session.id, session.user_id, ChatMessageRole.ASSISTANT, text)
 
 
+def _hitl_event(action) -> dict:
+    """Shape a parked action into an inline ``hitl_request`` SSE event for the chat."""
+    payload = action.payload or {}
+    spec = payload.get("spec") or {}
+    return {
+        "type": "hitl_request",
+        "id": action.id,
+        "action_type": action.action_type,
+        "title": spec.get("title") or "Ação pendente",
+        "format": payload.get("fmt"),
+    }
+
+
+async def _session_pending_ids(session: Session) -> set[int]:
+    """Ids of this session's currently-pending actions (used to diff a turn's new requests)."""
+    pending = await pending_action_repository.list_pending(session.user_id)
+    return {a.id for a in pending if a.session_id == session.id}
+
+
+async def _new_hitl_events(session: Session, known_ids: set[int]) -> list[dict]:
+    """Events for actions this turn parked for approval (pending, this session, not seen before)."""
+    pending = await pending_action_repository.list_pending(session.user_id)
+    return [_hitl_event(a) for a in pending if a.session_id == session.id and a.id not in known_ids]
+
+
 @router.post("/query/stream")
 @limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
 async def query_stream(
@@ -306,11 +338,15 @@ async def query_stream(
     async def event_generator():
         answer_parts: list[str] = []
         try:
+            known_ids = await _session_pending_ids(session)
             await _persist_incoming(session, body.messages)
             async for ev in agent.astream_query_events(body.messages, session.id, session.user_id):
                 if ev.get("type") == "token":
                     answer_parts.append(ev.get("content", ""))
                 yield f"data: {json.dumps(ev)}\n\n"
+            # Surface any approval the agent just parked as an inline card, before closing the turn.
+            for hitl_ev in await _new_hitl_events(session, known_ids):
+                yield f"data: {json.dumps(hitl_ev)}\n\n"
             await _persist_answer(session, "".join(answer_parts))
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception:
@@ -329,6 +365,32 @@ async def messages(
     """Return this session's persisted conversation history, oldest first."""
     rows = await chat_message_repository.get_messages(session.id)
     return DataQueryResponse(messages=[Message(role=row.role, content=row.content) for row in rows])
+
+
+@router.get("/artifacts/{action_id}/download")
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
+async def download_artifact(
+    request: Request,
+    action_id: int,
+    session: Session = Depends(get_current_session),
+) -> FileResponse:
+    """Download a confirmed artifact. Owner-scoped; the file exists only after approval."""
+    action = await pending_action_repository.get(action_id)
+    if action is None or action.action_type != "export_artifact":
+        raise HTTPException(status_code=404, detail="Artefato não encontrado.")
+    if action.user_id != session.user_id:
+        logger.warning("artifact_download_denied", action_id=action_id, user_id=session.user_id)
+        raise HTTPException(status_code=403, detail="Artefato pertence a outro usuário.")
+    if action.status != PendingActionStatus.CONFIRMED:
+        raise HTTPException(status_code=409, detail="Artefato ainda não foi aprovado.")
+
+    payload = action.payload or {}
+    path = payload.get("path")
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Arquivo do artefato indisponível.")
+
+    media_type = _ARTIFACT_MEDIA_TYPES.get(payload.get("fmt"), "application/octet-stream")
+    return FileResponse(path, media_type=media_type, filename=os.path.basename(path))
 
 
 @router.get("/status", response_model=SourceStatusResponse)

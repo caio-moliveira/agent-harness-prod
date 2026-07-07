@@ -28,7 +28,9 @@ async def list_pending(request: Request, user: User = Depends(get_current_user))
     """List the authenticated user's actions still awaiting confirmation."""
     actions = await pending_action_repository.list_pending(user.id)
     return [
-        PendingActionResponse(id=a.id, action_type=a.action_type, payload=a.payload, status=a.status)
+        PendingActionResponse(
+            id=a.id, session_id=a.session_id, action_type=a.action_type, payload=a.payload, status=a.status
+        )
         for a in actions
     ]
 
