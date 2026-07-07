@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
-import type { Approval, AssistantTurn, SourceStatus, ToolStep, Turn } from "../lib/types";
+import type { Approval, AssistantTurn, SessionEvent, SourceStatus, ToolStep, Turn } from "../lib/types";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SourcesPanel from "./SourcesPanel";
 import AgentActivity from "./AgentActivity";
 import ApprovalCard from "./ApprovalCard";
 import ConversationsSidebar from "./ConversationsSidebar";
+import ActivityTimeline from "./ActivityTimeline";
 
 function updateLastAssistant(turns: Turn[], fn: (a: AssistantTurn) => AssistantTurn): Turn[] {
   const copy = [...turns];
@@ -37,6 +38,8 @@ export default function ChatScreen() {
     useAuth();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
+  const [timelineEvents, setTimelineEvents] = useState<SessionEvent[]>([]);
+  const [showTimeline, setShowTimeline] = useState(true);
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [sidebarReload, setSidebarReload] = useState(0);
@@ -73,6 +76,19 @@ export default function ChatScreen() {
 
   function decideApproval(id: number, status: "approved" | "rejected", error?: string) {
     setApprovals((prev) => prev.map((a) => (a.id === id ? { ...a, status, error } : a)));
+  }
+
+  // Persisted audit log for this session — rehydrates the timeline of a reopened conversation.
+  async function refreshTimeline() {
+    if (!userToken || !sessionId) {
+      setTimelineEvents([]);
+      return;
+    }
+    try {
+      setTimelineEvents(await api.listSessionEvents(userToken, sessionId));
+    } catch {
+      setTimelineEvents([]);
+    }
   }
 
   function handleScroll() {
@@ -118,11 +134,15 @@ export default function ChatScreen() {
     void loadHistory();
     void refreshSources();
     void seedApprovals();
+    void refreshTimeline();
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionToken]);
+
+  // Live tool activity of the current view (restored turns carry none — the audit log covers those).
+  const liveSteps = turns.flatMap((t) => (t.role === "assistant" ? t.steps : []));
 
   async function handleNewConversation() {
     await newSession();
@@ -244,6 +264,17 @@ export default function ChatScreen() {
             <button onClick={() => setShowSources(true)} className="rounded-lg border border-indigo-700 bg-indigo-950/40 px-3 py-1.5 text-indigo-200 hover:bg-indigo-900/50">
               Fontes
             </button>
+            <button
+              onClick={() => setShowTimeline((v) => !v)}
+              title="Linha do tempo das ações"
+              className={`rounded-lg border px-3 py-1.5 ${
+                showTimeline
+                  ? "border-indigo-700 bg-indigo-950/40 text-indigo-200"
+                  : "border-slate-700 hover:bg-slate-800"
+              }`}
+            >
+              🕒
+            </button>
             <button onClick={handleClear} className="rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800">
               Limpar
             </button>
@@ -308,6 +339,10 @@ export default function ChatScreen() {
           <Composer onSend={handleSend} disabled={sending} />
         </div>
       </div>
+
+      {showTimeline && (
+        <ActivityTimeline events={timelineEvents} steps={liveSteps} onClose={() => setShowTimeline(false)} />
+      )}
 
       {showSources && <SourcesPanel onClose={handleCloseSources} />}
     </div>
