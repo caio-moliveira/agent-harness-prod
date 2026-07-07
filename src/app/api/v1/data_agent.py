@@ -40,9 +40,15 @@ from src.app.core.security import decrypt
 from src.app.core.sandbox import registry
 from src.app.core.sandbox.paths import is_within_allowed_roots, validate_grantable_folder
 from src.app.core.sandbox.registry import SessionResources
+from src.app.core.session.message_model import ChatMessageRole
 from src.app.core.session.session_model import Session
 from src.app.core.skill.materialize import materialize_skills
-from src.app.init import agent_repository, skill_repository
+from src.app.init import (
+    agent_repository,
+    chat_message_repository,
+    session_repository,
+    skill_repository,
+)
 
 router = APIRouter()
 
@@ -263,6 +269,29 @@ async def _get_or_build_agent(session: Session):
     return res.agent
 
 
+async def _persist_incoming(session: Session, messages: list[Message]) -> None:
+    """Persist the new user message and name the session from it on the first turn.
+
+    Only the trailing user message is stored — prior turns were persisted on their own request, so a
+    full-history resend never double-writes.
+    """
+    last = messages[-1]
+    if last.role != ChatMessageRole.USER:
+        return
+    await chat_message_repository.add_message(session.id, session.user_id, ChatMessageRole.USER, last.content)
+    if not session.name:
+        name = last.content.strip().splitlines()[0][:60] or "Nova conversa"
+        await session_repository.update_session_name(session.id, name)
+
+
+async def _persist_answer(session: Session, answer: str) -> None:
+    """Persist the assistant's final answer for this turn (skips an empty completion)."""
+    text = answer.strip()
+    if not text:
+        return
+    await chat_message_repository.add_message(session.id, session.user_id, ChatMessageRole.ASSISTANT, text)
+
+
 @router.post("/query/stream")
 @limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
 async def query_stream(
@@ -275,15 +304,31 @@ async def query_stream(
     logger.info("data_stream_started", session_id=session.id, message_count=len(body.messages))
 
     async def event_generator():
+        answer_parts: list[str] = []
         try:
+            await _persist_incoming(session, body.messages)
             async for ev in agent.astream_query_events(body.messages, session.id, session.user_id):
+                if ev.get("type") == "token":
+                    answer_parts.append(ev.get("content", ""))
                 yield f"data: {json.dumps(ev)}\n\n"
+            await _persist_answer(session, "".join(answer_parts))
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception:
             logger.exception("data_stream_failed", session_id=session.id)
             yield f"data: {json.dumps({'type': 'error', 'content': 'Erro ao processar a consulta.'})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get("/messages", response_model=DataQueryResponse)
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
+async def messages(
+    request: Request,
+    session: Session = Depends(get_current_session),
+) -> DataQueryResponse:
+    """Return this session's persisted conversation history, oldest first."""
+    rows = await chat_message_repository.get_messages(session.id)
+    return DataQueryResponse(messages=[Message(role=row.role, content=row.content) for row in rows])
 
 
 @router.get("/status", response_model=SourceStatusResponse)
