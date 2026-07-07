@@ -179,18 +179,15 @@ class Settings:
         ]
 
 
-        # Per-session data sources + sandbox Configuration
+        # Per-session data sources (DB engine + granted folder). A granted folder is served to
+        # the Data Agent's read-only file tools by a per-session deepagents FilesystemBackend
+        # (virtual_mode, read-only) rooted at the folder — there is no per-session container.
         self.SESSION_SOURCE_TTL = int(os.getenv("SESSION_SOURCE_TTL", "3600"))
         self.SANDBOX_ENABLED = os.getenv("SANDBOX_ENABLED", "true").lower() in ("true", "1", "yes")
-        self.SANDBOX_IMAGE = os.getenv("SANDBOX_IMAGE", "python:3.13-slim")
-        self.SANDBOX_MEMORY = os.getenv("SANDBOX_MEMORY", "512m")
-        self.SANDBOX_CPUS = os.getenv("SANDBOX_CPUS", "1")
-        self.SANDBOX_PIDS_LIMIT = int(os.getenv("SANDBOX_PIDS_LIMIT", "256"))
-        self.SANDBOX_EXEC_TIMEOUT = int(os.getenv("SANDBOX_EXEC_TIMEOUT", "30"))
+        # Virtual path the granted folder is exposed at (the CompositeBackend route prefix).
         self.SANDBOX_MOUNT_PATH = os.getenv("SANDBOX_MOUNT_PATH", "/workspace")
-        self.SANDBOX_USER = os.getenv("SANDBOX_USER", "")  # e.g. "1000:1000"; empty = image default
-        # Allow-list of host roots that may be granted to the sandbox. Empty = deny all grants
-        # (secure by default). A granted folder must live under one of these roots.
+        # Allow-list of host roots that may be granted. Empty = deny all grants (secure by
+        # default). A granted folder must live under one of these roots.
         self.SANDBOX_ALLOWED_ROOTS = parse_list_from_env("SANDBOX_ALLOWED_ROOTS", [])
 
         # Application-level secret for encrypting persisted credentials (e.g. a bound database
@@ -200,7 +197,7 @@ class Settings:
 
         # Vetted registry a user may fetch skills from (single allow-listed base URL). Empty =
         # fetch disabled (users can still author skills). Only this host may be fetched.
-        self.SKILL_REGISTRY_URL = os.getenv("SKILL_REGISTRY_URL", "")
+        self.SKILL_REGISTRY_URL = os.getenv("SKILL_REGISTRY_URL", "https://skillsmp.com/")
 
         # Rate Limiting Configuration
         self.RATE_LIMIT_DEFAULT = parse_list_from_env("RATE_LIMIT_DEFAULT", ["200 per day", "50 per hour"])
@@ -217,6 +214,8 @@ class Settings:
             "agents": ["60 per minute"],
             "skills": ["60 per minute"],
             "session_events": ["60 per minute"],
+            "success_metrics": ["60 per minute"],
+            "hitl": ["60 per minute"],
             "messages": ["50 per minute"],
             "register": ["10 per hour"],
             "login": ["20 per minute"],

@@ -9,11 +9,15 @@ _SLUG_UNSAFE = re.compile(r"[^a-zA-Z0-9 _-]")
 
 
 class SkillCreate(BaseModel):
-    """Request body to author a skill."""
+    """Request body to author a skill (RF-08 structured fields)."""
 
     name: str = Field(..., min_length=1, max_length=100)
     description: str = Field(default="", max_length=500)
     body: str = Field(default="", max_length=100000)
+    when_to_use: str = Field(default="", max_length=5000)
+    sources: str = Field(default="", max_length=5000)
+    steps: str = Field(default="", max_length=20000)
+    output_format: str = Field(default="", max_length=5000)
 
     @field_validator("name")
     @classmethod
@@ -31,6 +35,10 @@ class SkillUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     description: Optional[str] = Field(default=None, max_length=500)
     body: Optional[str] = Field(default=None, max_length=100000)
+    when_to_use: Optional[str] = Field(default=None, max_length=5000)
+    sources: Optional[str] = Field(default=None, max_length=5000)
+    steps: Optional[str] = Field(default=None, max_length=20000)
+    output_format: Optional[str] = Field(default=None, max_length=5000)
 
     @field_validator("name")
     @classmethod
@@ -51,7 +59,33 @@ class SkillResponse(BaseModel):
     name: str
     description: str
     body: str
+    when_to_use: str = ""
+    sources: str = ""
+    steps: str = ""
+    output_format: str = ""
+    status: str = "draft"
+    version: int = 1
     source: str
+
+
+class SkillStatusRequest(BaseModel):
+    """Request body to transition a skill's approval status."""
+
+    status: str = Field(..., pattern="^(draft|in_review|approved)$")
+
+
+class SkillVersionResponse(BaseModel):
+    """One historical revision of a skill."""
+
+    version: int
+    name: str
+    description: str
+    body: str
+    when_to_use: str = ""
+    sources: str = ""
+    steps: str = ""
+    output_format: str = ""
+    status: str
 
 
 class AttachSkillsRequest(BaseModel):

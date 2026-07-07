@@ -265,6 +265,29 @@ class TestAgentFolderBinding:
         got = await client.get(f"/api/v1/agents/{agent['id']}", headers=_auth(user_token))
         assert got.json()["folder"] is not None
         assert got.json()["folder"].endswith("data")
+        # Default bind is read-only.
+        assert got.json()["folder_writable"] is False
+
+    async def test_bind_folder_writable_flag_persists(self, client: AsyncClient, user_token, tmp_path):
+        agent = await _create_agent(client, user_token)
+        sub = tmp_path / "rw"
+        sub.mkdir()
+        p_enabled, p_roots = self._patch_roots(tmp_path)
+        with p_enabled, p_roots:
+            resp = await client.put(
+                f"/api/v1/agents/{agent['id']}/folder",
+                json={"path": str(sub), "writable": True},
+                headers=_auth(user_token),
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["folder_writable"] is True
+        got = await client.get(f"/api/v1/agents/{agent['id']}", headers=_auth(user_token))
+        assert got.json()["folder_writable"] is True
+
+        # Unbinding clears the writable flag too.
+        await client.delete(f"/api/v1/agents/{agent['id']}/folder", headers=_auth(user_token))
+        cleared = await client.get(f"/api/v1/agents/{agent['id']}", headers=_auth(user_token))
+        assert cleared.json()["folder_writable"] is False
 
     async def test_bind_folder_outside_roots_rejected(self, client: AsyncClient, user_token, tmp_path):
         agent = await _create_agent(client, user_token)

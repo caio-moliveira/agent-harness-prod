@@ -65,6 +65,7 @@ def _to_response(agent: Agent) -> AgentResponse:
         web_search=bool(config.get("web_search", False)),
         memory=config.get("memory") is not False,
         folder=config.get("folder"),
+        folder_writable=bool(config.get("folder_writable", False)),
         database=_db_summary(config),
         skills=list(config.get("skills", [])),
         config=safe_config,
@@ -138,18 +139,21 @@ async def update_agent(
 async def bind_folder(
     request: Request, agent_id: int, body: BindFolderRequest, user: User = Depends(get_current_user)
 ) -> BindFolderResponse:
-    """Bind a sandboxed folder to an agent (persisted; re-validated on every use).
+    """Bind a folder to an agent (persisted; re-validated on every use).
 
-    The path is validated against ``SANDBOX_ALLOWED_ROOTS`` here and again when the sandbox is
-    materialized at chat time. Binding stores only the path — no container is created yet.
+    The path is validated against ``SANDBOX_ALLOWED_ROOTS`` here and again when the folder is
+    bound at chat time. Binding stores only the path plus its read/write mode — the folder is
+    served read-only by default; pass ``writable=true`` to let the agent create/edit files in it
+    (still confined to the folder). No external resource is created.
     """
     await _owned_agent_or_error(agent_id, user)
     path = validate_grantable_folder(body.path)
     updated = await agent_repository.set_config_value(agent_id, "folder", path)
     if updated is None:
         raise HTTPException(status_code=404, detail="Agent not found")
-    logger.info("agent_folder_bound", agent_id=agent_id, user_id=user.id, folder=path)
-    return BindFolderResponse(id=agent_id, folder=path)
+    updated = await agent_repository.set_config_value(agent_id, "folder_writable", body.writable)
+    logger.info("agent_folder_bound", agent_id=agent_id, user_id=user.id, folder=path, writable=body.writable)
+    return BindFolderResponse(id=agent_id, folder=path, folder_writable=body.writable)
 
 
 @router.delete("/{agent_id}/folder", response_model=BindFolderResponse)
@@ -162,8 +166,9 @@ async def unbind_folder(
     updated = await agent_repository.set_config_value(agent_id, "folder", None)
     if updated is None:
         raise HTTPException(status_code=404, detail="Agent not found")
+    await agent_repository.set_config_value(agent_id, "folder_writable", False)
     logger.info("agent_folder_unbound", agent_id=agent_id, user_id=user.id)
-    return BindFolderResponse(id=agent_id, folder=None)
+    return BindFolderResponse(id=agent_id, folder=None, folder_writable=False)
 
 
 @router.put("/{agent_id}/database", response_model=BindDatabaseResponse)

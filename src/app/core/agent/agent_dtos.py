@@ -60,6 +60,7 @@ class AgentResponse(BaseModel):
     web_search: bool = False
     memory: bool = True
     folder: Optional[str] = Field(default=None, description="Bound sandboxed folder path, if any")
+    folder_writable: bool = Field(default=False, description="Whether the bound folder allows writes")
     database: Optional["DatabaseSummary"] = Field(default=None, description="Bound database summary, if any")
     skills: list[int] = Field(default_factory=list, description="Attached skill ids")
     config: dict = Field(default_factory=dict)
@@ -68,7 +69,8 @@ class AgentResponse(BaseModel):
 class BindFolderRequest(BaseModel):
     """Request body to bind a sandboxed folder to an agent."""
 
-    path: str = Field(..., min_length=1, description="Host folder path to bind (read-only)")
+    path: str = Field(..., min_length=1, description="Host folder path to bind")
+    writable: bool = Field(default=False, description="Allow the agent to write into the folder (default read-only)")
 
 
 class BindFolderResponse(BaseModel):
@@ -76,6 +78,7 @@ class BindFolderResponse(BaseModel):
 
     id: int
     folder: Optional[str] = None
+    folder_writable: bool = False
 
 
 class BindDatabaseRequest(BaseModel):

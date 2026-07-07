@@ -37,6 +37,36 @@ def _list_supported_files(folder: str) -> List[str]:
     return sorted(found)
 
 
+async def ingest_file(
+    path: str,
+    user_id: int,
+    agent_id: Optional[int],
+    repo: DocumentChunkRepository,
+) -> int:
+    """Parse one file into chunks persisted for (user, agent). Returns the chunk count.
+
+    Parsing runs in a worker thread so it never blocks the event loop. Raises on a parse error
+    so the caller can decide whether to skip (folder ingest) or surface it (single-file sync).
+    """
+    parsed = await asyncio.to_thread(extract_document, path)
+    chunk_datas = chunk_document(parsed)
+    models = [
+        DocumentChunk(
+            user_id=user_id,
+            agent_id=agent_id,
+            source_path=cd.source_path,
+            doc_type=cd.doc_type,
+            section=cd.section,
+            chunk_index=cd.chunk_index,
+            content=cd.content,
+            meta={"author": cd.author, "needs_ocr": cd.needs_ocr},
+        )
+        for cd in chunk_datas
+    ]
+    await repo.add_chunks(models)
+    return len(models)
+
+
 async def ingest_folder(
     folder: str,
     user_id: int,
@@ -52,29 +82,11 @@ async def ingest_folder(
     total_chunks = 0
     for path in files:
         try:
-            parsed = await asyncio.to_thread(extract_document, path)
+            total_chunks += await ingest_file(path, user_id, agent_id, repo)
+            ingested += 1
         except Exception:  # noqa: BLE001 - one bad file must not abort the whole ingestion
             logger.exception("document_parse_failed", path=path, user_id=user_id, agent_id=agent_id)
             skipped += 1
-            continue
-
-        chunk_datas = chunk_document(parsed)
-        models = [
-            DocumentChunk(
-                user_id=user_id,
-                agent_id=agent_id,
-                source_path=cd.source_path,
-                doc_type=cd.doc_type,
-                section=cd.section,
-                chunk_index=cd.chunk_index,
-                content=cd.content,
-                meta={"author": cd.author, "needs_ocr": cd.needs_ocr},
-            )
-            for cd in chunk_datas
-        ]
-        await repo.add_chunks(models)
-        ingested += 1
-        total_chunks += len(models)
 
     logger.info(
         "folder_ingested",

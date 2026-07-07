@@ -1,9 +1,14 @@
-"""In-memory, per-session registry of data sources (DB engine + sandbox + agent).
+"""In-memory, per-session registry of data sources (DB engine + granted folder + agent).
 
 Credentials live ONLY here, in process memory, keyed by session_id. They are never
 persisted to disk, never written to the LangGraph checkpoint/state, and never logged
 (the logging layer additionally redacts sensitive keys). A source is torn down on
-explicit disconnect; a background reaper evicts idle sessions after a TTL.
+explicit disconnect; a background reaper evicts idle sessions after a TTL, disposing the
+DB engine and freeing the session's resources.
+
+The granted folder is served to the agent's read-only file tools by a per-session
+``FilesystemBackend`` (see ``src/app/core/sandbox/backend.py``); the registry only stores the
+authorized folder path — there is no per-session container to create or remove.
 """
 
 import asyncio
@@ -15,7 +20,6 @@ from langchain_community.utilities import SQLDatabase
 
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
-from src.app.core.sandbox.docker_sandbox import remove_container
 
 
 @dataclass
@@ -25,9 +29,7 @@ class SessionResources:
     session_id: str
     db: Optional[SQLDatabase] = None
     db_dialect: Optional[str] = None
-    folder: Optional[str] = None
-    container_id: Optional[str] = None
-    sandbox_backend: Optional[Any] = None  # DockerSandbox instance for the granted folder
+    folder: Optional[str] = None  # authorized host folder, served read-only via FilesystemBackend
     agent: Optional[Any] = None  # compiled DataAgent, rebuilt when a source changes
     last_used: float = 0.0
 
@@ -41,6 +43,7 @@ class SessionRegistry:
     """Async-safe registry mapping session_id -> SessionResources."""
 
     def __init__(self, ttl_seconds: int) -> None:
+        """Create an empty registry whose idle sessions are reaped after ``ttl_seconds``."""
         self._items: dict[str, SessionResources] = {}
         self._lock = asyncio.Lock()
         self._ttl = ttl_seconds
@@ -76,30 +79,23 @@ class SessionRegistry:
             res.agent = None  # force rebuild with the new source
             return res
 
-    async def set_folder(
-        self,
-        session_id: str,
-        folder: str,
-        container_id: Optional[str],
-        sandbox_backend: Optional[Any] = None,
-    ) -> SessionResources:
-        """Attach a granted folder (mounted read-only into the sandbox container)."""
+    async def set_folder(self, session_id: str, folder: str) -> SessionResources:
+        """Attach a granted folder (served read-only via the session's FilesystemBackend)."""
         async with self._lock:
             res = await self._get_or_create(session_id)
             res.folder = folder
-            res.container_id = container_id
-            res.sandbox_backend = sandbox_backend
-            res.agent = None
+            res.agent = None  # force rebuild so the agent picks up the new folder
             return res
 
     async def disconnect(self, session_id: str) -> None:
-        """Tear down all resources for a session (engine dispose + container removal)."""
+        """Tear down all resources for a session (dispose the DB engine, drop the folder)."""
         async with self._lock:
             res = self._items.pop(session_id, None)
         if res is None:
             return
         await self._dispose_db(res)
-        await self._remove_container(res)
+        res.folder = None
+        res.agent = None
         logger.info("session_sources_disconnected", session_id=session_id)
 
     async def reap_idle(self) -> None:
@@ -122,18 +118,6 @@ class SessionRegistry:
                 logger.warning("db_engine_dispose_failed", session_id=res.session_id)
         res.db = None
         res.db_dialect = None
-
-    async def _remove_container(self, res: SessionResources) -> None:
-        # Populated in phase 2 (DockerSandbox). Kept here so disconnect is complete.
-        if not res.container_id:
-            return
-        try:
-            await remove_container(res.container_id)
-        except Exception:  # noqa: BLE001
-            logger.warning("sandbox_container_remove_failed", session_id=res.session_id)
-        res.container_id = None
-        res.folder = None
-        res.sandbox_backend = None
 
 
 registry = SessionRegistry(ttl_seconds=settings.SESSION_SOURCE_TTL)

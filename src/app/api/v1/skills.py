@@ -15,7 +15,13 @@ from src.app.api.v1.auth import get_current_user
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.skill.registry import fetch_registry_index, fetch_registry_skill, is_registry_enabled
-from src.app.core.skill.skill_dtos import SkillCreate, SkillResponse, SkillUpdate
+from src.app.core.skill.skill_dtos import (
+    SkillCreate,
+    SkillResponse,
+    SkillStatusRequest,
+    SkillUpdate,
+    SkillVersionResponse,
+)
 from src.app.core.skill.skill_model import Skill
 from src.app.core.user.user_model import User
 from src.app.init import skill_repository
@@ -38,6 +44,12 @@ def _to_response(skill: Skill) -> SkillResponse:
         name=skill.name,
         description=skill.description,
         body=skill.body,
+        when_to_use=skill.when_to_use,
+        sources=skill.sources,
+        steps=skill.steps,
+        output_format=skill.output_format,
+        status=skill.status,
+        version=skill.version,
         source=skill.source,
     )
 
@@ -59,7 +71,17 @@ async def create_skill(
     request: Request, body: SkillCreate, user: User = Depends(get_current_user)
 ) -> SkillResponse:
     """Author a new skill in the user's library."""
-    skill = await skill_repository.create_skill(user.id, body.name, body.description, body.body, source="authored")
+    skill = await skill_repository.create_skill(
+        user.id,
+        body.name,
+        body.description,
+        body.body,
+        source="authored",
+        when_to_use=body.when_to_use,
+        sources=body.sources,
+        steps=body.steps,
+        output_format=body.output_format,
+    )
     logger.info("skill_api_created", skill_id=skill.id, user_id=user.id)
     return _to_response(skill)
 
@@ -130,12 +152,60 @@ async def update_skill(
     """Update one of the user's skills."""
     await _owned_skill_or_error(skill_id, user)
     updated = await skill_repository.update_skill(
-        skill_id, name=body.name, description=body.description, body=body.body
+        skill_id,
+        name=body.name,
+        description=body.description,
+        body=body.body,
+        when_to_use=body.when_to_use,
+        sources=body.sources,
+        steps=body.steps,
+        output_format=body.output_format,
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Skill not found")
     logger.info("skill_api_updated", skill_id=skill_id, user_id=user.id)
     return _to_response(updated)
+
+
+@router.post("/{skill_id}/status", response_model=SkillResponse)
+@limiter.limit(_RATE)
+async def set_skill_status(
+    request: Request, skill_id: int, body: SkillStatusRequest, user: User = Depends(get_current_user)
+) -> SkillResponse:
+    """Transition a skill's approval status (draft → in_review → approved). Owner-scoped."""
+    await _owned_skill_or_error(skill_id, user)
+    try:
+        updated = await skill_repository.set_status(skill_id, body.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    logger.info("skill_api_status_set", skill_id=skill_id, user_id=user.id, status=body.status)
+    return _to_response(updated)
+
+
+@router.get("/{skill_id}/versions", response_model=List[SkillVersionResponse])
+@limiter.limit(_RATE)
+async def get_skill_versions(
+    request: Request, skill_id: int, user: User = Depends(get_current_user)
+) -> List[SkillVersionResponse]:
+    """List a skill's version history (newest first). Owner-scoped."""
+    await _owned_skill_or_error(skill_id, user)
+    versions = await skill_repository.get_versions(skill_id)
+    return [
+        SkillVersionResponse(
+            version=v.version,
+            name=v.name,
+            description=v.description,
+            body=v.body,
+            when_to_use=v.when_to_use,
+            sources=v.sources,
+            steps=v.steps,
+            output_format=v.output_format,
+            status=v.status,
+        )
+        for v in versions
+    ]
 
 
 @router.delete("/{skill_id}")

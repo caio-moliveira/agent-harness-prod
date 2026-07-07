@@ -97,7 +97,7 @@ export default function SourcesPanel({ onClose }: { onClose: () => void }) {
             Banco: {status.db_connected ? status.dialect : "não conectado"}
           </span>
           <span className={`rounded-full px-2 py-1 ${status.folder ? "bg-emerald-900 text-emerald-200" : "bg-slate-800 text-slate-400"}`}>
-            Pasta: {status.folder ? "montada" : "nenhuma"}
+            Pasta: {status.folder ? "autorizada (somente leitura)" : "nenhuma"}
           </span>
           {hasSource && (
             <button onClick={handleDisconnect} className="rounded-full bg-red-950 px-2 py-1 text-red-300 hover:bg-red-900">
@@ -109,6 +109,7 @@ export default function SourcesPanel({ onClose }: { onClose: () => void }) {
         {status.folder && (
           <p className="mt-2 break-all rounded-lg bg-slate-950 px-3 py-2 text-[11px] text-slate-400">
             📁 {status.folder}
+            <span className="ml-1 text-slate-500">— exposta em <code>/workspace</code>, somente leitura.</span>
           </p>
         )}
 
@@ -135,13 +136,14 @@ export default function SourcesPanel({ onClose }: { onClose: () => void }) {
 
         {/* Folder form */}
         <section className="mt-4 space-y-2 rounded-xl border border-slate-800 p-4">
-          <h3 className="text-sm font-medium">Autorizar pasta (read-only no sandbox)</h3>
+          <h3 className="text-sm font-medium">Autorizar pasta (somente leitura)</h3>
           <input value={folderPath} onChange={(e) => setFolderPath(e.target.value)} placeholder="D:/caminho/para/a/pasta" className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm outline-none focus:border-indigo-500" />
           <button onClick={handleGrant} disabled={granting || !folderPath.trim()} className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50">
-            {granting ? "Criando sandbox…" : "Autorizar"}
+            {granting ? "Autorizando…" : "Autorizar"}
           </button>
           <p className="text-[11px] text-slate-500">
-            Só pastas sob as raízes configuradas (SANDBOX_ALLOWED_ROOTS) são permitidas.
+            O agente vê a pasta em <code>/workspace</code> apenas para leitura (nunca grava nem
+            executa comandos). Só pastas sob as raízes configuradas (SANDBOX_ALLOWED_ROOTS) são permitidas.
           </p>
         </section>
 

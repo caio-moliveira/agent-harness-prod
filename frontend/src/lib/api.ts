@@ -117,17 +117,19 @@ export async function deleteAgent(userToken: string, agentId: number): Promise<v
 export interface BindFolderResult {
   id: number;
   folder: string | null;
+  folder_writable: boolean;
 }
 
 export async function bindAgentFolder(
   userToken: string,
   agentId: number,
   path: string,
+  writable = false,
 ): Promise<BindFolderResult> {
   const res = await fetch(`${BASE}/agents/${agentId}/folder`, {
     method: "PUT",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
-    body: JSON.stringify({ path }),
+    body: JSON.stringify({ path, writable }),
   });
   return (await ensureOk(res)).json();
 }
