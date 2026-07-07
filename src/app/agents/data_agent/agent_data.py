@@ -18,6 +18,7 @@ from src.app.core.common.config import settings
 from src.app.core.common.graph_utils import process_messages
 from src.app.core.common.model.message import Message
 from src.app.core.db.readonly import make_readonly_sql_tools
+from src.app.core.sandbox.backend import ROOT_DIR_CONFIG_KEY, make_backend_factory
 from src.app.core.memory.memory import bg_update_memory, get_relevant_memory
 from src.app.core.middleware import (
     AgentContext,
@@ -48,7 +49,7 @@ class DataAgent:
         self,
         name: str,
         db: Optional[SQLDatabase] = None,
-        backend: Any = None,
+        root_dir: Optional[str] = None,
         user_id: Optional[int] = None,
         system_prompt: Optional[str] = None,
         agent_id: Optional[int] = None,
@@ -56,19 +57,48 @@ class DataAgent:
         memory_enabled: bool = True,
         skills_dir: Optional[str] = None,
         workspace_context: str = "",
+        folder_writable: bool = False,
     ):
-        """Build a Data Agent over a session's sources, isolated to one user and agent."""
+        """Build a Data Agent over a session's sources, isolated to one user and agent.
+
+        ``root_dir`` is the session's granted folder (or None). When set, the agent's file tools
+        are served by a per-session ``FilesystemBackend`` rooted there; the path is threaded into
+        each invocation's config so the backend factory resolves it per session. ``folder_writable``
+        (a per-agent capability, off by default) allows the folder to be written; either way writes
+        stay confined to ``root_dir``.
+        """
         self.name = name
         self.user_id = user_id
         self.agent_id = agent_id
         self.memory_enabled = memory_enabled
+        self.root_dir = root_dir
         self.agent = _create_data_deep_agent(
-            db, backend, user_id, system_prompt, agent_id, web_search, memory_enabled, skills_dir, workspace_context
+            db,
+            root_dir,
+            user_id,
+            system_prompt,
+            agent_id,
+            web_search,
+            memory_enabled,
+            skills_dir,
+            workspace_context,
+            folder_writable,
         )
         self._pipeline = AgentPipeline(
             middlewares=[LoggingMiddleware(), ErrorHandlingMiddleware(), GuardrailMiddleware()],
             invoke_fn=self._core_invoke,
         )
+
+    def _invoke_config(self, session_id: str, user_id: Optional[int]) -> dict:
+        """Build the LangGraph invoke config, threading this session's granted root dir.
+
+        The root dir goes under ``configurable`` (not ``metadata``) so the per-session backend
+        factory can resolve it, without the host path leaking into Langfuse trace metadata.
+        """
+        config = build_invoke_config(session_id, user_id, self.name)
+        if self.root_dir:
+            config["configurable"][ROOT_DIR_CONFIG_KEY] = self.root_dir
+        return config
 
     async def agent_invoke(
         self,
@@ -81,7 +111,7 @@ class DataAgent:
             messages=messages,
             session_id=session_id,
             user_id=user_id,
-            config=build_invoke_config(session_id, user_id, self.name),
+            config=self._invoke_config(session_id, user_id),
             agent_name=self.name,
             metadata={"model_name": settings.DEFAULT_LLM_MODEL},
         )
@@ -113,7 +143,7 @@ class DataAgent:
         server-side checkpointer. Relevant long-term memory is auto-injected before the turn,
         and the exchange is stored back to memory afterwards. Traced by Langfuse.
         """
-        config = build_invoke_config(session_id, user_id, self.name)
+        config = self._invoke_config(session_id, user_id)
         history = [{"role": m.role, "content": m.content} for m in messages]
         last_user = messages[-1].content if messages else ""
 
@@ -185,8 +215,8 @@ _HARNESS_CAPABILITIES = """
 Conforme as fontes que o usuário conectou, você pode ter:
 - **Banco SQL (somente leitura)** — ferramentas `list_tables`, `describe_tables`, `run_sql`
   (apenas `SELECT`/`WITH`/`EXPLAIN`/`SHOW`).
-- **Uma pasta concedida** exposta por ferramentas de arquivo (`ls`, `read_file`, `glob`, `grep`)
-  em um sandbox isolado montado em `/workspace`.
+- **Uma pasta concedida** exposta **somente leitura** por ferramentas de arquivo (`ls`,
+  `read_file`, `glob`, `grep`) montada em `/workspace`.
 - **Memória de longo prazo** — `buscar_memoria(consulta)`.
 
 Regras: somente leitura; nunca modifique dados. Para perguntas sobre **arquivos**, use `ls`/`glob`
@@ -198,6 +228,17 @@ disponíveis e execute de novo — **nunca invente tabelas ou colunas**, e não 
 até a consulta rodar sem erro. Cada resultado de `run_sql` traz uma linha `[proveniência]`;
 inclua essa fonte (tabela + consulta) na sua resposta. Seja conciso e cite os arquivos/tabelas usados.
 """
+
+
+# Appended only when the granted folder is writable, so the model knows it may create/edit files
+# there (overriding the default read-only file guidance). DB access stays strictly read-only.
+_WRITABLE_FOLDER_NOTE = (
+    "## Pasta gravável\n"
+    "A pasta em `/workspace` está em modo LEITURA E ESCRITA nesta sessão: você PODE criar e editar "
+    "arquivos nela com `write_file` e `edit_file` (ex.: gerar um relatório em `/workspace/…`). "
+    "Toda escrita fica confinada a `/workspace` — nunca escreva fora dela. O banco de dados "
+    "permanece somente leitura."
+)
 
 
 def _compose_system_prompt(system_prompt: Optional[str]) -> str:
@@ -214,7 +255,7 @@ def _compose_system_prompt(system_prompt: Optional[str]) -> str:
 
 def _create_data_deep_agent(
     db: Optional[SQLDatabase],
-    backend: Any,
+    root_dir: Optional[str],
     user_id: Optional[int],
     system_prompt: Optional[str] = None,
     agent_id: Optional[int] = None,
@@ -222,15 +263,20 @@ def _create_data_deep_agent(
     memory_enabled: bool = True,
     skills_dir: Optional[str] = None,
     workspace_context: str = "",
+    folder_writable: bool = False,
 ) -> Any:
-    """Build the underlying Deep Agent with read-only SQL, memory tools, and optional sandbox.
+    """Build the underlying Deep Agent with read-only SQL, memory tools, and optional folder.
 
     ``system_prompt`` sets the agent's persona; the harness capabilities guidance is always
     appended so tool usage survives. ``agent_id`` scopes the memory tools per agent.
-    ``web_search`` adds a host-side web-search tool (the sandbox stays network-isolated);
-    ``memory_enabled`` gates the long-term memory tool. ``skills_dir`` (when set) is a directory
-    of SKILL.md files the agent loads via progressive disclosure. ``workspace_context`` (when set)
-    is a briefing of the attached sources, prepended so the agent is grounded from the first turn.
+    ``web_search`` adds a host-side web-search tool; ``memory_enabled`` gates the long-term
+    memory tool. ``skills_dir`` (when set) is a directory of SKILL.md files the agent loads via
+    progressive disclosure. ``workspace_context`` (when set) is a briefing of the attached sources,
+    prepended so the agent is grounded from the first turn. When ``root_dir`` is set, the built-in
+    file tools (ls/read_file/glob/grep) are served by a per-session ``FilesystemBackend`` rooted
+    there — read-only unless ``folder_writable`` is True (then write_file/edit_file also work,
+    still confined to the folder); the ``execute`` tool is never exposed (the backend is not a
+    sandbox).
     """
     model = ChatOpenAI(model=settings.DEFAULT_LLM_MODEL, temperature=0, api_key=settings.OPENAI_API_KEY)
     tools = make_memory_tools(user_id, agent_id) if memory_enabled else []
@@ -239,12 +285,16 @@ def _create_data_deep_agent(
     if db is not None:
         tools = tools + make_readonly_sql_tools(db)
     if web_search:
-        # Runs host-side (not inside the sandbox), so the file sandbox stays --network none.
+        # Runs host-side, alongside the read-only file tools.
         tools = tools + get_search_tool(SearchAPI.DUCKDUCKGO)
 
     prompt = _compose_system_prompt(system_prompt)
     if workspace_context:
         prompt = f"{prompt}\n\n{workspace_context}"
+    if root_dir is not None and folder_writable:
+        # Override the default read-only file guidance: this agent may create/edit files in the
+        # granted folder (still confined to /workspace).
+        prompt = f"{prompt}\n{_WRITABLE_FOLDER_NOTE}"
 
     kwargs: dict[str, Any] = {
         "model": model,
@@ -255,9 +305,10 @@ def _create_data_deep_agent(
     if skills_dir is not None:
         # deepagents loads SKILL.md files from this directory (progressive disclosure).
         kwargs["skills"] = [skills_dir]
-    # When a sandbox backend is provided (phase 2), the built-in filesystem tools
-    # (ls/read_file/glob/grep) route into the isolated container.
-    if backend is not None:
-        kwargs["backend"] = backend
+    # When a folder is granted, route the built-in file tools (ls/read_file/glob/grep) to a
+    # per-session FilesystemBackend under /workspace (resolved per invocation from config),
+    # read-only unless folder_writable. No folder => the framework default StateBackend.
+    if root_dir is not None:
+        kwargs["backend"] = make_backend_factory(root_dir, writable=folder_writable)
 
     return create_deep_agent(**kwargs)

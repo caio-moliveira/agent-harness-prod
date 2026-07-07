@@ -23,6 +23,7 @@ export default function AgentsScreen() {
   // Per-card folder editing.
   const [editingId, setEditingId] = useState<number | null>(null);
   const [folderInput, setFolderInput] = useState("");
+  const [folderWritable, setFolderWritable] = useState(false);
 
   // Per-card database editing.
   const [dbEditingId, setDbEditingId] = useState<number | null>(null);
@@ -112,6 +113,7 @@ export default function AgentsScreen() {
   function startEditFolder(agent: Agent) {
     setEditingId(agent.id);
     setFolderInput(agent.folder ?? "");
+    setFolderWritable(agent.folder_writable ?? false);
   }
 
   async function saveFolder(agent: Agent) {
@@ -119,9 +121,13 @@ export default function AgentsScreen() {
     try {
       const path = folderInput.trim();
       const res = path
-        ? await api.bindAgentFolder(userToken, agent.id, path)
+        ? await api.bindAgentFolder(userToken, agent.id, path, folderWritable)
         : await api.unbindAgentFolder(userToken, agent.id);
-      setAgents((prev) => prev.map((a) => (a.id === agent.id ? { ...a, folder: res.folder } : a)));
+      setAgents((prev) =>
+        prev.map((a) =>
+          a.id === agent.id ? { ...a, folder: res.folder, folder_writable: res.folder_writable } : a,
+        ),
+      );
       setEditingId(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao definir a pasta");
@@ -257,6 +263,18 @@ export default function AgentsScreen() {
                       className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-900 px-2 py-1 outline-none focus:border-indigo-600"
                       autoFocus
                     />
+                    <label
+                      className="flex shrink-0 items-center gap-1 text-slate-400"
+                      title="Permite que o agente crie/edite arquivos na pasta (confinado a ela). Desligado = somente leitura."
+                    >
+                      <input
+                        type="checkbox"
+                        checked={folderWritable}
+                        onChange={(e) => setFolderWritable(e.target.checked)}
+                        className="accent-indigo-600"
+                      />
+                      gravável
+                    </label>
                     <button
                       onClick={() => void saveFolder(agent)}
                       className="rounded border border-indigo-700 bg-indigo-950/40 px-2 py-1 text-indigo-200 hover:bg-indigo-900/50"
@@ -275,6 +293,17 @@ export default function AgentsScreen() {
                     <span className="min-w-0 flex-1 truncate text-slate-400">
                       {agent.folder ? agent.folder : "nenhuma pasta vinculada"}
                     </span>
+                    {agent.folder && (
+                      <span
+                        className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${
+                          agent.folder_writable
+                            ? "bg-amber-950/60 text-amber-300"
+                            : "bg-slate-800 text-slate-400"
+                        }`}
+                      >
+                        {agent.folder_writable ? "gravável" : "somente leitura"}
+                      </span>
+                    )}
                     <button
                       onClick={() => startEditFolder(agent)}
                       className="rounded border border-slate-700 px-2 py-1 text-slate-400 hover:bg-slate-800"

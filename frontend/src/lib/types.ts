@@ -61,6 +61,7 @@ export interface Agent {
   web_search: boolean;
   memory: boolean;
   folder?: string | null;
+  folder_writable?: boolean;
   database?: DatabaseSummary | null;
   skills: number[];
   config: Record<string, unknown>;

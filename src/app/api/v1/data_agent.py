@@ -38,7 +38,6 @@ from src.app.core.common.model.message import Message
 from src.app.core.db.connect import build_db_url, connect_readonly
 from src.app.core.security import decrypt
 from src.app.core.sandbox import registry
-from src.app.core.sandbox.docker_sandbox import DockerSandbox, create_container
 from src.app.core.sandbox.paths import is_within_allowed_roots, validate_grantable_folder
 from src.app.core.sandbox.registry import SessionResources
 from src.app.core.session.session_model import Session
@@ -91,20 +90,15 @@ async def grant_folder(
     body: GrantFolderRequest,
     session: Session = Depends(get_current_session),
 ) -> GrantFolderResponse:
-    """Grant read-only access to a host folder by mounting it into an isolated sandbox."""
+    """Grant read-only access to a host folder, served by the session's FilesystemBackend."""
     # Security: folder must exist and resolve under a configured allow-listed root.
     path = validate_grantable_folder(body.path)
 
     logger.info("folder_grant_requested", session_id=session.id, folder=path)
-    try:
-        container_id = await create_container(path)
-        backend = DockerSandbox(container_id)
-    except Exception as e:
-        logger.warning("sandbox_create_failed", session_id=session.id, error=str(e))
-        raise HTTPException(status_code=500, detail="Falha ao criar o sandbox. O Docker está em execução?")
-
-    await registry.set_folder(session.id, path, container_id, backend)
-    logger.info("folder_granted", session_id=session.id, folder=path, container_id=container_id)
+    # No external resource to create — the read-only FilesystemBackend is resolved per
+    # invocation from the granted path (no docker run on the first-response path).
+    await registry.set_folder(session.id, path)
+    logger.info("folder_granted", session_id=session.id, folder=path)
     return GrantFolderResponse(granted=True, folder=path)
 
 
@@ -138,29 +132,23 @@ async def query_sources(
 
 
 async def _ensure_agent_folder(res: SessionResources, session: Session, folder: str) -> None:
-    """Materialize the agent's bound folder into this session's sandbox, if not already up.
+    """Bind the agent's configured folder into this session, if not already bound.
 
     Re-validates the folder against the allow-list on every use, so tightening
     ``SANDBOX_ALLOWED_ROOTS`` immediately revokes a stale binding. Degrades gracefully:
-    a disabled sandbox or a Docker failure just leaves the agent without file tools rather
+    a disabled feature or an invalid path just leaves the agent without file tools rather
     than failing the whole chat.
     """
-    if res.sandbox_backend is not None:
-        return  # already materialized for this session
+    if res.folder is not None:
+        return  # already bound for this session
     if not settings.SANDBOX_ENABLED or not settings.SANDBOX_ALLOWED_ROOTS:
         return
     abspath = os.path.abspath(folder)
     if not os.path.isdir(abspath) or not is_within_allowed_roots(abspath, settings.SANDBOX_ALLOWED_ROOTS):
         logger.warning("agent_folder_binding_invalid", session_id=session.id, folder=abspath)
         return
-    try:
-        container_id = await create_container(abspath)
-        backend = DockerSandbox(container_id)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("agent_folder_sandbox_failed", session_id=session.id, error=str(e))
-        return
-    await registry.set_folder(session.id, abspath, container_id, backend)
-    logger.info("agent_folder_materialized", session_id=session.id, folder=abspath)
+    await registry.set_folder(session.id, abspath)
+    logger.info("agent_folder_bound", session_id=session.id, folder=abspath)
 
 
 async def _ensure_agent_database(res: SessionResources, session: Session, db_conf: dict) -> None:
@@ -207,6 +195,7 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
     memory_enabled = True
     skills_dir = None
     folder = None
+    folder_writable = False
     if session.agent_id is not None:
         # Isolation choke point (#11): resolve the bound agent through the ownership filter, so a
         # session can never materialize another user's folder, DB password, or skills. A non-owned
@@ -228,6 +217,8 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
             memory_enabled = config.get("memory") is not False
             folder = config.get("folder")
             if folder:
+                # Read-write access is opt-in per agent (default read-only).
+                folder_writable = bool(config.get("folder_writable", False))
                 await _ensure_agent_folder(res, session, folder)
             if config.get("database"):
                 await _ensure_agent_database(res, session, config["database"])
@@ -245,6 +236,7 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
         memory_enabled=memory_enabled,
         skills_dir=skills_dir,
         workspace_context=workspace_context,
+        folder_writable=folder_writable,
     )
 
 
@@ -316,6 +308,6 @@ async def disconnect_sources(
     request: Request,
     session: Session = Depends(get_current_session),
 ) -> DisconnectResponse:
-    """Tear down all sources (dispose the DB engine, remove the sandbox container)."""
+    """Tear down all sources (dispose the DB engine, release the granted folder)."""
     await registry.disconnect(session.id)
     return DisconnectResponse(message="Fontes desconectadas.")
