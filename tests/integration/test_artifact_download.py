@@ -129,9 +129,15 @@ class TestArtifactDownload:
 
         attacker = await _register_and_token(client, "artifact-attacker@example.com")
         attacker_session = await _session(client, attacker)
-        # Path is the attacker's own session (passes the session guard) — the ownership check denies it.
+        # Through the attacker's own session the artifact simply isn't there (session-scoped) -> 404.
         resp = await client.get(
             f"/api/v1/data-agent/{attacker_session['session_id']}/artifacts/{action.id}/download",
+            headers=_auth(attacker_session["token"]["access_token"]),
+        )
+        assert resp.status_code == 404
+        # And they cannot borrow the owner's session id in the path — the token guard rejects it.
+        resp = await client.get(
+            f"/api/v1/data-agent/{owner_session['session_id']}/artifacts/{action.id}/download",
             headers=_auth(attacker_session["token"]["access_token"]),
         )
         assert resp.status_code == 403

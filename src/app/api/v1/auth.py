@@ -328,10 +328,12 @@ async def update_session_name(
 
 
 @router.delete("/session/{session_id}")
-async def delete_session(session_id: str, current_session: Session = Depends(get_current_session)):
-    """Delete a session for the authenticated user.
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["session_delete"][0])
+async def delete_session(request: Request, session_id: str, current_session: Session = Depends(get_current_session)):
+    """Delete a session for the authenticated user (cascades to its messages, events, and files).
 
     Args:
+        request: The incoming request (required by the rate limiter).
         session_id: The ID of the session to delete
         current_session: The current session from auth
 
@@ -352,8 +354,15 @@ async def delete_session(session_id: str, current_session: Session = Depends(get
 
         logger.info("session_deleted", session_id=session_id, user_id=current_session.user_id)
     except ValueError as ve:
-        logger.error("session_deletion_validation_failed", error=str(ve), session_id=session_id, exc_info=True)
+        logger.exception("session_deletion_validation_failed", session_id=session_id)
         raise HTTPException(status_code=422, detail=str(ve))
+    except HTTPException:
+        raise
+    except Exception:
+        # A partial cascade (each step is its own transaction) surfaces as a clear 500, and is
+        # self-healing: re-deleting the session finishes removing whatever remained.
+        logger.exception("session_deletion_failed", session_id=session_id)
+        raise HTTPException(status_code=500, detail="Falha ao excluir a conversa.")
 
 
 @router.get("/sessions", response_model=List[SessionResponse])

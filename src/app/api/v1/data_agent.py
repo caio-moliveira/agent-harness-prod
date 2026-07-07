@@ -302,9 +302,12 @@ async def _persist_answer(session: Session, answer: str, steps: list[dict]) -> N
     assistant bubble (and that ``astream_query_events`` already accumulates for long-term memory), so
     the stored message is exactly what the user saw. ``steps`` is the turn's tool activity, persisted
     alongside so a reopened conversation shows the same "buscando/gerando/…" trail and timeline.
+
+    A turn with activity but no final text (e.g. the agent only parked a HITL action) is still
+    persisted with empty content so its tool trail survives a reload; a turn with neither is skipped.
     """
     text = answer.strip()
-    if not text:
+    if not text and not steps:
         return
     message = await chat_message_repository.add_message(session.id, session.user_id, ChatMessageRole.ASSISTANT, text)
     await chat_message_step_repository.add_steps(session.id, message.id, steps)
@@ -420,7 +423,7 @@ async def download_artifact(
     """Download a confirmed artifact. Owner-scoped; the file exists only after approval."""
     _require_session(session_id, session)
     action = await pending_action_repository.get(action_id)
-    if action is None or action.action_type != "export_artifact":
+    if action is None or action.action_type != "export_artifact" or action.session_id != session_id:
         raise HTTPException(status_code=404, detail="Artefato não encontrado.")
     if action.user_id != session.user_id:
         logger.warning("artifact_download_denied", action_id=action_id, user_id=session.user_id)
