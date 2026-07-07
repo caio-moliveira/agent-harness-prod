@@ -138,13 +138,12 @@ export interface SessionEvent {
   created_at: string;
 }
 
-/** An outward action awaiting the user's inline approval, plus the outcome once decided. */
-export interface Approval {
+/** An outward action awaiting approval, anchored to the assistant turn that requested it. */
+export interface TurnApproval {
   id: number;
   title: string;
   format?: string;
   status: "pending" | "approved" | "rejected";
-  error?: string;
 }
 
 export interface ToolStep {
@@ -166,6 +165,7 @@ export interface AssistantTurn {
   content: string;
   streaming: boolean;
   error?: string;
+  approval?: TurnApproval;
 }
 
 export type Turn = UserTurn | AssistantTurn;

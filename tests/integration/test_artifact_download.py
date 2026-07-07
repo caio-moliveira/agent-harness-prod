@@ -74,6 +74,41 @@ class TestHitlRequestEvent:
 # ---------------------------------------------------------------------------
 
 
+class TestArtifactApprovalNote:
+    async def test_confirm_persists_short_chat_message(self, client: AsyncClient):
+        from types import SimpleNamespace
+
+        from src.app.api.v1.hitl import _note_artifact_generated
+        from src.app.init import chat_message_repository
+
+        sid = f"sess-{uuid.uuid4()}"
+        action = SimpleNamespace(
+            action_type="export_artifact",
+            session_id=sid,
+            user_id=1,
+            payload={"spec": {"title": "Metas 2026"}, "fmt": "docx"},
+        )
+        await _note_artifact_generated(action)
+
+        msgs = await chat_message_repository.get_messages(sid)
+        assert len(msgs) == 1
+        assert msgs[0].role == "assistant"
+        assert "Metas 2026" in msgs[0].content
+        assert "gerado" in msgs[0].content.lower()
+
+    async def test_non_artifact_action_writes_nothing(self, client: AsyncClient):
+        from types import SimpleNamespace
+
+        from src.app.api.v1.hitl import _note_artifact_generated
+        from src.app.init import chat_message_repository
+
+        sid = f"sess-{uuid.uuid4()}"
+        await _note_artifact_generated(
+            SimpleNamespace(action_type="send_email", session_id=sid, user_id=1, payload={})
+        )
+        assert await chat_message_repository.get_messages(sid) == []
+
+
 class TestArtifactDownload:
     async def _confirmed_action(self, session_id: str, path: str, user_id: int = 1):
         from src.app.core.hitl.pending_model import PendingActionStatus

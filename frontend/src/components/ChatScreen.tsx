@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
-import type { Approval, AssistantTurn, SourceStatus, ToolStep, Turn } from "../lib/types";
+import type { AssistantTurn, SourceStatus, ToolStep, Turn } from "../lib/types";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SourcesPanel from "./SourcesPanel";
 import AgentActivity from "./AgentActivity";
-import ApprovalCard from "./ApprovalCard";
+import ArtifactApproval from "./ArtifactApproval";
 import ConversationsSidebar from "./ConversationsSidebar";
 import ActivityTimeline from "./ActivityTimeline";
 
@@ -47,7 +47,6 @@ export default function ChatScreen() {
     setActiveSession,
   } = useAuth();
   const [turns, setTurns] = useState<Turn[]>([]);
-  const [approvals, setApprovals] = useState<Approval[]>([]);
   const [showTimeline, setShowTimeline] = useState(true);
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -63,31 +62,40 @@ export default function ChatScreen() {
   // so streaming text never yanks their scrollbar back down; turns true when they return to bottom.
   const stickToBottom = useRef(true);
 
-  // Seed inline approval cards from any still-pending action for this session (survives reload).
-  async function seedApprovals() {
-    if (!userToken || !sessionId) {
-      setApprovals([]);
-      return;
-    }
+  // Update the status of the approval anchored to whichever assistant turn owns this action id.
+  function setApprovalStatus(actionId: number, status: "approved" | "rejected") {
+    setTurns((prev) =>
+      prev.map((t) =>
+        t.role === "assistant" && t.approval?.id === actionId
+          ? { ...t, approval: { ...t.approval, status } }
+          : t,
+      ),
+    );
+  }
+
+  // Anchor a still-pending artifact approval onto the last assistant turn of a restored conversation.
+  async function attachPendingApproval(built: Turn[], sid: string) {
+    if (!userToken) return;
     try {
-      const list = await api.listPendingActions(userToken);
-      setApprovals(
-        list
-          .filter((a) => a.session_id === sessionId && a.action_type === "export_artifact")
-          .map((a) => ({
-            id: a.id,
-            title: (a.payload?.spec as { title?: string } | undefined)?.title ?? "Gerar artefato",
-            format: a.payload?.fmt as string | undefined,
-            status: "pending" as const,
-          })),
-      );
+      const pending = await api.listPendingActions(userToken);
+      const mine = pending.filter((a) => a.session_id === sid && a.action_type === "export_artifact");
+      if (!mine.length) return;
+      const action = mine[mine.length - 1];
+      for (let i = built.length - 1; i >= 0; i--) {
+        const t = built[i];
+        if (t.role === "assistant") {
+          t.approval = {
+            id: action.id,
+            title: (action.payload?.spec as { title?: string } | undefined)?.title ?? "artefato",
+            format: action.payload?.fmt as string | undefined,
+            status: "pending",
+          };
+          break;
+        }
+      }
     } catch {
       /* ignore transient errors */
     }
-  }
-
-  function decideApproval(id: number, status: "approved" | "rejected", error?: string) {
-    setApprovals((prev) => prev.map((a) => (a.id === id ? { ...a, status, error } : a)));
   }
 
   function handleScroll() {
@@ -124,25 +132,28 @@ export default function ChatScreen() {
         if (cancelled) return;
         // Continue the live step-id counter so restored ids never collide with new ones.
         let nextStepId = stepIdRef.current;
-        setTurns(
-          msgs.map((m) =>
-            m.role === "user"
-              ? { role: "user", content: m.content }
-              : {
-                  role: "assistant",
-                  content: m.content,
-                  streaming: false,
-                  steps: m.steps.map((s) => ({
-                    id: nextStepId++,
-                    name: s.name,
-                    input: s.input ?? undefined,
-                    output: s.output ?? undefined,
-                    done: true,
-                  })),
-                },
-          ),
+        const built: Turn[] = msgs.map((m) =>
+          m.role === "user"
+            ? { role: "user", content: m.content }
+            : {
+                role: "assistant",
+                content: m.content,
+                streaming: false,
+                steps: m.steps.map((s) => ({
+                  id: nextStepId++,
+                  name: s.name,
+                  input: s.input ?? undefined,
+                  output: s.output ?? undefined,
+                  done: true,
+                })),
+              },
         );
         stepIdRef.current = nextStepId;
+        // Re-anchor a still-pending artifact approval to the last assistant turn so it can be
+        // decided after a reload — without floating at the bottom of the conversation.
+        await attachPendingApproval(built, sessionId);
+        if (cancelled) return;
+        setTurns(built);
       } catch {
         if (!cancelled) setTurns([]);
       } finally {
@@ -151,7 +162,6 @@ export default function ChatScreen() {
     }
     void loadHistory();
     void refreshSources();
-    void seedApprovals();
     return () => {
       cancelled = true;
     };
@@ -231,11 +241,12 @@ export default function ChatScreen() {
         } else if (ev.type === "token") {
           setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, content: a.content + ev.content })));
         } else if (ev.type === "hitl_request") {
-          // The agent parked an outward action — surface an inline approval card.
-          setApprovals((prev) =>
-            prev.some((a) => a.id === ev.id)
-              ? prev
-              : [...prev, { id: ev.id, title: ev.title ?? "Gerar artefato", format: ev.format, status: "pending" }],
+          // The agent parked an outward action — anchor a compact approval to this turn.
+          setTurns((prev) =>
+            updateLastAssistant(prev, (a) => ({
+              ...a,
+              approval: { id: ev.id, title: ev.title ?? "artefato", format: ev.format, status: "pending" },
+            })),
           );
         } else if (ev.type === "error") {
           setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, streaming: false, error: ev.content })));
@@ -348,6 +359,13 @@ export default function ChatScreen() {
                         pending={turn.streaming && !turn.content}
                       />
                     )}
+                    {turn.approval && userToken && (
+                      <ArtifactApproval
+                        approval={turn.approval}
+                        userToken={userToken}
+                        onDecided={(status) => setApprovalStatus(turn.approval!.id, status)}
+                      />
+                    )}
                     {turn.error && (
                       <div className="mt-1 rounded-lg border border-red-900 bg-red-950/50 px-3 py-2 text-sm text-red-300">
                         {turn.error}
@@ -355,20 +373,6 @@ export default function ChatScreen() {
                     )}
                   </div>
                 ),
-              )}
-              {userToken && sessionToken && sessionId && approvals.length > 0 && (
-                <div className="space-y-2">
-                  {approvals.map((a) => (
-                    <ApprovalCard
-                      key={a.id}
-                      approval={a}
-                      userToken={userToken}
-                      sessionToken={sessionToken}
-                      sessionId={sessionId}
-                      onDecided={decideApproval}
-                    />
-                  ))}
-                </div>
               )}
             </div>
           )}
