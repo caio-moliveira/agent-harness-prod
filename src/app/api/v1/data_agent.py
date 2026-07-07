@@ -237,6 +237,7 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
         skills_dir=skills_dir,
         workspace_context=workspace_context,
         folder_writable=folder_writable,
+        session_id=session.id,
     )
 
 

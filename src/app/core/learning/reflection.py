@@ -6,6 +6,7 @@ memory). ``reflect_preferences`` is a pure aggregation so it is trivially testab
 fetches, reflects, and persists.
 """
 
+import asyncio
 from collections import Counter
 from typing import List, Optional
 
@@ -53,3 +54,21 @@ async def run_reflection(
 
     logger.info("agent_reflection_done", user_id=user_id, agent_id=agent_id, keys=list(profile.keys()))
     return profile
+
+
+def bg_run_reflection(user_id: int, agent_id: Optional[int]) -> None:
+    """Fire ``run_reflection`` in the background (non-blocking) — used after a new event lands."""
+    asyncio.create_task(run_reflection(user_id, agent_id))
+
+
+async def get_reflected_preferences(
+    user_id: int, agent_id: Optional[int], pref_repo: Optional[PreferenceRepository] = None
+) -> str:
+    """Return the agent's learned preferences formatted for prompt injection (empty if none).
+
+    The bookkeeping ``total_events`` counter is omitted — only actionable preferences are surfaced.
+    """
+    pref_repo = pref_repo or PreferenceRepository()
+    prefs = await pref_repo.get_all(user_id, agent_id)
+    lines = [f"- {key}: {value}" for key, value in prefs.items() if key != "total_events"]
+    return "\n".join(lines)

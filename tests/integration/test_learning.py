@@ -49,6 +49,19 @@ class TestReflection:
         stored = await pref_repo.get_all(1, 7)
         assert stored["preferred_output_format"] == "docx"
 
+    async def test_reflected_preferences_formatted_for_injection(self, client: AsyncClient):
+        from src.app.core.learning import PreferenceRepository, get_reflected_preferences
+
+        repo = PreferenceRepository()
+        await repo.upsert(1, 7, "preferred_output_format", "docx")
+        await repo.upsert(1, 7, "total_events", "5")  # bookkeeping — must be omitted from the prompt
+
+        rendered = await get_reflected_preferences(1, 7)
+        assert "preferred_output_format: docx" in rendered
+        assert "total_events" not in rendered
+        # No preferences for another agent → empty string (nothing injected).
+        assert await get_reflected_preferences(1, 999) == ""
+
     async def test_reflection_isolated_per_agent(self, client: AsyncClient):
         from src.app.core.learning import PreferenceRepository, run_reflection
         from src.app.core.session.event_repository import SessionEventRepository

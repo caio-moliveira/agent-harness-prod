@@ -5,6 +5,7 @@ import type { AssistantTurn, SourceStatus, ToolStep, Turn } from "../lib/types";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SourcesPanel from "./SourcesPanel";
+import PendingActionsPanel from "./PendingActionsPanel";
 import AgentActivity from "./AgentActivity";
 
 function updateLastAssistant(turns: Turn[], fn: (a: AssistantTurn) => AssistantTurn): Turn[] {
@@ -31,16 +32,33 @@ function closeStep(steps: ToolStep[], name: string, output?: string): ToolStep[]
 }
 
 export default function ChatScreen() {
-  const { agentName, sessionToken, leaveAgent, logout } = useAuth();
+  const { agentName, sessionToken, userToken, leaveAgent, logout } = useAuth();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [sending, setSending] = useState(false);
   const [showSources, setShowSources] = useState(false);
   const [sources, setSources] = useState<SourceStatus>({ db_connected: false });
+  const [showPending, setShowPending] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stepIdRef = useRef(0);
   // Whether to keep the view pinned to the bottom. Turns false as soon as the user scrolls up,
   // so streaming text never yanks their scrollbar back down; turns true when they return to bottom.
   const stickToBottom = useRef(true);
+
+  async function refreshPendingCount() {
+    if (!userToken) return;
+    try {
+      const list = await api.listPendingActions(userToken);
+      setPendingCount(list.length);
+    } catch {
+      /* ignore transient errors */
+    }
+  }
+
+  useEffect(() => {
+    void refreshPendingCount();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userToken]);
 
   function handleScroll() {
     const el = scrollRef.current;
@@ -112,6 +130,8 @@ export default function ChatScreen() {
       setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, streaming: false, error: message })));
     } finally {
       setSending(false);
+      // The agent may have parked an action (e.g. an artifact) this turn — refresh the badge.
+      void refreshPendingCount();
     }
   }
 
@@ -152,6 +172,18 @@ export default function ChatScreen() {
             </span>
             <button onClick={() => setShowSources(true)} className="rounded-lg border border-indigo-700 bg-indigo-950/40 px-3 py-1.5 text-indigo-200 hover:bg-indigo-900/50">
               Fontes
+            </button>
+            <button
+              onClick={() => setShowPending(true)}
+              className="relative rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
+              title="Ações aguardando sua confirmação"
+            >
+              Ações
+              {pendingCount > 0 && (
+                <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-slate-900">
+                  {pendingCount}
+                </span>
+              )}
             </button>
             <button onClick={handleClear} className="rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800">
               Limpar
@@ -204,6 +236,13 @@ export default function ChatScreen() {
       </div>
 
       {showSources && <SourcesPanel onClose={handleCloseSources} />}
+      {showPending && userToken && (
+        <PendingActionsPanel
+          userToken={userToken}
+          onClose={() => setShowPending(false)}
+          onChanged={setPendingCount}
+        />
+      )}
     </div>
   );
 }

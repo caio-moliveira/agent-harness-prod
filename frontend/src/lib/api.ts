@@ -142,6 +142,41 @@ export async function unbindAgentFolder(userToken: string, agentId: number): Pro
   return (await ensureOk(res)).json();
 }
 
+// --- Human-in-the-loop: confirmation-gated actions (#19) ---
+
+export interface PendingAction {
+  id: number;
+  action_type: string;
+  payload: Record<string, unknown>;
+  status: string;
+}
+
+export async function listPendingActions(userToken: string): Promise<PendingAction[]> {
+  const res = await fetch(`${BASE}/hitl/pending`, {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function confirmAction(
+  userToken: string,
+  actionId: number,
+): Promise<{ confirmed: boolean; result: unknown }> {
+  const res = await fetch(`${BASE}/hitl/${actionId}/confirm`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function rejectAction(userToken: string, actionId: number): Promise<{ rejected: boolean }> {
+  const res = await fetch(`${BASE}/hitl/${actionId}/reject`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
 export interface BindDatabaseInput {
   driver: string;
   host: string;

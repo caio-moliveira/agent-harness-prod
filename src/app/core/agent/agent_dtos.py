@@ -81,6 +81,23 @@ class BindFolderResponse(BaseModel):
     folder_writable: bool = False
 
 
+class SubmitCorrectionRequest(BaseModel):
+    """A correction on a generated artifact that proposes a refinement to the skill behind it."""
+
+    skill_id: int = Field(..., description="Skill to refine (must belong to the caller).")
+    proposed_body: str = Field(..., min_length=1, description="The corrected skill body.")
+    note: str = Field(default="", max_length=2000, description="What was wrong / why the correction.")
+    artifact_ref: str = Field(default="", max_length=500, description="Optional pointer to the corrected artifact.")
+
+
+class CorrectionResponse(BaseModel):
+    """Result of a correction: the skill drafted a new version, gated by re-approval (#17)."""
+
+    skill_id: int
+    version: int
+    status: str
+
+
 class BindDatabaseRequest(BaseModel):
     """Connection details for binding a read-only database to an agent."""
 

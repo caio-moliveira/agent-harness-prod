@@ -12,12 +12,14 @@ from langchain.agents.middleware import PIIMiddleware
 from langchain_community.utilities import SQLDatabase
 from langchain_openai import ChatOpenAI
 
+from src.app.agents.data_agent.artifact_tools import make_artifact_tools
 from src.app.agents.data_agent.tools import make_memory_tools
 from src.app.agents.tools.search_tool import SearchAPI, get_search_tool
 from src.app.core.common.config import settings
 from src.app.core.common.graph_utils import process_messages
 from src.app.core.common.model.message import Message
 from src.app.core.db.readonly import make_readonly_sql_tools
+from src.app.core.learning import get_reflected_preferences
 from src.app.core.sandbox.backend import ROOT_DIR_CONFIG_KEY, make_backend_factory
 from src.app.core.memory.memory import bg_update_memory, get_relevant_memory
 from src.app.core.middleware import (
@@ -58,6 +60,7 @@ class DataAgent:
         skills_dir: Optional[str] = None,
         workspace_context: str = "",
         folder_writable: bool = False,
+        session_id: Optional[str] = None,
     ):
         """Build a Data Agent over a session's sources, isolated to one user and agent.
 
@@ -65,7 +68,8 @@ class DataAgent:
         are served by a per-session ``FilesystemBackend`` rooted there; the path is threaded into
         each invocation's config so the backend factory resolves it per session. ``folder_writable``
         (a per-agent capability, off by default) allows the folder to be written; either way writes
-        stay confined to ``root_dir``.
+        stay confined to ``root_dir``. ``session_id`` binds the artifact tool so generated
+        deliverables are attributed to this session in the episodic log.
         """
         self.name = name
         self.user_id = user_id
@@ -83,6 +87,7 @@ class DataAgent:
             skills_dir,
             workspace_context,
             folder_writable,
+            session_id,
         )
         self._pipeline = AgentPipeline(
             middlewares=[LoggingMiddleware(), ErrorHandlingMiddleware(), GuardrailMiddleware()],
@@ -147,15 +152,25 @@ class DataAgent:
         history = [{"role": m.role, "content": m.content} for m in messages]
         last_user = messages[-1].content if messages else ""
 
-        # Auto-inject relevant long-term memory as leading context (scoped to this agent).
-        payload_messages = history
+        # Auto-inject leading context (scoped to this agent): relevant long-term memory (mem0) and
+        # the preferences learned by reflection (#20), so the agent respects what it has learned.
+        leading: list[dict] = []
         if self.memory_enabled and user_id is not None and last_user:
             relevant = await get_relevant_memory(user_id, last_user, agent_id=self.agent_id)
             if relevant:
-                payload_messages = [
-                    {"role": "system", "content": f"Contexto do usuário (memória de longo prazo):\n{relevant}"},
-                    *history,
-                ]
+                leading.append(
+                    {"role": "system", "content": f"Contexto do usuário (memória de longo prazo):\n{relevant}"}
+                )
+        if user_id is not None:
+            prefs = await get_reflected_preferences(user_id, self.agent_id)
+            if prefs:
+                leading.append(
+                    {
+                        "role": "system",
+                        "content": f"Preferências aprendidas deste usuário/agente (respeite-as):\n{prefs}",
+                    }
+                )
+        payload_messages = [*leading, *history] if leading else history
 
         answer = ""
         async for event in self.agent.astream_events({"messages": payload_messages}, config=config, version="v2"):
@@ -218,8 +233,14 @@ Conforme as fontes que o usuário conectou, você pode ter:
 - **Uma pasta concedida** exposta **somente leitura** por ferramentas de arquivo (`ls`,
   `read_file`, `glob`, `grep`) montada em `/workspace`.
 - **Memória de longo prazo** — `buscar_memoria(consulta)`.
+- **Geração de artefato** — `gerar_artefato(titulo, formato, secoes, ...)` para produzir um
+  relatório em Word (`docx`) ou PowerPoint (`pptx`). Use quando o usuário pedir um relatório/
+  documento/apresentação; inclua a `fonte` de cada item (tabela+consulta ou documento).
+  **IMPORTANTE: para gerar `.docx` ou `.pptx` use SEMPRE `gerar_artefato`. NUNCA crie um arquivo
+  `.docx`/`.pptx`/`.xlsx` com `write_file`** — `write_file` grava apenas texto e o arquivo Office
+  sairia corrompido. `write_file` serve só para arquivos de texto (`.md`, `.txt`, `.csv`).
 
-Regras: somente leitura; nunca modifique dados. Para perguntas sobre **arquivos**, use `ls`/`glob`
+Regras: somente leitura em dados/banco; nunca modifique dados. Para perguntas sobre **arquivos**, use `ls`/`glob`
 em `/workspace` e `read_file` para ler o conteúdo (ex.: leia o CSV antes de responder sobre ele);
 nunca cite caminhos fora de `/workspace`. Para perguntas de **banco**, SEMPRE `list_tables` →
 `describe_tables` (das tabelas que vai usar) → `run_sql`, para a consulta nascer do schema real.
@@ -264,6 +285,7 @@ def _create_data_deep_agent(
     skills_dir: Optional[str] = None,
     workspace_context: str = "",
     folder_writable: bool = False,
+    session_id: Optional[str] = None,
 ) -> Any:
     """Build the underlying Deep Agent with read-only SQL, memory tools, and optional folder.
 
@@ -282,6 +304,10 @@ def _create_data_deep_agent(
     tools = make_memory_tools(user_id, agent_id) if memory_enabled else []
     # Semantic search over this agent's ingested documents (#14), scoped to (user, agent).
     tools = tools + make_retrieval_tools(user_id, agent_id)
+    # Artifact generation (#18): produces Word/PPTX and records an artifact_generated event that
+    # feeds the success metrics (#21) and reflection (#20). Bound to this session; the deliverable
+    # lands in the granted folder when it is writable, else a temp dir.
+    tools = tools + make_artifact_tools(user_id, agent_id, session_id, root_dir, folder_writable)
     if db is not None:
         tools = tools + make_readonly_sql_tools(db)
     if web_search:

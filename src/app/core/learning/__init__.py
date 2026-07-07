@@ -10,7 +10,12 @@ than shipped untested here.
 
 from src.app.core.learning.models import AgentPreference, CorrectionSignal
 from src.app.core.learning.refinement import propose_refinement
-from src.app.core.learning.reflection import reflect_preferences, run_reflection
+from src.app.core.learning.reflection import (
+    bg_run_reflection,
+    get_reflected_preferences,
+    reflect_preferences,
+    run_reflection,
+)
 from src.app.core.learning.repository import CorrectionRepository, PreferenceRepository
 
 __all__ = [
@@ -19,6 +24,8 @@ __all__ = [
     "propose_refinement",
     "reflect_preferences",
     "run_reflection",
+    "bg_run_reflection",
+    "get_reflected_preferences",
     "CorrectionRepository",
     "PreferenceRepository",
 ]
