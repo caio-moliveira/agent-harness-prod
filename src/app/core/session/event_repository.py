@@ -67,3 +67,12 @@ class SessionEventRepository:
             if agent_id is not None:
                 statement = statement.where(SessionEvent.agent_id == agent_id)
             return list(session.exec(statement.order_by(SessionEvent.created_at, SessionEvent.id)).all())
+
+    async def delete_for_session(self, session_id: str) -> int:
+        """Delete every event of a session (cascade on session deletion). Returns the count."""
+        with session_scope() as session:
+            rows = list(session.exec(select(SessionEvent).where(SessionEvent.session_id == session_id)).all())
+            for row in rows:
+                session.delete(row)
+            session.commit()
+            return len(rows)

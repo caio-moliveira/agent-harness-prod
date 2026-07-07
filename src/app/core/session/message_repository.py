@@ -54,3 +54,12 @@ class ChatMessageRepository:
         with session_scope() as session:
             statement = select(func.count()).select_from(ChatMessage).where(ChatMessage.session_id == session_id)
             return int(session.exec(statement).one())
+
+    async def delete_for_session(self, session_id: str) -> int:
+        """Delete every message of a session (cascade on session deletion). Returns the count."""
+        with session_scope() as session:
+            rows = list(session.exec(select(ChatMessage).where(ChatMessage.session_id == session_id)).all())
+            for row in rows:
+                session.delete(row)
+            session.commit()
+            return len(rows)

@@ -35,6 +35,7 @@ from src.app.core.common.logging import (
     logger,
 )
 from src.app.core.common.token_dtos import TokenResponse
+from src.app.core.session.cascade import delete_session_cascade
 from src.app.core.session.session_dto import (
     SessionResponse,
 )
@@ -346,7 +347,8 @@ async def delete_session(session_id: str, current_session: Session = Depends(get
         if sanitized_session_id != sanitized_current_session:
             raise HTTPException(status_code=403, detail="Cannot delete other sessions")
 
-        await session_repository.delete_session(sanitized_session_id)
+        # Cascade: remove the session's messages, audit events, parked actions and generated files.
+        await delete_session_cascade(sanitized_session_id)
 
         logger.info("session_deleted", session_id=session_id, user_id=current_session.user_id)
     except ValueError as ve:

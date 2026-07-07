@@ -27,6 +27,7 @@ export default function ConversationsSidebar({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const activeRef = useRef<HTMLLIElement>(null);
 
   async function load() {
@@ -68,14 +69,20 @@ export default function ConversationsSidebar({
   }
 
   async function handleDelete(s: SessionResponse) {
-    if (!window.confirm(`Excluir a conversa "${s.name || "sem título"}"? Isso não pode ser desfeito.`)) return;
+    const confirmed = window.confirm(
+      `Excluir a conversa "${s.name || "sem título"}"?\n\n` +
+        "Isso remove em definitivo o histórico, as ações e os arquivos gerados nesta conversa. " +
+        "Não pode ser desfeito.",
+    );
+    if (!confirmed) return;
     setBusyId(s.session_id);
+    setActionError(null);
     try {
       await api.deleteSession(s.session_id, s.token.access_token);
       if (s.session_id === currentSessionId) onDeletedActive();
       await load();
-    } catch {
-      /* leave the row in place on failure */
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Falha ao excluir a conversa.");
     } finally {
       setBusyId(null);
     }
@@ -91,6 +98,12 @@ export default function ConversationsSidebar({
           <span className="text-base leading-none">＋</span> Nova conversa
         </button>
       </div>
+
+      {actionError && (
+        <div className="mx-3 mb-2 rounded-lg border border-red-900 bg-red-950/50 px-3 py-2 text-xs text-red-300">
+          {actionError}
+        </div>
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {loading ? (
