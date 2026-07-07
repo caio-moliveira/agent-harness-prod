@@ -8,6 +8,7 @@ import type {
   ConnectDbResponse,
   GrantFolderResponse,
   Message,
+  SessionEvent,
   SessionResponse,
   SourceStatus,
   StreamChunk,
@@ -146,6 +147,7 @@ export async function unbindAgentFolder(userToken: string, agentId: number): Pro
 
 export interface PendingAction {
   id: number;
+  session_id: string;
   action_type: string;
   payload: Record<string, unknown>;
   status: string;
@@ -333,6 +335,38 @@ export async function grantFolder(sessionToken: string, path: string): Promise<G
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
     body: JSON.stringify({ path }),
+  });
+  return (await ensureOk(res)).json();
+}
+
+/** A session's persisted conversation history (Data Agent), oldest first. */
+export async function getDataAgentMessages(sessionToken: string): Promise<Message[]> {
+  const res = await fetch(`${BASE}/data-agent/messages`, {
+    headers: { Authorization: `Bearer ${sessionToken}` },
+  });
+  const data: ChatResponse = await (await ensureOk(res)).json();
+  return data.messages ?? [];
+}
+
+/** Fetch a confirmed artifact as a blob (the endpoint requires the session bearer token). */
+export async function downloadArtifact(
+  sessionToken: string,
+  actionId: number,
+): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(`${BASE}/data-agent/artifacts/${actionId}/download`, {
+    headers: { Authorization: `Bearer ${sessionToken}` },
+  });
+  await ensureOk(res);
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const match = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(disposition);
+  const filename = match ? decodeURIComponent(match[1].replace(/"$/, "")) : `artefato-${actionId}`;
+  return { blob: await res.blob(), filename };
+}
+
+/** A session's episodic audit log (persisted actions) — used to rehydrate the activity timeline. */
+export async function listSessionEvents(userToken: string, sessionId: string): Promise<SessionEvent[]> {
+  const res = await fetch(`${BASE}/sessions/${sessionId}/events`, {
+    headers: { Authorization: `Bearer ${userToken}` },
   });
   return (await ensureOk(res)).json();
 }

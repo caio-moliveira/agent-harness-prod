@@ -109,8 +109,29 @@ export type StreamEvent =
   | { type: "tool_start"; name: string; input?: string }
   | { type: "tool_end"; name: string; output?: string }
   | { type: "token"; content: string }
+  | { type: "hitl_request"; id: number; action_type: string; title?: string; format?: string }
   | { type: "done" }
   | { type: "error"; content?: string };
+
+/** One entry in a session's episodic audit log (persisted server-side). */
+export interface SessionEvent {
+  id: number;
+  agent_id?: number | null;
+  session_id: string;
+  event_type: string;
+  payload: Record<string, unknown>;
+  scope: string;
+  created_at: string;
+}
+
+/** An outward action awaiting the user's inline approval, plus the outcome once decided. */
+export interface Approval {
+  id: number;
+  title: string;
+  format?: string;
+  status: "pending" | "approved" | "rejected";
+  error?: string;
+}
 
 export interface ToolStep {
   id: number;
