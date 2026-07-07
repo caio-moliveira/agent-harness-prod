@@ -49,6 +49,28 @@ class DataQueryResponse(BaseModel):
     messages: List[Message]
 
 
+class HistoryStep(BaseModel):
+    """One recorded tool invocation within an assistant turn (the chat's activity trail)."""
+
+    name: str
+    input: Optional[str] = None
+    output: Optional[str] = None
+
+
+class HistoryMessage(BaseModel):
+    """A persisted message plus, for assistant turns, its ordered tool-activity steps."""
+
+    role: str
+    content: str
+    steps: List[HistoryStep] = Field(default_factory=list)
+
+
+class ChatHistoryResponse(BaseModel):
+    """A session's persisted conversation, with per-turn activity for restoring the chat."""
+
+    messages: List[HistoryMessage] = Field(default_factory=list)
+
+
 class SourceStatusResponse(BaseModel):
     db_connected: bool = False
     dialect: Optional[str] = None

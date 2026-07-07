@@ -112,3 +112,27 @@ class TestDataAgentMessagesEndpoint:
         resp = await client.get("/api/v1/data-agent/messages", headers=_auth(session["token"]["access_token"]))
         assert resp.status_code == 200, resp.text
         assert resp.json()["messages"] == []
+
+    async def test_history_carries_per_turn_tool_activity(self, client: AsyncClient, user_token):
+        from src.app.init import chat_message_repository, chat_message_step_repository
+
+        session = await self._make_session(client, user_token)
+        sid = session["session_id"]
+        await chat_message_repository.add_message(sid, 1, "user", "quantas vendas?")
+        assistant = await chat_message_repository.add_message(sid, 1, "assistant", "Foram 1.234.")
+        await chat_message_step_repository.add_steps(
+            sid,
+            assistant.id,
+            [
+                {"name": "run_sql", "input": "SELECT count(*) FROM vendas", "output": "1234"},
+                {"name": "gerar_planilha", "input": None, "output": None},
+            ],
+        )
+
+        resp = await client.get("/api/v1/data-agent/messages", headers=_auth(session["token"]["access_token"]))
+        assert resp.status_code == 200, resp.text
+        msgs = resp.json()["messages"]
+        assert [m["role"] for m in msgs] == ["user", "assistant"]
+        assert msgs[0]["steps"] == []  # the user turn has no activity
+        assert [s["name"] for s in msgs[1]["steps"]] == ["run_sql", "gerar_planilha"]
+        assert msgs[1]["steps"][0]["output"] == "1234"

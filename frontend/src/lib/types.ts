@@ -113,6 +113,20 @@ export type StreamEvent =
   | { type: "done" }
   | { type: "error"; content?: string };
 
+/** One persisted tool step of an assistant turn (returned with the conversation history). */
+export interface HistoryStep {
+  name: string;
+  input?: string | null;
+  output?: string | null;
+}
+
+/** A persisted message plus, for assistant turns, its tool-activity steps. */
+export interface HistoryMessage {
+  role: Role;
+  content: string;
+  steps: HistoryStep[];
+}
+
 /** One entry in a session's episodic audit log (persisted server-side). */
 export interface SessionEvent {
   id: number;

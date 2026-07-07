@@ -1,21 +1,7 @@
 import { useState } from "react";
 import type { ToolStep } from "../lib/types";
+import { labelFor } from "../lib/toolLabels";
 import Markdown, { looksLikeMarkdown } from "./Markdown";
-
-const TOOL_LABELS: Record<string, { icon: string; label: string }> = {
-  list_tables: { icon: "🗂️", label: "Listando tabelas" },
-  describe_tables: { icon: "🔎", label: "Lendo o schema" },
-  run_sql: { icon: "🛢️", label: "Executando SQL" },
-  ls: { icon: "📁", label: "Listando arquivos" },
-  read_file: { icon: "📄", label: "Lendo arquivo" },
-  glob: { icon: "🔦", label: "Procurando arquivos" },
-  grep: { icon: "🔍", label: "Buscando no conteúdo" },
-  write_todos: { icon: "🧠", label: "Planejando" },
-};
-
-function labelFor(name: string): { icon: string; label: string } {
-  return TOOL_LABELS[name] ?? { icon: "🔧", label: name };
-}
 
 function StepCard({ step }: { step: ToolStep }) {
   const [open, setOpen] = useState(false);

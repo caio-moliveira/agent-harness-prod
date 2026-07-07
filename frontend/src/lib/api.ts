@@ -7,6 +7,7 @@ import type {
   ConnectDbRequest,
   ConnectDbResponse,
   GrantFolderResponse,
+  HistoryMessage,
   Message,
   SessionEvent,
   SessionResponse,
@@ -339,12 +340,12 @@ export async function grantFolder(sessionToken: string, path: string): Promise<G
   return (await ensureOk(res)).json();
 }
 
-/** A session's persisted conversation history (Data Agent), oldest first. */
-export async function getDataAgentMessages(sessionToken: string): Promise<Message[]> {
+/** A session's persisted conversation history (Data Agent), oldest first, with per-turn activity. */
+export async function getDataAgentMessages(sessionToken: string): Promise<HistoryMessage[]> {
   const res = await fetch(`${BASE}/data-agent/messages`, {
     headers: { Authorization: `Bearer ${sessionToken}` },
   });
-  const data: ChatResponse = await (await ensureOk(res)).json();
+  const data: { messages?: HistoryMessage[] } = await (await ensureOk(res)).json();
   return data.messages ?? [];
 }
 

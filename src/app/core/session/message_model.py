@@ -32,3 +32,19 @@ class ChatMessage(BaseModel, table=True):
     user_id: int = Field(foreign_key="user.id", index=True)
     role: str = Field(index=True)
     content: str = Field(sa_column=Column(Text))
+
+
+class ChatMessageStep(BaseModel, table=True):
+    """One tool invocation recorded within an assistant turn (the chat's "activity" trail).
+
+    A separate table (not a column on ``ChatMessage``) so it can be added by ``create_all`` without
+    altering the existing messages table. Ordered by ``id`` and linked to its assistant message; the
+    session scope makes per-conversation fetch and cascade cleanup cheap.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: str = Field(foreign_key="session.id", index=True)
+    message_id: int = Field(foreign_key="chatmessage.id", index=True)
+    name: str
+    input: Optional[str] = Field(default=None, sa_column=Column(Text))
+    output: Optional[str] = Field(default=None, sa_column=Column(Text))

@@ -12,6 +12,7 @@ import os
 from src.app.core.common.logging import logger
 from src.app.init import (
     chat_message_repository,
+    chat_message_step_repository,
     pending_action_repository,
     session_event_repository,
     session_repository,
@@ -34,6 +35,8 @@ async def delete_session_cascade(session_id: str) -> None:
         if path:
             await asyncio.to_thread(_remove_file, path)
 
+    # Steps FK-reference the messages, so drop them before the messages row.
+    await chat_message_step_repository.delete_for_session(session_id)
     messages = await chat_message_repository.delete_for_session(session_id)
     events = await session_event_repository.delete_for_session(session_id)
     await pending_action_repository.delete_for_session(session_id)

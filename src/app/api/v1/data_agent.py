@@ -22,6 +22,7 @@ from src.app.agents.data_agent.context import build_workspace_context
 from src.app.api.security.limiter import limiter
 from src.app.api.v1.auth import get_current_session
 from src.app.api.v1.dtos.data_agent import (
+    ChatHistoryResponse,
     ConnectDbRequest,
     ConnectDbResponse,
     DataQueryRequest,
@@ -30,6 +31,8 @@ from src.app.api.v1.dtos.data_agent import (
     DisconnectResponse,
     GrantFolderRequest,
     GrantFolderResponse,
+    HistoryMessage,
+    HistoryStep,
     SourceStatusResponse,
 )
 from src.app.core.common.config import settings
@@ -47,6 +50,7 @@ from src.app.core.skill.materialize import materialize_skills
 from src.app.init import (
     agent_repository,
     chat_message_repository,
+    chat_message_step_repository,
     pending_action_repository,
     session_repository,
     skill_repository,
@@ -292,17 +296,27 @@ async def _persist_incoming(session: Session, messages: list[Message]) -> None:
         await session_repository.update_session_name(session.id, name)
 
 
-async def _persist_answer(session: Session, answer: str) -> None:
-    """Persist the assistant's reply for this turn (skips an empty completion).
+async def _persist_answer(session: Session, answer: str, steps: list[dict]) -> None:
+    """Persist the assistant's reply and its tool-activity steps for this turn.
 
     ``answer`` is the concatenation of the same ``token`` events the client renders into the
     assistant bubble (and that ``astream_query_events`` already accumulates for long-term memory), so
-    the stored message is exactly what the user saw — a restored conversation matches the live one.
+    the stored message is exactly what the user saw. ``steps`` is the turn's tool activity, persisted
+    alongside so a reopened conversation shows the same "buscando/gerando/…" trail and timeline.
     """
     text = answer.strip()
     if not text:
         return
-    await chat_message_repository.add_message(session.id, session.user_id, ChatMessageRole.ASSISTANT, text)
+    message = await chat_message_repository.add_message(session.id, session.user_id, ChatMessageRole.ASSISTANT, text)
+    await chat_message_step_repository.add_steps(session.id, message.id, steps)
+
+
+def _close_step(steps: list[dict], name: str, output) -> None:
+    """Attach ``output`` to the most recent still-open step of ``name`` (mirrors the client)."""
+    for step in reversed(steps):
+        if step["name"] == name and step["output"] is None:
+            step["output"] = output
+            return
 
 
 def _hitl_event(action) -> dict:
@@ -343,17 +357,23 @@ async def query_stream(
 
     async def event_generator():
         answer_parts: list[str] = []
+        steps: list[dict] = []
         try:
             known_ids = await _session_pending_ids(session)
             await _persist_incoming(session, body.messages)
             async for ev in agent.astream_query_events(body.messages, session.id, session.user_id):
-                if ev.get("type") == "token":
+                etype = ev.get("type")
+                if etype == "token":
                     answer_parts.append(ev.get("content", ""))
+                elif etype == "tool_start":
+                    steps.append({"name": ev.get("name", ""), "input": ev.get("input"), "output": None})
+                elif etype == "tool_end":
+                    _close_step(steps, ev.get("name", ""), ev.get("output"))
                 yield f"data: {json.dumps(ev)}\n\n"
             # Surface any approval the agent just parked as an inline card, before closing the turn.
             for hitl_ev in await _new_hitl_events(session, known_ids):
                 yield f"data: {json.dumps(hitl_ev)}\n\n"
-            await _persist_answer(session, "".join(answer_parts))
+            await _persist_answer(session, "".join(answer_parts), steps)
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception:
             logger.exception("data_stream_failed", session_id=session.id)
@@ -362,15 +382,23 @@ async def query_stream(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@router.get("/messages", response_model=DataQueryResponse)
+@router.get("/messages", response_model=ChatHistoryResponse)
 @limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
 async def messages(
     request: Request,
     session: Session = Depends(get_current_session),
-) -> DataQueryResponse:
-    """Return this session's persisted conversation history, oldest first."""
+) -> ChatHistoryResponse:
+    """Return this session's persisted conversation (oldest first), with each turn's tool activity."""
     rows = await chat_message_repository.get_messages(session.id)
-    return DataQueryResponse(messages=[Message(role=row.role, content=row.content) for row in rows])
+    steps = await chat_message_step_repository.get_for_session(session.id)
+    by_message: dict[int, list[HistoryStep]] = {}
+    for step in steps:
+        by_message.setdefault(step.message_id, []).append(
+            HistoryStep(name=step.name, input=step.input, output=step.output)
+        )
+    return ChatHistoryResponse(
+        messages=[HistoryMessage(role=row.role, content=row.content, steps=by_message.get(row.id, [])) for row in rows]
+    )
 
 
 @router.get("/artifacts/{action_id}/download")

@@ -16,7 +16,7 @@ from sqlmodel import select
 
 from src.app.core.common.logging import logger
 from src.app.core.db.database import session_scope
-from src.app.core.session.message_model import ChatMessage
+from src.app.core.session.message_model import ChatMessage, ChatMessageStep
 
 
 class ChatMessageRepository:
@@ -59,6 +59,46 @@ class ChatMessageRepository:
         """Delete every message of a session (cascade on session deletion). Returns the count."""
         with session_scope() as session:
             rows = list(session.exec(select(ChatMessage).where(ChatMessage.session_id == session_id)).all())
+            for row in rows:
+                session.delete(row)
+            session.commit()
+            return len(rows)
+
+
+class ChatMessageStepRepository:
+    """Persistence for the tool-activity trail of assistant turns, scoped by ``session_id``."""
+
+    async def add_steps(self, session_id: str, message_id: int, steps: List[dict]) -> int:
+        """Persist the ordered tool steps of one assistant turn. Returns how many were stored."""
+        if not steps:
+            return 0
+        with session_scope() as session:
+            for step in steps:
+                session.add(
+                    ChatMessageStep(
+                        session_id=session_id,
+                        message_id=message_id,
+                        name=step.get("name", ""),
+                        input=step.get("input"),
+                        output=step.get("output"),
+                    )
+                )
+            session.commit()
+            logger.info("chat_steps_persisted", session_id=session_id, message_id=message_id, count=len(steps))
+            return len(steps)
+
+    async def get_for_session(self, session_id: str) -> List[ChatMessageStep]:
+        """Return a session's tool steps in insertion order (oldest first)."""
+        with session_scope() as session:
+            statement = (
+                select(ChatMessageStep).where(ChatMessageStep.session_id == session_id).order_by(ChatMessageStep.id)
+            )
+            return list(session.exec(statement).all())
+
+    async def delete_for_session(self, session_id: str) -> int:
+        """Delete every step of a session (cascade on session deletion). Returns the count."""
+        with session_scope() as session:
+            rows = list(session.exec(select(ChatMessageStep).where(ChatMessageStep.session_id == session_id)).all())
             for row in rows:
                 session.delete(row)
             session.commit()

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
-import type { Approval, AssistantTurn, SessionEvent, SourceStatus, ToolStep, Turn } from "../lib/types";
+import type { Approval, AssistantTurn, SourceStatus, ToolStep, Turn } from "../lib/types";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SourcesPanel from "./SourcesPanel";
@@ -38,7 +38,6 @@ export default function ChatScreen() {
     useAuth();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
-  const [timelineEvents, setTimelineEvents] = useState<SessionEvent[]>([]);
   const [showTimeline, setShowTimeline] = useState(true);
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -78,19 +77,6 @@ export default function ChatScreen() {
     setApprovals((prev) => prev.map((a) => (a.id === id ? { ...a, status, error } : a)));
   }
 
-  // Persisted audit log for this session — rehydrates the timeline of a reopened conversation.
-  async function refreshTimeline() {
-    if (!userToken || !sessionId) {
-      setTimelineEvents([]);
-      return;
-    }
-    try {
-      setTimelineEvents(await api.listSessionEvents(userToken, sessionId));
-    } catch {
-      setTimelineEvents([]);
-    }
-  }
-
   function handleScroll() {
     const el = scrollRef.current;
     if (!el) return;
@@ -118,13 +104,27 @@ export default function ChatScreen() {
       try {
         const msgs = await api.getDataAgentMessages(sessionToken);
         if (cancelled) return;
+        // Continue the live step-id counter so restored ids never collide with new ones.
+        let nextStepId = stepIdRef.current;
         setTurns(
           msgs.map((m) =>
             m.role === "user"
               ? { role: "user", content: m.content }
-              : { role: "assistant", steps: [], content: m.content, streaming: false },
+              : {
+                  role: "assistant",
+                  content: m.content,
+                  streaming: false,
+                  steps: m.steps.map((s) => ({
+                    id: nextStepId++,
+                    name: s.name,
+                    input: s.input ?? undefined,
+                    output: s.output ?? undefined,
+                    done: true,
+                  })),
+                },
           ),
         );
+        stepIdRef.current = nextStepId;
       } catch {
         if (!cancelled) setTurns([]);
       } finally {
@@ -134,14 +134,13 @@ export default function ChatScreen() {
     void loadHistory();
     void refreshSources();
     void seedApprovals();
-    void refreshTimeline();
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionToken]);
 
-  // Live tool activity of the current view (restored turns carry none — the audit log covers those).
+  // The full session activity (restored turns now carry their persisted steps, live turns accrue new ones).
   const liveSteps = turns.flatMap((t) => (t.role === "assistant" ? t.steps : []));
 
   async function handleNewConversation() {
@@ -340,9 +339,7 @@ export default function ChatScreen() {
         </div>
       </div>
 
-      {showTimeline && (
-        <ActivityTimeline events={timelineEvents} steps={liveSteps} onClose={() => setShowTimeline(false)} />
-      )}
+      {showTimeline && <ActivityTimeline steps={liveSteps} onClose={() => setShowTimeline(false)} />}
 
       {showSources && <SourcesPanel onClose={handleCloseSources} />}
     </div>

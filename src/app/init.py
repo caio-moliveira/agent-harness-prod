@@ -14,7 +14,7 @@ from src.app.core.learning import CorrectionRepository, PreferenceRepository
 from src.app.core.mcp.session_manager import get_mcp_session_manager
 from src.app.core.session import SessionRepository
 from src.app.core.session.event_repository import SessionEventRepository
-from src.app.core.session.message_repository import ChatMessageRepository
+from src.app.core.session.message_repository import ChatMessageRepository, ChatMessageStepRepository
 from src.app.core.skill import SkillRepository
 from src.app.core.user import UserRepository
 
@@ -25,6 +25,7 @@ agent_repository = AgentRepository(dbsession)
 skill_repository = SkillRepository(dbsession)
 session_event_repository = SessionEventRepository()
 chat_message_repository = ChatMessageRepository()
+chat_message_step_repository = ChatMessageStepRepository()
 document_chunk_repository = DocumentChunkRepository()
 correction_repository = CorrectionRepository()
 preference_repository = PreferenceRepository()
