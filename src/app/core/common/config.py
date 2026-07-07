@@ -174,10 +174,7 @@ class Settings:
         # MCP Configuration
         self.MCP_ENABLED = os.getenv("MCP_ENABLED", "true").lower() in ("true", "1", "yes")
         self.MCP_SERVER_PORT = int(os.getenv("MCP_SERVER_PORT", "7001"))
-        self.MCP_HOSTNAMES = [
-            h.strip() for h in os.getenv("MCP_HOSTNAMES_CSV", "").split(",") if h.strip()
-        ]
-
+        self.MCP_HOSTNAMES = [h.strip() for h in os.getenv("MCP_HOSTNAMES_CSV", "").split(",") if h.strip()]
 
         # Per-session data sources (DB engine + granted folder). A granted folder is served to
         # the Data Agent's read-only file tools by a per-session deepagents FilesystemBackend
@@ -217,6 +214,7 @@ class Settings:
             "success_metrics": ["60 per minute"],
             "hitl": ["60 per minute"],
             "messages": ["50 per minute"],
+            "session_delete": ["30 per minute"],
             "register": ["10 per hour"],
             "login": ["20 per minute"],
             "root": ["10 per minute"],

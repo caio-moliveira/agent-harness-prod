@@ -14,12 +14,29 @@ from src.app.api.v1.dtos.hitl import PendingActionResponse
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.hitl import ConfirmationError
+from src.app.core.session.message_model import ChatMessageRole
 from src.app.core.user.user_model import User
-from src.app.init import hitl_service, pending_action_repository
+from src.app.init import chat_message_repository, hitl_service, pending_action_repository
 
 router = APIRouter()
 
 _RATE = settings.RATE_LIMIT_ENDPOINTS["hitl"][0]
+
+
+async def _note_artifact_generated(action) -> None:
+    """Record a short assistant message in the chat when an artifact is confirmed.
+
+    It anchors an "artifact generated" note at the approval moment (part of the persisted history,
+    not a floating card) and, being in the history window, keeps the agent aware it already ran.
+    """
+    if action.action_type != "export_artifact":
+        return
+    payload = action.payload or {}
+    spec = payload.get("spec") or {}
+    title = spec.get("title") or "artefato"
+    fmt = (payload.get("fmt") or "").upper()
+    text = f"📄 Artefato “{title}” ({fmt}) gerado com sucesso."
+    await chat_message_repository.add_message(action.session_id, action.user_id, ChatMessageRole.ASSISTANT, text)
 
 
 @router.get("/pending", response_model=List[PendingActionResponse])
@@ -28,7 +45,9 @@ async def list_pending(request: Request, user: User = Depends(get_current_user))
     """List the authenticated user's actions still awaiting confirmation."""
     actions = await pending_action_repository.list_pending(user.id)
     return [
-        PendingActionResponse(id=a.id, action_type=a.action_type, payload=a.payload, status=a.status)
+        PendingActionResponse(
+            id=a.id, session_id=a.session_id, action_type=a.action_type, payload=a.payload, status=a.status
+        )
         for a in actions
     ]
 
@@ -48,11 +67,12 @@ async def _owned_or_error(action_id: int, user: User):
 @limiter.limit(_RATE)
 async def confirm_action(request: Request, action_id: int, user: User = Depends(get_current_user)) -> dict:
     """Confirm and execute a pending action. Owner-scoped; 409 if it is no longer pending."""
-    await _owned_or_error(action_id, user)
+    action = await _owned_or_error(action_id, user)
     try:
         result = await hitl_service.confirm(action_id, user.id)
     except ConfirmationError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    await _note_artifact_generated(action)
     return {"confirmed": True, "result": result}
 
 

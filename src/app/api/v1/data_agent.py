@@ -15,34 +15,51 @@ from fastapi import (
     HTTPException,
     Request,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from src.app.agents.data_agent import build_data_agent
 from src.app.agents.data_agent.context import build_workspace_context
 from src.app.api.security.limiter import limiter
 from src.app.api.v1.auth import get_current_session
 from src.app.api.v1.dtos.data_agent import (
+    ChatHistoryResponse,
     ConnectDbRequest,
     ConnectDbResponse,
     DataQueryRequest,
     DataQueryResponse,
-    DataStreamRequest,
     DisconnectResponse,
     GrantFolderRequest,
     GrantFolderResponse,
+    HistoryMessage,
+    HistoryStep,
     SourceStatusResponse,
 )
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
+from src.app.core.hitl.pending_model import PendingActionStatus
 from src.app.core.db.connect import build_db_url, connect_readonly
 from src.app.core.security import decrypt
 from src.app.core.sandbox import registry
 from src.app.core.sandbox.paths import is_within_allowed_roots, validate_grantable_folder
 from src.app.core.sandbox.registry import SessionResources
+from src.app.core.session.message_model import ChatMessageRole
 from src.app.core.session.session_model import Session
 from src.app.core.skill.materialize import materialize_skills
-from src.app.init import agent_repository, skill_repository
+from src.app.init import (
+    agent_repository,
+    chat_message_repository,
+    chat_message_step_repository,
+    pending_action_repository,
+    session_repository,
+    skill_repository,
+)
+
+_ARTIFACT_MEDIA_TYPES = {
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
 
 router = APIRouter()
 
@@ -263,27 +280,183 @@ async def _get_or_build_agent(session: Session):
     return res.agent
 
 
-@router.post("/query/stream")
+# How many recent persisted messages to replay to the agent for immediate conversational context.
+# Older context comes from long-term memory, so this stays bounded rather than the whole history.
+_HISTORY_WINDOW = 20
+
+
+def _require_session(session_id: str, session: Session) -> None:
+    """Guard: the path session must be the caller's authenticated session (traceability + safety)."""
+    if session_id != session.id:
+        logger.warning("session_path_mismatch", path_session_id=session_id, token_session_id=session.id)
+        raise HTTPException(status_code=403, detail="Sessão não corresponde ao token.")
+
+
+def _agent_messages(history, query: str) -> list[Message]:
+    """The recent conversation window the agent sees: prior non-empty turns + the new message.
+
+    Only a bounded window is replayed (older context is carried by long-term memory), and empty
+    tool-only turns are skipped since ``Message.content`` must be non-empty.
+    """
+    window = [Message(role=row.role, content=row.content) for row in history if row.content.strip()]
+    return window + [Message(role="user", content=query)]
+
+
+async def _persist_user_message(session: Session, query: str) -> None:
+    """Persist the user's new message and name the session from it on the first turn."""
+    await chat_message_repository.add_message(session.id, session.user_id, ChatMessageRole.USER, query)
+    if not session.name:
+        name = query.strip().splitlines()[0][:60] or "Nova conversa"
+        await session_repository.update_session_name(session.id, name)
+
+
+async def _persist_answer(session: Session, answer: str, steps: list[dict]) -> None:
+    """Persist the assistant's reply and its tool-activity steps for this turn.
+
+    ``answer`` is the concatenation of the same ``token`` events the client renders into the
+    assistant bubble (and that ``astream_query_events`` already accumulates for long-term memory), so
+    the stored message is exactly what the user saw. ``steps`` is the turn's tool activity, persisted
+    alongside so a reopened conversation shows the same "buscando/gerando/…" trail and timeline.
+
+    A turn with activity but no final text (e.g. the agent only parked a HITL action) is still
+    persisted with empty content so its tool trail survives a reload; a turn with neither is skipped.
+    """
+    text = answer.strip()
+    if not text and not steps:
+        return
+    message = await chat_message_repository.add_message(session.id, session.user_id, ChatMessageRole.ASSISTANT, text)
+    await chat_message_step_repository.add_steps(session.id, message.id, steps)
+
+
+def _close_step(steps: list[dict], name: str, output) -> None:
+    """Attach ``output`` to the most recent still-open step of ``name`` (mirrors the client)."""
+    for step in reversed(steps):
+        if step["name"] == name and step["output"] is None:
+            step["output"] = output
+            return
+
+
+def _hitl_event(action) -> dict:
+    """Shape a parked action into an inline ``hitl_request`` SSE event for the chat."""
+    payload = action.payload or {}
+    spec = payload.get("spec") or {}
+    return {
+        "type": "hitl_request",
+        "id": action.id,
+        "action_type": action.action_type,
+        "title": spec.get("title") or "Ação pendente",
+        "format": payload.get("fmt"),
+    }
+
+
+async def _session_pending_ids(session: Session) -> set[int]:
+    """Ids of this session's currently-pending actions (used to diff a turn's new requests)."""
+    pending = await pending_action_repository.list_pending(session.user_id)
+    return {a.id for a in pending if a.session_id == session.id}
+
+
+async def _new_hitl_events(session: Session, known_ids: set[int]) -> list[dict]:
+    """Events for actions this turn parked for approval (pending, this session, not seen before)."""
+    pending = await pending_action_repository.list_pending(session.user_id)
+    return [_hitl_event(a) for a in pending if a.session_id == session.id and a.id not in known_ids]
+
+
+@router.post("/{session_id}/query/stream")
 @limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
 async def query_stream(
     request: Request,
-    body: DataStreamRequest,
+    session_id: str,
+    body: DataQueryRequest,
     session: Session = Depends(get_current_session),
 ) -> StreamingResponse:
-    """Stream the Data Agent's work (tool calls, reasoning, tokens) as SSE events."""
+    """Stream the Data Agent's work (tool calls, reasoning, tokens) as SSE events.
+
+    The client sends only the new message; the server rebuilds a bounded recent window from the
+    persisted history for immediate coherence, while long-term memory and learned preferences carry
+    the older/cross-session context.
+    """
+    _require_session(session_id, session)
     agent = await _get_or_build_agent(session)
-    logger.info("data_stream_started", session_id=session.id, message_count=len(body.messages))
+    logger.info("data_stream_started", session_id=session.id)
 
     async def event_generator():
+        answer_parts: list[str] = []
+        steps: list[dict] = []
         try:
-            async for ev in agent.astream_query_events(body.messages, session.id, session.user_id):
+            known_ids = await _session_pending_ids(session)
+            # Rebuild the recent context from our own persisted history (the client sends only the
+            # new message); older turns are covered by the agent's long-term memory.
+            history = await chat_message_repository.get_messages(session.id, limit=_HISTORY_WINDOW)
+            agent_messages = _agent_messages(history, body.query)
+            await _persist_user_message(session, body.query)
+            async for ev in agent.astream_query_events(agent_messages, session.id, session.user_id):
+                etype = ev.get("type")
+                if etype == "token":
+                    answer_parts.append(ev.get("content", ""))
+                elif etype == "tool_start":
+                    steps.append({"name": ev.get("name", ""), "input": ev.get("input"), "output": None})
+                elif etype == "tool_end":
+                    _close_step(steps, ev.get("name", ""), ev.get("output"))
                 yield f"data: {json.dumps(ev)}\n\n"
+            # Surface any approval the agent just parked as an inline card, before closing the turn.
+            for hitl_ev in await _new_hitl_events(session, known_ids):
+                yield f"data: {json.dumps(hitl_ev)}\n\n"
+            await _persist_answer(session, "".join(answer_parts), steps)
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception:
             logger.exception("data_stream_failed", session_id=session.id)
             yield f"data: {json.dumps({'type': 'error', 'content': 'Erro ao processar a consulta.'})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get("/{session_id}/messages", response_model=ChatHistoryResponse)
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
+async def messages(
+    request: Request,
+    session_id: str,
+    session: Session = Depends(get_current_session),
+) -> ChatHistoryResponse:
+    """Return this session's persisted conversation (oldest first), with each turn's tool activity."""
+    _require_session(session_id, session)
+    rows = await chat_message_repository.get_messages(session.id)
+    steps = await chat_message_step_repository.get_for_session(session.id)
+    by_message: dict[int, list[HistoryStep]] = {}
+    for step in steps:
+        by_message.setdefault(step.message_id, []).append(
+            HistoryStep(name=step.name, input=step.input, output=step.output)
+        )
+    return ChatHistoryResponse(
+        messages=[HistoryMessage(role=row.role, content=row.content, steps=by_message.get(row.id, [])) for row in rows]
+    )
+
+
+@router.get("/{session_id}/artifacts/{action_id}/download")
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
+async def download_artifact(
+    request: Request,
+    session_id: str,
+    action_id: int,
+    session: Session = Depends(get_current_session),
+) -> FileResponse:
+    """Download a confirmed artifact. Owner-scoped; the file exists only after approval."""
+    _require_session(session_id, session)
+    action = await pending_action_repository.get(action_id)
+    if action is None or action.action_type != "export_artifact" or action.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Artefato não encontrado.")
+    if action.user_id != session.user_id:
+        logger.warning("artifact_download_denied", action_id=action_id, user_id=session.user_id)
+        raise HTTPException(status_code=403, detail="Artefato pertence a outro usuário.")
+    if action.status != PendingActionStatus.CONFIRMED:
+        raise HTTPException(status_code=409, detail="Artefato ainda não foi aprovado.")
+
+    payload = action.payload or {}
+    path = payload.get("path")
+    if not path or not await asyncio.to_thread(os.path.isfile, path):
+        raise HTTPException(status_code=404, detail="Arquivo do artefato indisponível.")
+
+    media_type = _ARTIFACT_MEDIA_TYPES.get(payload.get("fmt"), "application/octet-stream")
+    return FileResponse(path, media_type=media_type, filename=os.path.basename(path))
 
 
 @router.get("/status", response_model=SourceStatusResponse)

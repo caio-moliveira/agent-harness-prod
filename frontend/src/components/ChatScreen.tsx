@@ -5,8 +5,10 @@ import type { AssistantTurn, SourceStatus, ToolStep, Turn } from "../lib/types";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SourcesPanel from "./SourcesPanel";
-import PendingActionsPanel from "./PendingActionsPanel";
 import AgentActivity from "./AgentActivity";
+import ArtifactApproval from "./ArtifactApproval";
+import ConversationsSidebar from "./ConversationsSidebar";
+import ActivityTimeline from "./ActivityTimeline";
 
 function updateLastAssistant(turns: Turn[], fn: (a: AssistantTurn) => AssistantTurn): Turn[] {
   const copy = [...turns];
@@ -32,33 +34,69 @@ function closeStep(steps: ToolStep[], name: string, output?: string): ToolStep[]
 }
 
 export default function ChatScreen() {
-  const { agentName, sessionToken, userToken, leaveAgent, logout } = useAuth();
+  const {
+    agentName,
+    agentId,
+    sessionToken,
+    sessionId,
+    userToken,
+    leaveAgent,
+    logout,
+    startSession,
+    clearSession,
+    setActiveSession,
+  } = useAuth();
   const [turns, setTurns] = useState<Turn[]>([]);
+  const [showTimeline, setShowTimeline] = useState(true);
   const [sending, setSending] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [sidebarReload, setSidebarReload] = useState(0);
   const [showSources, setShowSources] = useState(false);
   const [sources, setSources] = useState<SourceStatus>({ db_connected: false });
-  const [showPending, setShowPending] = useState(false);
-  const [pendingCount, setPendingCount] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stepIdRef = useRef(0);
+  // Set when a session is created mid-send, so the [sessionToken] effect doesn't reload (and wipe)
+  // the optimistic turns we just added for a brand-new, empty conversation.
+  const skipLoadRef = useRef(false);
   // Whether to keep the view pinned to the bottom. Turns false as soon as the user scrolls up,
   // so streaming text never yanks their scrollbar back down; turns true when they return to bottom.
   const stickToBottom = useRef(true);
 
-  async function refreshPendingCount() {
+  // Update the status of the approval anchored to whichever assistant turn owns this action id.
+  function setApprovalStatus(actionId: number, status: "approved" | "rejected") {
+    setTurns((prev) =>
+      prev.map((t) =>
+        t.role === "assistant" && t.approval?.id === actionId
+          ? { ...t, approval: { ...t.approval, status } }
+          : t,
+      ),
+    );
+  }
+
+  // Anchor a still-pending artifact approval onto the last assistant turn of a restored conversation.
+  async function attachPendingApproval(built: Turn[], sid: string) {
     if (!userToken) return;
     try {
-      const list = await api.listPendingActions(userToken);
-      setPendingCount(list.length);
+      const pending = await api.listPendingActions(userToken);
+      const mine = pending.filter((a) => a.session_id === sid && a.action_type === "export_artifact");
+      if (!mine.length) return;
+      const action = mine[mine.length - 1];
+      for (let i = built.length - 1; i >= 0; i--) {
+        const t = built[i];
+        if (t.role === "assistant") {
+          t.approval = {
+            id: action.id,
+            title: (action.payload?.spec as { title?: string } | undefined)?.title ?? "artefato",
+            format: action.payload?.fmt as string | undefined,
+            status: "pending",
+          };
+          break;
+        }
+      }
     } catch {
       /* ignore transient errors */
     }
   }
-
-  useEffect(() => {
-    void refreshPendingCount();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userToken]);
 
   function handleScroll() {
     const el = scrollRef.current;
@@ -75,12 +113,83 @@ export default function ChatScreen() {
     }
   }
 
-  // New session (or login) -> fresh conversation + reload which sources are attached.
+  // Switching session (new, restored, or login) -> rehydrate its persisted history + sources.
   useEffect(() => {
-    setTurns([]);
+    // A session just created for an in-flight first message — its history is the optimistic view.
+    if (skipLoadRef.current) {
+      skipLoadRef.current = false;
+      return;
+    }
+    let cancelled = false;
+    async function loadHistory() {
+      if (!sessionToken || !sessionId) {
+        setTurns([]);
+        return;
+      }
+      setLoadingHistory(true);
+      try {
+        const msgs = await api.getDataAgentMessages(sessionToken, sessionId);
+        if (cancelled) return;
+        // Continue the live step-id counter so restored ids never collide with new ones.
+        let nextStepId = stepIdRef.current;
+        const built: Turn[] = msgs.map((m) =>
+          m.role === "user"
+            ? { role: "user", content: m.content }
+            : {
+                role: "assistant",
+                content: m.content,
+                streaming: false,
+                steps: m.steps.map((s) => ({
+                  id: nextStepId++,
+                  name: s.name,
+                  input: s.input ?? undefined,
+                  output: s.output ?? undefined,
+                  done: true,
+                })),
+              },
+        );
+        stepIdRef.current = nextStepId;
+        // Re-anchor a still-pending artifact approval to the last assistant turn so it can be
+        // decided after a reload — without floating at the bottom of the conversation.
+        await attachPendingApproval(built, sessionId);
+        if (cancelled) return;
+        setTurns(built);
+      } catch {
+        if (!cancelled) setTurns([]);
+      } finally {
+        if (!cancelled) setLoadingHistory(false);
+      }
+    }
+    void loadHistory();
     void refreshSources();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionToken]);
+
+  // The full session activity (restored turns now carry their persisted steps, live turns accrue new ones).
+  const liveSteps = turns.flatMap((t) => (t.role === "assistant" ? t.steps : []));
+
+  // "Nova conversa" / deleting the active one just drops the session — a new one starts on the
+  // next message, so we never create empty conversations.
+  function handleNewConversation() {
+    clearSession();
+  }
+
+  function handleDeletedActive() {
+    clearSession();
+  }
+
+  // Open the sources panel, creating the session first so a connected DB/folder has one to attach to.
+  async function openSources() {
+    if (!sessionToken || !sessionId) {
+      skipLoadRef.current = true;
+      const created = await startSession();
+      if (created) setSidebarReload((k) => k + 1);
+    }
+    setShowSources(true);
+  }
 
   useEffect(() => {
     if (!stickToBottom.current) return; // user scrolled up — don't fight them
@@ -89,12 +198,23 @@ export default function ChatScreen() {
   }, [turns]);
 
   async function handleSend(text: string) {
-    if (!sessionToken || sending) return;
+    if (sending) return;
+
+    // Create the session on the first message (lazy) — its id then shows in the URL.
+    let sid = sessionId;
+    let stoken = sessionToken;
+    const justCreated = !sid || !stoken;
+    if (justCreated) {
+      skipLoadRef.current = true; // don't let the [sessionToken] effect wipe the optimistic turns
+      const created = await startSession();
+      if (!created) return;
+      sid = created.sessionId;
+      stoken = created.sessionToken;
+      setSidebarReload((k) => k + 1); // the fresh conversation appears in the sidebar
+    }
+    if (!sid || !stoken) return;
+
     stickToBottom.current = true; // re-engage auto-scroll when the user sends
-    const history = turns
-      .filter((t) => t.content)
-      .map((t) => ({ role: t.role, content: t.content }));
-    const outgoing = [...history, { role: "user", content: text }];
 
     setTurns((prev) => [
       ...prev,
@@ -104,7 +224,8 @@ export default function ChatScreen() {
     setSending(true);
 
     try {
-      for await (const ev of api.streamDataQuery(sessionToken, outgoing)) {
+      // Only the new message is sent — the agent keeps context via its long-term memory, not a replay.
+      for await (const ev of api.streamDataQuery(stoken, sid, text)) {
         if (ev.type === "tool_start") {
           const id = stepIdRef.current++;
           setTurns((prev) =>
@@ -119,6 +240,14 @@ export default function ChatScreen() {
           );
         } else if (ev.type === "token") {
           setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, content: a.content + ev.content })));
+        } else if (ev.type === "hitl_request") {
+          // The agent parked an outward action — anchor a compact approval to this turn.
+          setTurns((prev) =>
+            updateLastAssistant(prev, (a) => ({
+              ...a,
+              approval: { id: ev.id, title: ev.title ?? "artefato", format: ev.format, status: "pending" },
+            })),
+          );
         } else if (ev.type === "error") {
           setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, streaming: false, error: ev.content })));
         } else if (ev.type === "done") {
@@ -130,8 +259,8 @@ export default function ChatScreen() {
       setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, streaming: false, error: message })));
     } finally {
       setSending(false);
-      // The agent may have parked an action (e.g. an artifact) this turn — refresh the badge.
-      void refreshPendingCount();
+      // The first message auto-names the session server-side — refresh the sidebar to show the name.
+      if (justCreated) setSidebarReload((k) => k + 1);
     }
   }
 
@@ -148,6 +277,17 @@ export default function ChatScreen() {
 
   return (
     <div className="flex h-full">
+      {userToken && (
+        <ConversationsSidebar
+          userToken={userToken}
+          agentId={agentId}
+          currentSessionId={sessionId}
+          reloadKey={sidebarReload}
+          onSelect={setActiveSession}
+          onNew={handleNewConversation}
+          onDeletedActive={handleDeletedActive}
+        />
+      )}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
           <div className="flex min-w-0 items-center gap-2">
@@ -170,20 +310,19 @@ export default function ChatScreen() {
             <span className={`rounded-full px-2 py-1 ${sources.folder ? "bg-emerald-900 text-emerald-200" : "bg-slate-800 text-slate-500"}`}>
               📁 {sources.folder ? "pasta" : "sem pasta"}
             </span>
-            <button onClick={() => setShowSources(true)} className="rounded-lg border border-indigo-700 bg-indigo-950/40 px-3 py-1.5 text-indigo-200 hover:bg-indigo-900/50">
+            <button onClick={() => void openSources()} className="rounded-lg border border-indigo-700 bg-indigo-950/40 px-3 py-1.5 text-indigo-200 hover:bg-indigo-900/50">
               Fontes
             </button>
             <button
-              onClick={() => setShowPending(true)}
-              className="relative rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
-              title="Ações aguardando sua confirmação"
+              onClick={() => setShowTimeline((v) => !v)}
+              title="Linha do tempo das ações"
+              className={`rounded-lg border px-3 py-1.5 ${
+                showTimeline
+                  ? "border-indigo-700 bg-indigo-950/40 text-indigo-200"
+                  : "border-slate-700 hover:bg-slate-800"
+              }`}
             >
-              Ações
-              {pendingCount > 0 && (
-                <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-slate-900">
-                  {pendingCount}
-                </span>
-              )}
+              🕒
             </button>
             <button onClick={handleClear} className="rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800">
               Limpar
@@ -195,7 +334,9 @@ export default function ChatScreen() {
         </header>
 
         <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-4">
-          {turns.length === 0 ? (
+          {loadingHistory ? (
+            <div className="mx-auto mt-16 max-w-md text-center text-sm text-slate-500">Carregando conversa…</div>
+          ) : turns.length === 0 ? (
             <div className="mx-auto mt-16 max-w-md text-center text-sm text-slate-500">
               <p className="text-base text-slate-300">Converse com o agente.</p>
               <p className="mt-2">
@@ -218,6 +359,13 @@ export default function ChatScreen() {
                         pending={turn.streaming && !turn.content}
                       />
                     )}
+                    {turn.approval && userToken && (
+                      <ArtifactApproval
+                        approval={turn.approval}
+                        userToken={userToken}
+                        onDecided={(status) => setApprovalStatus(turn.approval!.id, status)}
+                      />
+                    )}
                     {turn.error && (
                       <div className="mt-1 rounded-lg border border-red-900 bg-red-950/50 px-3 py-2 text-sm text-red-300">
                         {turn.error}
@@ -235,14 +383,9 @@ export default function ChatScreen() {
         </div>
       </div>
 
+      {showTimeline && <ActivityTimeline steps={liveSteps} onClose={() => setShowTimeline(false)} />}
+
       {showSources && <SourcesPanel onClose={handleCloseSources} />}
-      {showPending && userToken && (
-        <PendingActionsPanel
-          userToken={userToken}
-          onClose={() => setShowPending(false)}
-          onChanged={setPendingCount}
-        />
-      )}
     </div>
   );
 }

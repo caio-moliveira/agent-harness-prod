@@ -6,7 +6,7 @@ same spec renders under any organization's visual identity (RF-12). Every ``Clai
 never silently dropped (RF-13).
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -33,6 +33,21 @@ class ArtifactSpec(BaseModel):
     title: str
     subtitle: Optional[str] = None
     sections: List[Section] = Field(default_factory=list)
+
+
+class Sheet(BaseModel):
+    """One worksheet of a spreadsheet: a header row of columns plus tabular data rows."""
+
+    name: str
+    columns: List[str] = Field(default_factory=list)
+    rows: List[List[Any]] = Field(default_factory=list)
+
+
+class SpreadsheetSpec(BaseModel):
+    """The full structured content of a spreadsheet artifact (one or more worksheets)."""
+
+    title: str
+    sheets: List[Sheet] = Field(default_factory=list)
 
 
 class Template(BaseModel):

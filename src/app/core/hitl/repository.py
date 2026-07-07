@@ -39,6 +39,21 @@ class PendingActionRepository:
             )
             return list(session.exec(statement).all())
 
+    async def list_for_session(self, session_id: str) -> List[PendingAction]:
+        """List all of a session's actions, any status (used for cascade cleanup)."""
+        with session_scope() as session:
+            statement = select(PendingAction).where(PendingAction.session_id == session_id)
+            return list(session.exec(statement).all())
+
+    async def delete_for_session(self, session_id: str) -> int:
+        """Delete every parked action of a session (cascade on session deletion). Returns the count."""
+        with session_scope() as session:
+            rows = list(session.exec(select(PendingAction).where(PendingAction.session_id == session_id)).all())
+            for row in rows:
+                session.delete(row)
+            session.commit()
+            return len(rows)
+
     async def set_status(self, action_id: int, status: str) -> Optional[PendingAction]:
         """Move an action to ``confirmed`` or ``rejected``. None if not found."""
         with session_scope() as session:

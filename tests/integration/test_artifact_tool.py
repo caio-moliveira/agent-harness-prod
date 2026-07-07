@@ -18,6 +18,12 @@ from src.app.agents.data_agent.artifact_tools import _output_dir, make_artifact_
 pytestmark = pytest.mark.asyncio
 
 
+def _tool_named(session_id: str, name: str, *args, **kwargs):
+    """Return the bound tool with ``name`` for a session (raises if absent)."""
+    tools = make_artifact_tools(1, 7, session_id, *args, **kwargs)
+    return next(t for t in tools if t.name == name)
+
+
 class TestToolBinding:
     def test_absent_without_session_or_user(self):
         assert make_artifact_tools(user_id=1, agent_id=7, session_id=None) == []
@@ -25,8 +31,7 @@ class TestToolBinding:
 
     def test_present_with_context(self):
         tools = make_artifact_tools(user_id=1, agent_id=7, session_id="s")
-        assert len(tools) == 1
-        assert tools[0].name == "gerar_artefato"
+        assert {t.name for t in tools} == {"gerar_artefato", "gerar_planilha"}
 
     def test_output_dir_prefers_writable_folder(self, tmp_path):
         # Writable folder → write there (user finds it); read-only or no folder → temp dir.
@@ -110,4 +115,58 @@ class TestArtifactPipeline:
     async def test_empty_sections_rejected(self, client: AsyncClient):
         tool = self._tool("sess-artifact-3")
         out = await tool.ainvoke({"titulo": "X", "formato": "docx", "secoes": []})
+        assert "Nada a gerar" in out
+
+
+class TestSpreadsheetPipeline:
+    def _tool(self, session_id: str, *args, **kwargs):
+        return _tool_named(session_id, "gerar_planilha", *args, **kwargs)
+
+    async def test_tool_parks_spreadsheet_without_rendering(self, client: AsyncClient):
+        from src.app.init import pending_action_repository
+
+        tool = self._tool(f"sess-{uuid.uuid4()}")
+        out = await tool.ainvoke(
+            {
+                "titulo": "Vendas 2024",
+                "planilhas": [
+                    {"nome": "Resumo", "colunas": ["Mês", "Total"], "linhas": [["Jan", 1000], ["Fev", 1500]]}
+                ],
+            }
+        )
+        assert "aguardando sua confirmação" in out
+        action = [a for a in await pending_action_repository.list_pending(1) if a.action_type == "export_artifact"][-1]
+        assert action.payload["kind"] == "spreadsheet"
+        assert action.payload["fmt"] == "xlsx"
+        assert action.payload["path"].endswith(".xlsx")
+        assert not os.path.isfile(action.payload["path"])  # nothing on disk yet
+
+    async def test_confirm_renders_valid_xlsx_with_data(self, client: AsyncClient, tmp_path):
+        from openpyxl import load_workbook
+
+        from src.app.init import hitl_service, pending_action_repository
+
+        tool = self._tool(f"sess-{uuid.uuid4()}", str(tmp_path), writable_folder=True)
+        await tool.ainvoke(
+            {
+                "titulo": "Relatorio",
+                "planilhas": [{"nome": "Dados", "colunas": ["Produto", "Qtd"], "linhas": [["A", 3], ["B", 7]]}],
+            }
+        )
+        action = [a for a in await pending_action_repository.list_pending(1) if a.action_type == "export_artifact"][-1]
+        path = action.payload["path"]
+        assert os.path.dirname(path) == str(tmp_path)
+
+        await hitl_service.confirm(action.id, 1)
+        # A genuine .xlsx (zip/OOXML) that openpyxl — and Excel — can open.
+        assert zipfile.is_zipfile(path)
+        wb = load_workbook(path)
+        ws = wb["Dados"]
+        assert [c.value for c in ws[1]] == ["Produto", "Qtd"]  # header row
+        assert [c.value for c in ws[2]] == ["A", 3]
+        assert [c.value for c in ws[3]] == ["B", 7]
+
+    async def test_empty_planilhas_rejected(self, client: AsyncClient):
+        tool = self._tool("sess-sheet-empty")
+        out = await tool.ainvoke({"titulo": "X", "planilhas": []})
         assert "Nada a gerar" in out

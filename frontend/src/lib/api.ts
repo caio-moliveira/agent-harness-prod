@@ -7,7 +7,9 @@ import type {
   ConnectDbRequest,
   ConnectDbResponse,
   GrantFolderResponse,
+  HistoryMessage,
   Message,
+  SessionEvent,
   SessionResponse,
   SourceStatus,
   StreamChunk,
@@ -146,6 +148,7 @@ export async function unbindAgentFolder(userToken: string, agentId: number): Pro
 
 export interface PendingAction {
   id: number;
+  session_id: string;
   action_type: string;
   payload: Record<string, unknown>;
   status: string;
@@ -337,6 +340,39 @@ export async function grantFolder(sessionToken: string, path: string): Promise<G
   return (await ensureOk(res)).json();
 }
 
+/** A session's persisted conversation history (Data Agent), oldest first, with per-turn activity. */
+export async function getDataAgentMessages(sessionToken: string, sessionId: string): Promise<HistoryMessage[]> {
+  const res = await fetch(`${BASE}/data-agent/${sessionId}/messages`, {
+    headers: { Authorization: `Bearer ${sessionToken}` },
+  });
+  const data: { messages?: HistoryMessage[] } = await (await ensureOk(res)).json();
+  return data.messages ?? [];
+}
+
+/** Fetch a confirmed artifact as a blob (the endpoint requires the session bearer token). */
+export async function downloadArtifact(
+  sessionToken: string,
+  sessionId: string,
+  actionId: number,
+): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(`${BASE}/data-agent/${sessionId}/artifacts/${actionId}/download`, {
+    headers: { Authorization: `Bearer ${sessionToken}` },
+  });
+  await ensureOk(res);
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const match = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(disposition);
+  const filename = match ? decodeURIComponent(match[1].replace(/"$/, "")) : `artefato-${actionId}`;
+  return { blob: await res.blob(), filename };
+}
+
+/** A session's episodic audit log (persisted actions) — used to rehydrate the activity timeline. */
+export async function listSessionEvents(userToken: string, sessionId: string): Promise<SessionEvent[]> {
+  const res = await fetch(`${BASE}/sessions/${sessionId}/events`, {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
 export async function dataStatus(sessionToken: string): Promise<SourceStatus> {
   const res = await fetch(`${BASE}/data-agent/status`, {
     headers: { Authorization: `Bearer ${sessionToken}` },
@@ -362,15 +398,20 @@ export async function disconnectSources(sessionToken: string): Promise<void> {
   await ensureOk(res);
 }
 
-/** Stream the Data Agent's work as structured events (tool calls, tokens). */
+/**
+ * Stream the Data Agent's work as structured events (tool calls, tokens).
+ * Only the new message is sent; the server rebuilds recent context from the persisted history and
+ * relies on the agent's long-term memory for older turns — so the payload stays small.
+ */
 export async function* streamDataQuery(
   sessionToken: string,
-  messages: { role: string; content: string }[],
+  sessionId: string,
+  query: string,
 ): AsyncGenerator<StreamEvent, void, unknown> {
-  const res = await fetch(`${BASE}/data-agent/query/stream`, {
+  const res = await fetch(`${BASE}/data-agent/${sessionId}/query/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ query }),
   });
   await ensureOk(res);
 

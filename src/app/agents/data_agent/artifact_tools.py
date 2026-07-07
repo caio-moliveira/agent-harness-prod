@@ -12,12 +12,12 @@ attributed and isolated to the session that produced it.
 import os
 import re
 import tempfile
-from typing import Optional
+from typing import Any, Optional
 
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-from src.app.core.artifacts import ArtifactSpec, Claim, Section
+from src.app.core.artifacts import ArtifactSpec, Claim, Section, Sheet, SpreadsheetSpec
 from src.app.core.common.logging import logger
 from src.app.core.provenance import Source
 from src.app.init import hitl_service
@@ -41,6 +41,17 @@ class SectionInput(BaseModel):
 
     titulo: str = Field(..., description="Título da seção.")
     itens: list[ClaimInput] = Field(default_factory=list, description="Afirmações desta seção.")
+
+
+class SheetInput(BaseModel):
+    """One worksheet of a spreadsheet: header columns plus tabular data rows."""
+
+    nome: str = Field(..., description="Nome da aba.")
+    colunas: list[str] = Field(default_factory=list, description="Cabeçalhos das colunas, em ordem.")
+    linhas: list[list[Any]] = Field(
+        default_factory=list,
+        description="Linhas de dados; cada linha é uma lista de células na mesma ordem das colunas.",
+    )
 
 
 def _to_spec(titulo: str, subtitulo: Optional[str], secoes: list[SectionInput]) -> ArtifactSpec:
@@ -126,4 +137,49 @@ def make_artifact_tools(
             "aprove para gerar o arquivo, ou rejeite para descartar."
         )
 
-    return [gerar_artefato]
+    @tool
+    async def gerar_planilha(titulo: str, planilhas: list[SheetInput]) -> str:
+        """Gera uma planilha Excel (.xlsx) tabular a partir de dados em colunas e linhas.
+
+        Use SEMPRE que o usuário pedir uma planilha ou Excel — inclusive para exportar resultados de
+        uma consulta SQL. Cada item de ``planilhas`` é uma aba com ``colunas`` (cabeçalhos) e
+        ``linhas`` (cada linha é uma lista de valores, na mesma ordem das colunas).
+        **NUNCA** crie arquivos .xlsx com `write_file` — o Excel não conseguiria abri-los.
+        """
+        if not planilhas:
+            return "Nada a gerar: envie ao menos uma aba com colunas e linhas."
+
+        spec = SpreadsheetSpec(
+            title=titulo,
+            sheets=[Sheet(name=p.nome, columns=p.colunas, rows=p.linhas) for p in planilhas],
+        )
+        base = _output_dir(session_id, root_dir, writable_folder)
+        safe = _SAFE_NAME.sub("_", titulo).strip("_") or "planilha"
+        path = os.path.join(base, f"{safe}.xlsx")
+
+        # Producing a deliverable is outward-facing (#19): park it for confirmation, render on confirm.
+        try:
+            action = await hitl_service.request(
+                user_id,
+                session_id,
+                "export_artifact",
+                {
+                    "kind": "spreadsheet",
+                    "spec": spec.model_dump(mode="json"),
+                    "fmt": "xlsx",
+                    "path": path,
+                    "agent_id": agent_id,
+                },
+            )
+        except Exception:
+            logger.exception("spreadsheet_request_failed", session_id=session_id)
+            return "Falha ao preparar a planilha. Tente novamente."
+
+        row_count = sum(len(p.linhas) for p in planilhas)
+        return (
+            f"Preparei a planilha '{titulo}' (xlsx, {len(planilhas)} aba(s), {row_count} linha(s)). "
+            f"Ela está aguardando sua confirmação em 'Ações pendentes' (id {action.id}): "
+            "aprove para gerar o arquivo, ou rejeite para descartar."
+        )
+
+    return [gerar_artefato, gerar_planilha]

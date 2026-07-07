@@ -15,10 +15,13 @@ from src.app.core.artifacts.spec import (
     ArtifactSpec,
     Claim,
     Section,
+    Sheet,
+    SpreadsheetSpec,
     Template,
     claim_suffix,
     unsourced_claims,
 )
+from src.app.core.artifacts.xlsx_renderer import render_xlsx
 from src.app.core.common.logging import logger
 from src.app.core.session.event_model import SessionEventType
 from src.app.core.session.event_repository import SessionEventRepository
@@ -62,14 +65,46 @@ async def generate_artifact(
     return path
 
 
+async def generate_spreadsheet(
+    spec: SpreadsheetSpec,
+    path: str,
+    user_id: Optional[int] = None,
+    agent_id: Optional[int] = None,
+    session_id: Optional[str] = None,
+) -> str:
+    """Render ``spec`` to a native .xlsx workbook at ``path``; audit it when session-scoped."""
+    # Rendering is CPU/IO-bound (zip + XML) — keep it off the event loop.
+    await asyncio.to_thread(render_xlsx, spec, path, None)
+
+    if user_id is not None and session_id is not None:
+        try:
+            await _event_repo.record_event(
+                user_id=user_id,
+                session_id=session_id,
+                event_type=SessionEventType.ARTIFACT_GENERATED,
+                agent_id=agent_id,
+                payload={"format": "xlsx", "title": spec.title, "sheets": len(spec.sheets)},
+                scope="artifact",
+            )
+        except Exception:  # noqa: BLE001 - auditing must never fail the deliverable
+            logger.exception("artifact_event_record_failed", session_id=session_id, fmt="xlsx")
+
+    logger.info("artifact_generated", fmt="xlsx", title=spec.title, sheets=len(spec.sheets))
+    return path
+
+
 __all__ = [
     "ArtifactSpec",
     "Claim",
     "Section",
+    "Sheet",
+    "SpreadsheetSpec",
     "Template",
     "claim_suffix",
     "unsourced_claims",
     "render_docx",
     "render_pptx",
+    "render_xlsx",
     "generate_artifact",
+    "generate_spreadsheet",
 ]
