@@ -7,6 +7,7 @@ import Composer from "./Composer";
 import SourcesPanel from "./SourcesPanel";
 import PendingActionsPanel from "./PendingActionsPanel";
 import AgentActivity from "./AgentActivity";
+import ConversationsSidebar from "./ConversationsSidebar";
 
 function updateLastAssistant(turns: Turn[], fn: (a: AssistantTurn) => AssistantTurn): Turn[] {
   const copy = [...turns];
@@ -32,9 +33,12 @@ function closeStep(steps: ToolStep[], name: string, output?: string): ToolStep[]
 }
 
 export default function ChatScreen() {
-  const { agentName, sessionToken, userToken, leaveAgent, logout } = useAuth();
+  const { agentName, agentId, sessionToken, sessionId, userToken, leaveAgent, logout, newSession, setActiveSession } =
+    useAuth();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [sending, setSending] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [sidebarReload, setSidebarReload] = useState(0);
   const [showSources, setShowSources] = useState(false);
   const [sources, setSources] = useState<SourceStatus>({ db_connected: false });
   const [showPending, setShowPending] = useState(false);
@@ -75,12 +79,48 @@ export default function ChatScreen() {
     }
   }
 
-  // New session (or login) -> fresh conversation + reload which sources are attached.
+  // Switching session (new, restored, or login) -> rehydrate its persisted history + sources.
   useEffect(() => {
-    setTurns([]);
+    let cancelled = false;
+    async function loadHistory() {
+      if (!sessionToken) {
+        setTurns([]);
+        return;
+      }
+      setLoadingHistory(true);
+      try {
+        const msgs = await api.getDataAgentMessages(sessionToken);
+        if (cancelled) return;
+        setTurns(
+          msgs.map((m) =>
+            m.role === "user"
+              ? { role: "user", content: m.content }
+              : { role: "assistant", steps: [], content: m.content, streaming: false },
+          ),
+        );
+      } catch {
+        if (!cancelled) setTurns([]);
+      } finally {
+        if (!cancelled) setLoadingHistory(false);
+      }
+    }
+    void loadHistory();
     void refreshSources();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionToken]);
+
+  async function handleNewConversation() {
+    await newSession();
+    setSidebarReload((k) => k + 1);
+  }
+
+  async function handleDeletedActive() {
+    await newSession();
+    setSidebarReload((k) => k + 1);
+  }
 
   useEffect(() => {
     if (!stickToBottom.current) return; // user scrolled up — don't fight them
@@ -90,6 +130,7 @@ export default function ChatScreen() {
 
   async function handleSend(text: string) {
     if (!sessionToken || sending) return;
+    const isFirstMessage = turns.length === 0; // the server names the session from its first message
     stickToBottom.current = true; // re-engage auto-scroll when the user sends
     const history = turns
       .filter((t) => t.content)
@@ -132,6 +173,8 @@ export default function ChatScreen() {
       setSending(false);
       // The agent may have parked an action (e.g. an artifact) this turn — refresh the badge.
       void refreshPendingCount();
+      // The first message auto-names the session server-side — refresh the sidebar to show it.
+      if (isFirstMessage) setSidebarReload((k) => k + 1);
     }
   }
 
@@ -148,6 +191,17 @@ export default function ChatScreen() {
 
   return (
     <div className="flex h-full">
+      {userToken && (
+        <ConversationsSidebar
+          userToken={userToken}
+          agentId={agentId}
+          currentSessionId={sessionId}
+          reloadKey={sidebarReload}
+          onSelect={setActiveSession}
+          onNew={handleNewConversation}
+          onDeletedActive={handleDeletedActive}
+        />
+      )}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
           <div className="flex min-w-0 items-center gap-2">
@@ -195,7 +249,9 @@ export default function ChatScreen() {
         </header>
 
         <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-4">
-          {turns.length === 0 ? (
+          {loadingHistory ? (
+            <div className="mx-auto mt-16 max-w-md text-center text-sm text-slate-500">Carregando conversa…</div>
+          ) : turns.length === 0 ? (
             <div className="mx-auto mt-16 max-w-md text-center text-sm text-slate-500">
               <p className="text-base text-slate-300">Converse com o agente.</p>
               <p className="mt-2">
