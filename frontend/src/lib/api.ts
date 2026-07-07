@@ -400,8 +400,8 @@ export async function disconnectSources(sessionToken: string): Promise<void> {
 
 /**
  * Stream the Data Agent's work as structured events (tool calls, tokens).
- * Only the new message is sent — the conversation is not replayed; the agent's context comes from
- * its long-term memory and learned preferences, kept up to date across turns.
+ * Only the new message is sent; the server rebuilds recent context from the persisted history and
+ * relies on the agent's long-term memory for older turns — so the payload stays small.
  */
 export async function* streamDataQuery(
   sessionToken: string,

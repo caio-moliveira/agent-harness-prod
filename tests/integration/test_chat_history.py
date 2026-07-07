@@ -115,6 +115,23 @@ class TestDataAgentMessagesEndpoint:
         assert resp.status_code == 200, resp.text
         assert resp.json()["messages"] == []
 
+    def test_agent_window_appends_new_and_skips_empty(self):
+        from types import SimpleNamespace
+
+        from src.app.api.v1.data_agent import _agent_messages
+
+        history = [
+            SimpleNamespace(role="user", content="quanto vendemos?"),
+            SimpleNamespace(role="assistant", content="R$ 1.234"),
+            SimpleNamespace(role="assistant", content="   "),  # tool-only turn — no text, skipped
+        ]
+        msgs = _agent_messages(history, "e em fevereiro?")
+        assert [(m.role, m.content) for m in msgs] == [
+            ("user", "quanto vendemos?"),
+            ("assistant", "R$ 1.234"),
+            ("user", "e em fevereiro?"),
+        ]
+
     async def test_history_carries_per_turn_tool_activity(self, client: AsyncClient, user_token):
         from src.app.init import chat_message_repository, chat_message_step_repository
 

@@ -280,11 +280,26 @@ async def _get_or_build_agent(session: Session):
     return res.agent
 
 
+# How many recent persisted messages to replay to the agent for immediate conversational context.
+# Older context comes from long-term memory, so this stays bounded rather than the whole history.
+_HISTORY_WINDOW = 20
+
+
 def _require_session(session_id: str, session: Session) -> None:
     """Guard: the path session must be the caller's authenticated session (traceability + safety)."""
     if session_id != session.id:
         logger.warning("session_path_mismatch", path_session_id=session_id, token_session_id=session.id)
         raise HTTPException(status_code=403, detail="Sessão não corresponde ao token.")
+
+
+def _agent_messages(history, query: str) -> list[Message]:
+    """The recent conversation window the agent sees: prior non-empty turns + the new message.
+
+    Only a bounded window is replayed (older context is carried by long-term memory), and empty
+    tool-only turns are skipped since ``Message.content`` must be non-empty.
+    """
+    window = [Message(role=row.role, content=row.content) for row in history if row.content.strip()]
+    return window + [Message(role="user", content=query)]
 
 
 async def _persist_user_message(session: Session, query: str) -> None:
@@ -356,21 +371,25 @@ async def query_stream(
 ) -> StreamingResponse:
     """Stream the Data Agent's work (tool calls, reasoning, tokens) as SSE events.
 
-    Only the new message is sent — the conversation is not replayed to the agent; its context comes
-    from long-term memory and the learned preferences it maintains across turns.
+    The client sends only the new message; the server rebuilds a bounded recent window from the
+    persisted history for immediate coherence, while long-term memory and learned preferences carry
+    the older/cross-session context.
     """
     _require_session(session_id, session)
     agent = await _get_or_build_agent(session)
     logger.info("data_stream_started", session_id=session.id)
-    new_messages = [Message(role="user", content=body.query)]
 
     async def event_generator():
         answer_parts: list[str] = []
         steps: list[dict] = []
         try:
             known_ids = await _session_pending_ids(session)
+            # Rebuild the recent context from our own persisted history (the client sends only the
+            # new message); older turns are covered by the agent's long-term memory.
+            history = await chat_message_repository.get_messages(session.id, limit=_HISTORY_WINDOW)
+            agent_messages = _agent_messages(history, body.query)
             await _persist_user_message(session, body.query)
-            async for ev in agent.astream_query_events(new_messages, session.id, session.user_id):
+            async for ev in agent.astream_query_events(agent_messages, session.id, session.user_id):
                 etype = ev.get("type")
                 if etype == "token":
                     answer_parts.append(ev.get("content", ""))
