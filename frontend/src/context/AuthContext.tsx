@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { Agent } from "../lib/types";
 import * as api from "../lib/api";
@@ -17,9 +17,10 @@ interface AuthContextValue extends AuthState {
   hasActiveAgent: boolean;
   register: (email: string, password: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
-  selectAgent: (agent: Agent) => Promise<void>;
+  selectAgent: (agent: Agent) => void;
   leaveAgent: () => void;
-  newSession: () => Promise<void>;
+  startSession: () => Promise<{ sessionId: string; sessionToken: string } | null>;
+  clearSession: () => void;
   setActiveSession: (sessionId: string, sessionToken: string) => void;
   logout: () => void;
 }
@@ -36,6 +37,14 @@ const EMPTY: AuthState = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/** Reflect the active conversation in the browser URL so it's visible and traceable. */
+function syncSessionUrl(sessionId: string | null) {
+  const path = sessionId ? `/c/${sessionId}` : "/";
+  if (window.location.pathname !== path) {
+    window.history.replaceState(null, "", path);
+  }
+}
+
 function loadState(): AuthState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -49,13 +58,20 @@ function loadState(): AuthState {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>(loadState);
 
+  // Keep the URL in sync with the restored session on first load.
+  useEffect(() => {
+    syncSessionUrl(state.sessionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function persist(next: AuthState) {
     setState(next);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    syncSessionUrl(next.sessionId);
   }
 
   // Log in / register only establishes the user token. The chat session is created
-  // later, bound to a chosen agent, so memory and history stay isolated per agent.
+  // lazily — on the first message — so empty conversations never pile up.
   async function register(email: string, password: string) {
     const user = await api.register(email, password);
     persist({ ...EMPTY, email, userToken: user.token.access_token });
@@ -66,28 +82,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     persist({ ...EMPTY, email, userToken: token.access_token });
   }
 
-  // Bind a fresh chat session to the selected agent.
-  async function selectAgent(agent: Agent) {
+  // Enter an agent's chat WITHOUT creating a session yet — the first message starts one.
+  function selectAgent(agent: Agent) {
     if (!state.userToken || !state.email) return;
-    const session = await api.createSession(state.userToken, agent.id);
-    persist({
-      ...state,
-      sessionToken: session.token.access_token,
-      sessionId: session.session_id,
-      agentId: agent.id,
-      agentName: agent.name,
-    });
+    persist({ ...state, agentId: agent.id, agentName: agent.name, sessionToken: null, sessionId: null });
   }
 
-  // Return to the agent picker, dropping the active session.
+  // Return to the agent picker, dropping the agent + any active session.
   function leaveAgent() {
     persist({ ...state, sessionToken: null, sessionId: null, agentId: null, agentName: null });
   }
 
-  async function newSession() {
-    if (!state.userToken || state.agentId == null) return;
+  // Create the session on demand (first message / first source), bound to the current agent.
+  async function startSession(): Promise<{ sessionId: string; sessionToken: string } | null> {
+    if (!state.userToken || state.agentId == null) return null;
     const session = await api.createSession(state.userToken, state.agentId);
-    persist({ ...state, sessionToken: session.token.access_token, sessionId: session.session_id });
+    const sessionToken = session.token.access_token;
+    persist({ ...state, sessionToken, sessionId: session.session_id });
+    return { sessionId: session.session_id, sessionToken };
+  }
+
+  // Start a fresh conversation: drop the active session (a new one is created on the next message).
+  function clearSession() {
+    persist({ ...state, sessionToken: null, sessionId: null });
   }
 
   // Switch the active session to an existing one (token comes from the sessions list).
@@ -98,6 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   function logout() {
     localStorage.removeItem(STORAGE_KEY);
     setState(EMPTY);
+    syncSessionUrl(null);
   }
 
   return (
@@ -105,12 +123,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         ...state,
         isAuthenticated: Boolean(state.userToken),
-        hasActiveAgent: Boolean(state.sessionToken),
+        hasActiveAgent: Boolean(state.agentId),
         register,
         login,
         selectAgent,
         leaveAgent,
-        newSession,
+        startSession,
+        clearSession,
         setActiveSession,
         logout,
       }}

@@ -34,8 +34,18 @@ function closeStep(steps: ToolStep[], name: string, output?: string): ToolStep[]
 }
 
 export default function ChatScreen() {
-  const { agentName, agentId, sessionToken, sessionId, userToken, leaveAgent, logout, newSession, setActiveSession } =
-    useAuth();
+  const {
+    agentName,
+    agentId,
+    sessionToken,
+    sessionId,
+    userToken,
+    leaveAgent,
+    logout,
+    startSession,
+    clearSession,
+    setActiveSession,
+  } = useAuth();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [showTimeline, setShowTimeline] = useState(true);
@@ -46,6 +56,9 @@ export default function ChatScreen() {
   const [sources, setSources] = useState<SourceStatus>({ db_connected: false });
   const scrollRef = useRef<HTMLDivElement>(null);
   const stepIdRef = useRef(0);
+  // Set when a session is created mid-send, so the [sessionToken] effect doesn't reload (and wipe)
+  // the optimistic turns we just added for a brand-new, empty conversation.
+  const skipLoadRef = useRef(false);
   // Whether to keep the view pinned to the bottom. Turns false as soon as the user scrolls up,
   // so streaming text never yanks their scrollbar back down; turns true when they return to bottom.
   const stickToBottom = useRef(true);
@@ -94,6 +107,11 @@ export default function ChatScreen() {
 
   // Switching session (new, restored, or login) -> rehydrate its persisted history + sources.
   useEffect(() => {
+    // A session just created for an in-flight first message — its history is the optimistic view.
+    if (skipLoadRef.current) {
+      skipLoadRef.current = false;
+      return;
+    }
     let cancelled = false;
     async function loadHistory() {
       if (!sessionToken || !sessionId) {
@@ -143,14 +161,24 @@ export default function ChatScreen() {
   // The full session activity (restored turns now carry their persisted steps, live turns accrue new ones).
   const liveSteps = turns.flatMap((t) => (t.role === "assistant" ? t.steps : []));
 
-  async function handleNewConversation() {
-    await newSession();
-    setSidebarReload((k) => k + 1);
+  // "Nova conversa" / deleting the active one just drops the session — a new one starts on the
+  // next message, so we never create empty conversations.
+  function handleNewConversation() {
+    clearSession();
   }
 
-  async function handleDeletedActive() {
-    await newSession();
-    setSidebarReload((k) => k + 1);
+  function handleDeletedActive() {
+    clearSession();
+  }
+
+  // Open the sources panel, creating the session first so a connected DB/folder has one to attach to.
+  async function openSources() {
+    if (!sessionToken || !sessionId) {
+      skipLoadRef.current = true;
+      const created = await startSession();
+      if (created) setSidebarReload((k) => k + 1);
+    }
+    setShowSources(true);
   }
 
   useEffect(() => {
@@ -160,8 +188,22 @@ export default function ChatScreen() {
   }, [turns]);
 
   async function handleSend(text: string) {
-    if (!sessionToken || !sessionId || sending) return;
-    const isFirstMessage = turns.length === 0; // the server names the session from its first message
+    if (sending) return;
+
+    // Create the session on the first message (lazy) — its id then shows in the URL.
+    let sid = sessionId;
+    let stoken = sessionToken;
+    const justCreated = !sid || !stoken;
+    if (justCreated) {
+      skipLoadRef.current = true; // don't let the [sessionToken] effect wipe the optimistic turns
+      const created = await startSession();
+      if (!created) return;
+      sid = created.sessionId;
+      stoken = created.sessionToken;
+      setSidebarReload((k) => k + 1); // the fresh conversation appears in the sidebar
+    }
+    if (!sid || !stoken) return;
+
     stickToBottom.current = true; // re-engage auto-scroll when the user sends
 
     setTurns((prev) => [
@@ -173,7 +215,7 @@ export default function ChatScreen() {
 
     try {
       // Only the new message is sent — the agent keeps context via its long-term memory, not a replay.
-      for await (const ev of api.streamDataQuery(sessionToken, sessionId, text)) {
+      for await (const ev of api.streamDataQuery(stoken, sid, text)) {
         if (ev.type === "tool_start") {
           const id = stepIdRef.current++;
           setTurns((prev) =>
@@ -206,8 +248,8 @@ export default function ChatScreen() {
       setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, streaming: false, error: message })));
     } finally {
       setSending(false);
-      // The first message auto-names the session server-side — refresh the sidebar to show it.
-      if (isFirstMessage) setSidebarReload((k) => k + 1);
+      // The first message auto-names the session server-side — refresh the sidebar to show the name.
+      if (justCreated) setSidebarReload((k) => k + 1);
     }
   }
 
@@ -257,7 +299,7 @@ export default function ChatScreen() {
             <span className={`rounded-full px-2 py-1 ${sources.folder ? "bg-emerald-900 text-emerald-200" : "bg-slate-800 text-slate-500"}`}>
               📁 {sources.folder ? "pasta" : "sem pasta"}
             </span>
-            <button onClick={() => setShowSources(true)} className="rounded-lg border border-indigo-700 bg-indigo-950/40 px-3 py-1.5 text-indigo-200 hover:bg-indigo-900/50">
+            <button onClick={() => void openSources()} className="rounded-lg border border-indigo-700 bg-indigo-950/40 px-3 py-1.5 text-indigo-200 hover:bg-indigo-900/50">
               Fontes
             </button>
             <button
