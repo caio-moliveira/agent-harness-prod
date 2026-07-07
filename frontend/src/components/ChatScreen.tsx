@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
-import type { AssistantTurn, SourceStatus, ToolStep, Turn } from "../lib/types";
+import type { Approval, AssistantTurn, SourceStatus, ToolStep, Turn } from "../lib/types";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SourcesPanel from "./SourcesPanel";
-import PendingActionsPanel from "./PendingActionsPanel";
 import AgentActivity from "./AgentActivity";
+import ApprovalCard from "./ApprovalCard";
 import ConversationsSidebar from "./ConversationsSidebar";
 
 function updateLastAssistant(turns: Turn[], fn: (a: AssistantTurn) => AssistantTurn): Turn[] {
@@ -36,33 +36,44 @@ export default function ChatScreen() {
   const { agentName, agentId, sessionToken, sessionId, userToken, leaveAgent, logout, newSession, setActiveSession } =
     useAuth();
   const [turns, setTurns] = useState<Turn[]>([]);
+  const [approvals, setApprovals] = useState<Approval[]>([]);
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [sidebarReload, setSidebarReload] = useState(0);
   const [showSources, setShowSources] = useState(false);
   const [sources, setSources] = useState<SourceStatus>({ db_connected: false });
-  const [showPending, setShowPending] = useState(false);
-  const [pendingCount, setPendingCount] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stepIdRef = useRef(0);
   // Whether to keep the view pinned to the bottom. Turns false as soon as the user scrolls up,
   // so streaming text never yanks their scrollbar back down; turns true when they return to bottom.
   const stickToBottom = useRef(true);
 
-  async function refreshPendingCount() {
-    if (!userToken) return;
+  // Seed inline approval cards from any still-pending action for this session (survives reload).
+  async function seedApprovals() {
+    if (!userToken || !sessionId) {
+      setApprovals([]);
+      return;
+    }
     try {
       const list = await api.listPendingActions(userToken);
-      setPendingCount(list.length);
+      setApprovals(
+        list
+          .filter((a) => a.session_id === sessionId && a.action_type === "export_artifact")
+          .map((a) => ({
+            id: a.id,
+            title: (a.payload?.spec as { title?: string } | undefined)?.title ?? "Gerar artefato",
+            format: a.payload?.fmt as string | undefined,
+            status: "pending" as const,
+          })),
+      );
     } catch {
       /* ignore transient errors */
     }
   }
 
-  useEffect(() => {
-    void refreshPendingCount();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userToken]);
+  function decideApproval(id: number, status: "approved" | "rejected", error?: string) {
+    setApprovals((prev) => prev.map((a) => (a.id === id ? { ...a, status, error } : a)));
+  }
 
   function handleScroll() {
     const el = scrollRef.current;
@@ -106,6 +117,7 @@ export default function ChatScreen() {
     }
     void loadHistory();
     void refreshSources();
+    void seedApprovals();
     return () => {
       cancelled = true;
     };
@@ -160,6 +172,13 @@ export default function ChatScreen() {
           );
         } else if (ev.type === "token") {
           setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, content: a.content + ev.content })));
+        } else if (ev.type === "hitl_request") {
+          // The agent parked an outward action — surface an inline approval card.
+          setApprovals((prev) =>
+            prev.some((a) => a.id === ev.id)
+              ? prev
+              : [...prev, { id: ev.id, title: ev.title ?? "Gerar artefato", format: ev.format, status: "pending" }],
+          );
         } else if (ev.type === "error") {
           setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, streaming: false, error: ev.content })));
         } else if (ev.type === "done") {
@@ -171,8 +190,6 @@ export default function ChatScreen() {
       setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, streaming: false, error: message })));
     } finally {
       setSending(false);
-      // The agent may have parked an action (e.g. an artifact) this turn — refresh the badge.
-      void refreshPendingCount();
       // The first message auto-names the session server-side — refresh the sidebar to show it.
       if (isFirstMessage) setSidebarReload((k) => k + 1);
     }
@@ -227,18 +244,6 @@ export default function ChatScreen() {
             <button onClick={() => setShowSources(true)} className="rounded-lg border border-indigo-700 bg-indigo-950/40 px-3 py-1.5 text-indigo-200 hover:bg-indigo-900/50">
               Fontes
             </button>
-            <button
-              onClick={() => setShowPending(true)}
-              className="relative rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
-              title="Ações aguardando sua confirmação"
-            >
-              Ações
-              {pendingCount > 0 && (
-                <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-slate-900">
-                  {pendingCount}
-                </span>
-              )}
-            </button>
             <button onClick={handleClear} className="rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800">
               Limpar
             </button>
@@ -282,6 +287,19 @@ export default function ChatScreen() {
                   </div>
                 ),
               )}
+              {userToken && sessionToken && approvals.length > 0 && (
+                <div className="space-y-2">
+                  {approvals.map((a) => (
+                    <ApprovalCard
+                      key={a.id}
+                      approval={a}
+                      userToken={userToken}
+                      sessionToken={sessionToken}
+                      onDecided={decideApproval}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -292,13 +310,6 @@ export default function ChatScreen() {
       </div>
 
       {showSources && <SourcesPanel onClose={handleCloseSources} />}
-      {showPending && userToken && (
-        <PendingActionsPanel
-          userToken={userToken}
-          onClose={() => setShowPending(false)}
-          onChanged={setPendingCount}
-        />
-      )}
     </div>
   );
 }
