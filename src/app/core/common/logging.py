@@ -186,7 +186,6 @@ def get_structlog_processors(include_file_info: bool = True) -> List[Any]:
                     structlog.processors.CallsiteParameter.FUNC_NAME,
                     structlog.processors.CallsiteParameter.LINENO,
                     structlog.processors.CallsiteParameter.MODULE,
-                    structlog.processors.CallsiteParameter.PATHNAME,
                 }
             )
         )
@@ -205,7 +204,18 @@ def setup_logging() -> None:
     """
     # Determine log level based on DEBUG setting
     log_level = logging.DEBUG if settings.DEBUG else logging.INFO
-    
+
+    # Windows consoles default to cp1252 and raise UnicodeEncodeError on non-encodable characters
+    # (e.g. the arrows/bullets in the agent's tool traces), which drops log lines. Force UTF-8 with a
+    # safe fallback so logging can never crash on output.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
     # Create file handler for JSON logs
     file_handler = JsonlFileHandler(get_log_file_path())
     file_handler.setLevel(log_level)
@@ -227,6 +237,12 @@ def setup_logging() -> None:
         level=log_level,
         handlers=[file_handler, console_handler],
     )
+
+    # Quiet the very chatty third-party libraries so the app's own logs stay followable — even when
+    # the app runs at DEBUG. Their per-frame connection/request debug lines (httpcore/httpx/openai)
+    # otherwise drown out everything that matters.
+    for noisy in ("httpcore", "httpx", "openai", "urllib3", "asyncio", "hpack", "langfuse"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     # Configure structlog based on environment
     if settings.LOG_FORMAT == "console":

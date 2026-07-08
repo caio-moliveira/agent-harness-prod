@@ -17,6 +17,7 @@ from src.app.agents.data_agent.tools import make_memory_tools
 from src.app.agents.tools.search_tool import SearchAPI, get_search_tool
 from src.app.core.common.config import settings
 from src.app.core.common.graph_utils import process_messages
+from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
 from src.app.core.db.readonly import make_readonly_sql_tools
 from src.app.core.learning import get_reflected_preferences
@@ -179,6 +180,14 @@ class DataAgent:
             if kind == "on_tool_start":
                 tool_name = event.get("name", "")
                 tool_input = _short(event.get("data", {}).get("input"))
+                # A followable, one-line trace of what the agent is doing this turn.
+                logger.info(
+                    "agent_tool_start",
+                    tool=tool_name,
+                    session_id=session_id,
+                    agent_id=self.agent_id,
+                    tool_input=tool_input,
+                )
                 # Audit trail (#10): record document reads / SQL executions off the hot path.
                 bg_record_tool_event(
                     _event_repo,
@@ -198,7 +207,14 @@ class DataAgent:
                 output = event.get("data", {}).get("output")
                 if hasattr(output, "content"):
                     output = output.content
-                yield {"type": "tool_end", "name": event.get("name", ""), "output": _short(output)}
+                short_output = _short(output)
+                logger.info(
+                    "agent_tool_end",
+                    tool=event.get("name", ""),
+                    session_id=session_id,
+                    output=short_output,
+                )
+                yield {"type": "tool_end", "name": event.get("name", ""), "output": short_output}
             elif kind == "on_chat_model_stream":
                 chunk = event.get("data", {}).get("chunk")
                 content = getattr(chunk, "content", "") if chunk is not None else ""
