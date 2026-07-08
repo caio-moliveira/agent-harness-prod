@@ -60,28 +60,46 @@ async def sync_folder(
         digest = await asyncio.to_thread(_hash_file, path)
         record = known.get(path)
         if record is not None and record.content_hash == digest:
-            result.unchanged += 1
-            continue
-        # New or changed: drop any prior chunks for this source, then (re)ingest.
-        if record is not None:
-            await chunk_repo.delete_by_source(user_id, agent_id, path)
+            # Unchanged by hash — but self-heal a wiped corpus: if the manifest says this doc is
+            # ingested while its chunks are gone (e.g. an earlier sync was interrupted), re-ingest it
+            # instead of skipping it forever.
+            if await chunk_repo.count_by_source(user_id, agent_id, path) > 0:
+                result.unchanged += 1
+                continue
+            logger.warning("sync_repairing_missing_chunks", user_id=user_id, agent_id=agent_id, source_path=path)
+        # New, changed, or repairing: (re)ingest. ingest_file swaps this source's chunks atomically,
+        # so a parse failure here leaves any existing chunks intact (never a zero-chunk dead state).
         try:
-            count = await ingest_file(path, user_id, agent_id, chunk_repo)
+            outcome = await ingest_file(path, user_id, agent_id, chunk_repo)
         except Exception:  # noqa: BLE001 - one bad file must not abort the whole sync
             logger.exception("sync_parse_failed", path=path, user_id=user_id, agent_id=agent_id)
             continue
-        await file_repo.upsert(user_id, agent_id, path, digest, count)
+        await file_repo.upsert(
+            user_id,
+            agent_id,
+            path,
+            digest,
+            outcome.chunk_count,
+            page_count=outcome.page_count,
+            text_layer=outcome.text_layer,
+            ocr_confidence=outcome.ocr_confidence,
+        )
         if record is None:
             result.added += 1
         else:
             result.updated += 1
 
-    # Files that vanished from the folder: purge their chunks and tracking.
-    for path in known:
-        if path not in current:
-            await chunk_repo.delete_by_source(user_id, agent_id, path)
-            await file_repo.delete(user_id, agent_id, path)
-            result.removed += 1
+    # Files that vanished from the folder: purge their chunks and tracking — but NEVER on an empty
+    # listing while the manifest still has entries. A transiently unreadable/wrong folder returns no
+    # files, and treating that as "everything was deleted" would wipe the whole corpus.
+    if files or not known:
+        for path in known:
+            if path not in current:
+                await chunk_repo.delete_by_source(user_id, agent_id, path)
+                await file_repo.delete(user_id, agent_id, path)
+                result.removed += 1
+    else:
+        logger.warning("sync_skipped_purge_empty_listing", user_id=user_id, agent_id=agent_id, known=len(known))
 
     # Embed whatever is now pending (the added/updated chunks); unchanged stay as-is.
     result.chunks_indexed = await index_chunks(user_id, agent_id, embedder, repo=chunk_repo)

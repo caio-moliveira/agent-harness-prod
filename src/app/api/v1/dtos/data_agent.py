@@ -71,6 +71,10 @@ class SourceStatusResponse(BaseModel):
     db_connected: bool = False
     dialect: Optional[str] = None
     folder: Optional[str] = None
+    # Ingestion/manifest summary for the granted folder (drives the "N docs · M pages · indexing" chip).
+    doc_count: int = 0
+    page_count: int = 0
+    indexing: bool = False
 
 
 class DisconnectResponse(BaseModel):

@@ -15,7 +15,7 @@ from src.app.core.common.logging import logger
 from src.app.core.ingestion.chunk_model import DocumentChunk
 from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
 from src.app.core.ingestion.chunking import chunk_document
-from src.app.core.ingestion.parsers import extract_document, is_supported
+from src.app.core.ingestion.parsers import ParsedDocument, extract_document, is_supported
 
 
 class IngestionResult(BaseModel):
@@ -24,6 +24,37 @@ class IngestionResult(BaseModel):
     files_ingested: int = 0
     files_skipped: int = 0
     chunks: int = 0
+
+
+class IngestFileResult(BaseModel):
+    """Per-file ingestion outcome: chunk count plus the document's manifest metadata."""
+
+    chunk_count: int = 0
+    page_count: int = 0
+    text_layer: str = "native"  # native | ocr | mixed
+    ocr_confidence: float = 1.0
+
+
+def derive_manifest_meta(parsed: ParsedDocument) -> tuple[int, str, float]:
+    """Derive ``(page_count, text_layer, ocr_confidence)`` from a parsed document.
+
+    ``ocr_confidence`` is a heuristic — the fraction of sections (pages) that yielded extractable
+    text — not a true OCR score; a real OCR pass can replace it later. ``text_layer`` summarizes it:
+    all-text → ``native``, no-text → ``ocr``, some-text → ``mixed``.
+    """
+    sections = parsed.sections
+    page_count = len(sections)
+    if page_count == 0:
+        return 0, "native", 1.0
+    with_text = sum(1 for s in sections if s.text.strip())
+    confidence = with_text / page_count
+    if with_text == page_count:
+        text_layer = "native"
+    elif with_text == 0:
+        text_layer = "ocr"
+    else:
+        text_layer = "mixed"
+    return page_count, text_layer, confidence
 
 
 def _list_supported_files(folder: str) -> List[str]:
@@ -42,8 +73,8 @@ async def ingest_file(
     user_id: int,
     agent_id: Optional[int],
     repo: DocumentChunkRepository,
-) -> int:
-    """Parse one file into chunks persisted for (user, agent). Returns the chunk count.
+) -> IngestFileResult:
+    """Parse one file into chunks persisted for (user, agent). Returns chunk count + manifest meta.
 
     Parsing runs in a worker thread so it never blocks the event loop. Raises on a parse error
     so the caller can decide whether to skip (folder ingest) or surface it (single-file sync).
@@ -63,8 +94,16 @@ async def ingest_file(
         )
         for cd in chunk_datas
     ]
-    await repo.add_chunks(models)
-    return len(models)
+    # Atomic swap (delete old + insert new in one transaction) so a re-ingest is idempotent and can
+    # never leave the document with zero chunks if it is interrupted.
+    await repo.replace_source(user_id, agent_id, path, models)
+    page_count, text_layer, confidence = derive_manifest_meta(parsed)
+    return IngestFileResult(
+        chunk_count=len(models),
+        page_count=page_count,
+        text_layer=text_layer,
+        ocr_confidence=confidence,
+    )
 
 
 async def ingest_folder(
@@ -82,7 +121,7 @@ async def ingest_folder(
     total_chunks = 0
     for path in files:
         try:
-            total_chunks += await ingest_file(path, user_id, agent_id, repo)
+            total_chunks += (await ingest_file(path, user_id, agent_id, repo)).chunk_count
             ingested += 1
         except Exception:  # noqa: BLE001 - one bad file must not abort the whole ingestion
             logger.exception("document_parse_failed", path=path, user_id=user_id, agent_id=agent_id)

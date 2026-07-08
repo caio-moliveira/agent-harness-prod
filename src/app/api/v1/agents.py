@@ -8,7 +8,7 @@ code or a deployment.
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from src.app.api.security.limiter import limiter
 from src.app.api.v1.auth import get_current_user
@@ -29,6 +29,7 @@ from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.db.connect import build_db_url, connect_readonly
 from src.app.core.learning import propose_refinement
+from src.app.core.ingestion.trigger import schedule_folder_ingestion
 from src.app.core.sandbox.paths import validate_grantable_folder
 from src.app.core.security import encrypt, is_encryption_available
 from src.app.core.skill.skill_dtos import AttachSkillsRequest
@@ -140,7 +141,11 @@ async def update_agent(
 @router.put("/{agent_id}/folder", response_model=BindFolderResponse)
 @limiter.limit(_RATE)
 async def bind_folder(
-    request: Request, agent_id: int, body: BindFolderRequest, user: User = Depends(get_current_user)
+    request: Request,
+    agent_id: int,
+    body: BindFolderRequest,
+    background: BackgroundTasks,
+    user: User = Depends(get_current_user),
 ) -> BindFolderResponse:
     """Bind a folder to an agent (persisted; re-validated on every use).
 
@@ -155,6 +160,9 @@ async def bind_folder(
     if updated is None:
         raise HTTPException(status_code=404, detail="Agent not found")
     updated = await agent_repository.set_config_value(agent_id, "folder_writable", body.writable)
+    # Ingest in the background (incremental) so the agent's semantic search + document tools have a
+    # corpus. Scoped to (user, agent) — the same scope the retrieval tool queries.
+    schedule_folder_ingestion(background, user.id, agent_id, path)
     logger.info("agent_folder_bound", agent_id=agent_id, user_id=user.id, folder=path, writable=body.writable)
     return BindFolderResponse(id=agent_id, folder=path, folder_writable=body.writable)
 

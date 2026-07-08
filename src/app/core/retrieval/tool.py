@@ -29,7 +29,13 @@ def make_retrieval_tools(
         """
         hits = await retrieve(consulta, user_id, agent_id, embedder)
         if not hits:
-            return "Nenhum documento relevante encontrado."
+            # An empty semantic result must not be a dead end: steer to the exact-match and catalog
+            # tools instead of letting the agent give up.
+            return (
+                "Nenhum resultado na busca semântica. Se o termo é EXATO (artigo, número, data, "
+                "nome próprio, um título como 'DECISÃO'), use `search_documents`; para ver o acervo "
+                "e ler uma página, use `list_documents` e depois `read_document`."
+            )
         return "\n\n".join(f"{h.content}\n[fonte] {h.source.render()}" for h in hits)
 
     return [buscar_documentos]

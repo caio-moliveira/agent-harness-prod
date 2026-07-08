@@ -141,6 +141,7 @@ def build_invoke_config(
     return {
         "callbacks": [langfuse_callback_handler],
         "run_name": agent_name,
+        "recursion_limit": settings.AGENT_RECURSION_LIMIT,
         "configurable": {"thread_id": session_id},
         "metadata": {
             "environment": settings.ENVIRONMENT.value,

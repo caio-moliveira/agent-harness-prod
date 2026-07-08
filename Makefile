@@ -188,6 +188,23 @@ db-reset:
 	docker volume rm agent-harness-prod_postgres-data 2>/dev/null || true
 	$(MAKE) db-up
 
+# Database migrations (Alembic). Applies to the Postgres in .env.<ENV>.
+migrate:
+	uv run alembic upgrade head
+
+migrate-down:
+	uv run alembic downgrade -1
+
+# Autogenerate a migration from model changes, then REVIEW it before committing.
+# Usage: make migration m="add X to Y"
+migration:
+	uv run alembic revision --autogenerate -m "$(m)"
+
+# Mark an already-create_all'd (fresh) database as being at the latest revision, without running
+# the migrations — use on a brand-new DB the app just bootstrapped, not on an existing one.
+migrate-stamp:
+	uv run alembic stamp head
+
 # Help
 help:
 	@echo "Usage: make <target>"

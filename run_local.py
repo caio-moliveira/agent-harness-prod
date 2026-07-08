@@ -15,6 +15,16 @@ import sys
 
 import uvicorn
 
+# Force UTF-8 console output before anything logs — Windows consoles default to cp1252 and would
+# raise UnicodeEncodeError (dropping log lines) on the non-ASCII characters in the agent's traces.
+for _stream in (sys.stdout, sys.stderr):
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if _reconfigure is not None:
+        try:
+            _reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 

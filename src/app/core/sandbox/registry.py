@@ -13,8 +13,8 @@ authorized folder path — there is no per-session container to create or remove
 
 import asyncio
 import time
-from dataclasses import dataclass
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Optional
 
 from langchain_community.utilities import SQLDatabase
 
@@ -32,6 +32,9 @@ class SessionResources:
     folder: Optional[str] = None  # authorized host folder, served read-only via FilesystemBackend
     agent: Optional[Any] = None  # compiled DataAgent, rebuilt when a source changes
     last_used: float = 0.0
+    # (doc_id, page) pairs the agent has actually read this session — the basis for citation
+    # enforcement (a page can only be cited once it has been read). Populated by read_document.
+    read_pages: set[tuple[str, int]] = field(default_factory=set)
 
     @property
     def has_source(self) -> bool:
@@ -86,6 +89,12 @@ class SessionRegistry:
             res.folder = folder
             res.agent = None  # force rebuild so the agent picks up the new folder
             return res
+
+    async def mark_pages_read(self, session_id: str, doc_id: str, pages: Iterable[int]) -> None:
+        """Record that the agent read these pages of a document this session (citation basis)."""
+        async with self._lock:
+            res = await self._get_or_create(session_id)
+            res.read_pages.update((doc_id, p) for p in pages)
 
     async def disconnect(self, session_id: str) -> None:
         """Tear down all resources for a session (dispose the DB engine, drop the folder)."""

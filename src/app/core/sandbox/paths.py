@@ -13,11 +13,23 @@ from fastapi import HTTPException
 from src.app.core.common.config import settings
 
 
+def _normalize_root(root: str) -> str:
+    """Resolve a configured root to an absolute, comparable path.
+
+    Roots are server-controlled config, so we expand ``~`` and environment variables
+    (``$HOME``, ``%USERPROFILE%``) — this lets a deploy use a portable root like ``~`` or
+    ``$HOME/agent-data`` instead of a hardcoded username. Note this expands to the home of
+    the OS user running the server, not the authenticated app user.
+    """
+    return os.path.normcase(os.path.abspath(os.path.expanduser(os.path.expandvars(root))))
+
+
 def is_within_allowed_roots(path: str, roots: list[str]) -> bool:
     """True if ``path`` is inside one of the configured allow-listed roots."""
+    # The target is user-supplied — abspath/normcase only, never expand vars in it.
     target = os.path.normcase(os.path.abspath(path))
     for root in roots:
-        allowed_root = os.path.normcase(os.path.abspath(root))
+        allowed_root = _normalize_root(root)
         try:
             if os.path.commonpath([target, allowed_root]) == allowed_root:
                 return True

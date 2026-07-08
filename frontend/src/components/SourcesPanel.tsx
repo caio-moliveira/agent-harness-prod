@@ -35,6 +35,15 @@ export default function SourcesPanel({ onClose }: { onClose: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionToken]);
 
+  // While the granted folder is being ingested in the background, poll so the chip flips from
+  // "indexando…" to the final document/page counts without the user reopening the panel.
+  useEffect(() => {
+    if (!status.indexing) return;
+    const id = setInterval(() => void refreshStatus(), 3000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status.indexing]);
+
   async function handleConnect() {
     if (!sessionToken) return;
     setError(null);
@@ -99,6 +108,19 @@ export default function SourcesPanel({ onClose }: { onClose: () => void }) {
           <span className={`rounded-full px-2 py-1 ${status.folder ? "bg-emerald-900 text-emerald-200" : "bg-slate-800 text-slate-400"}`}>
             Pasta: {status.folder ? "autorizada (somente leitura)" : "nenhuma"}
           </span>
+          {status.folder &&
+            (status.indexing ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-950/60 px-2 py-1 text-indigo-200 ring-1 ring-inset ring-indigo-800/50">
+                <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-indigo-700 border-t-indigo-300" />
+                Indexando documentos…
+              </span>
+            ) : (
+              (status.doc_count ?? 0) > 0 && (
+                <span className="rounded-full bg-slate-800 px-2 py-1 text-slate-300">
+                  📚 {status.doc_count} doc(s) · {status.page_count ?? 0} págs · indexado
+                </span>
+              )
+            ))}
           {hasSource && (
             <button onClick={handleDisconnect} className="rounded-full bg-red-950 px-2 py-1 text-red-300 hover:bg-red-900">
               Desconectar tudo

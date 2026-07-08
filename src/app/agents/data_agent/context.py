@@ -78,7 +78,8 @@ def build_workspace_context(folder: Optional[str], db: Any) -> str:
         return ""
     return (
         "## Contexto do workspace (carregado no início da sessão)\n\n"
-        "Você JÁ tem acesso às fontes abaixo. Baseie suas respostas nelas; para detalhes de um "
-        "arquivo, use `read_file`, e para consultar o banco use as ferramentas SQL.\n\n"
+        "Você JÁ tem acesso às fontes abaixo. Baseie suas respostas nelas; para ler um arquivo "
+        "(inclusive PDF, Word e Excel) use `read_file`, para localizar um trecho específico use "
+        "`buscar_documentos`, e para consultar o banco use as ferramentas SQL.\n\n"
         + "\n\n".join(parts)
     )

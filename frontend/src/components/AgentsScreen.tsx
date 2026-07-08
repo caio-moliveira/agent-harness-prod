@@ -231,7 +231,16 @@ export default function AgentsScreen() {
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">{agent.name}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="truncate text-sm font-medium">{agent.name}</p>
+                    {/* Soft nudge: an agent with no folder, no database and no web search can only
+                        chat — surface it so it isn't a silent surprise. Folder stays optional. */}
+                    {!agent.folder && !agent.database && !agent.web_search && (
+                      <span className="shrink-0 rounded-full bg-amber-950/60 px-2 py-0.5 text-[10px] text-amber-300 ring-1 ring-inset ring-amber-800/50">
+                        sem fontes
+                      </span>
+                    )}
+                  </div>
                   <p className="truncate text-xs text-slate-500">
                     {agent.system_prompt || "Sem prompt de sistema"}
                   </p>
@@ -495,6 +504,14 @@ export default function AgentsScreen() {
                 🧠 Memória
               </label>
             </div>
+            {/* Non-blocking: creating a source-less agent is valid (pure chat), just easy to do by
+                accident. A database can still be bound after creation, from the agent's card. */}
+            {!folder.trim() && !webSearch && (
+              <p className="rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300/90">
+                Sem fontes: este agente só conversa. Conecte uma pasta acima, ligue a busca na web, ou
+                vincule um banco depois de criar.
+              </p>
+            )}
             <div className="flex gap-2">
               <button
                 type="submit"

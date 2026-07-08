@@ -25,6 +25,7 @@ from deepagents.middleware.filesystem import FilesystemMiddleware, _supports_exe
 
 from src.app.core.sandbox.backend import (
     ROOT_DIR_CONFIG_KEY,
+    DocumentAwareBackend,
     ReadOnlyBackend,
     build_folder_backend,
     make_backend_factory,
@@ -81,6 +82,31 @@ class TestReadWithinRoot:
         assert matches  # non-empty list of GrepMatch
         assert matches[0]["path"].startswith("/workspace/")
 
+    def test_read_extracts_text_from_binary_document(self, tmp_path):
+        # A binary Office/PDF doc would crash a raw UTF-8 read; the document-aware backend must
+        # return extracted text instead (regression: PDF read looped to the recursion limit).
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["mes", "receita"])
+        ws.append(["jan", 1000])
+        wb.save(str(tmp_path / "vendas.xlsx"))
+
+        backend = _backend_for(str(tmp_path))
+        out = backend.read("/workspace/vendas.xlsx")
+        assert "receita" in out
+        assert "1000" in out
+
+    def test_read_scanned_document_steers_to_semantic_search(self, tmp_path):
+        # A document with no extractable text must not loop — it returns a clear, terminal hint.
+        from openpyxl import Workbook
+
+        Workbook().save(str(tmp_path / "empty.xlsx"))  # no rows => no extractable text
+        backend = _backend_for(str(tmp_path))
+        out = backend.read("/workspace/empty.xlsx")
+        assert "buscar_documentos" in out
+
 
 # ---------------------------------------------------------------------------
 # (b) writes denied — read-only
@@ -113,8 +139,9 @@ class TestReadOnly:
         assert not (tmp_path / "new.txt").exists()
 
     def test_upload_denied(self, tmp_path):
-        backend = build_folder_backend(str(tmp_path))  # default: read-only
-        assert isinstance(backend, ReadOnlyBackend)
+        backend = build_folder_backend(str(tmp_path))  # default: read-only, document-aware wrapper
+        assert isinstance(backend, DocumentAwareBackend)
+        assert isinstance(backend._inner, ReadOnlyBackend)  # read-only enforcement preserved
         responses = backend.upload_files([("/x.txt", b"data")])
         assert responses[0].error == "permission_denied"
 
@@ -234,16 +261,20 @@ class TestBackendInvariants:
         assert _supports_execution(backend) is False  # => FilesystemMiddleware drops `execute`
 
     def test_virtual_mode_is_enforced(self, tmp_path):
-        readonly = build_folder_backend(str(tmp_path))  # read-only wraps the FS backend
+        backend = build_folder_backend(str(tmp_path))  # document-aware → read-only → FS backend
+        assert isinstance(backend, DocumentAwareBackend)
+        readonly = backend._inner
         assert isinstance(readonly, ReadOnlyBackend)
-        # The wrapped FilesystemBackend must run in virtual mode (traversal guard).
+        # The innermost FilesystemBackend must run in virtual mode (traversal guard).
         assert readonly._inner.virtual_mode is True
 
-    def test_writable_backend_is_bare_filesystem_in_virtual_mode(self, tmp_path):
+    def test_writable_backend_wraps_bare_filesystem_in_virtual_mode(self, tmp_path):
         writable = build_folder_backend(str(tmp_path), writable=True)
-        # Writable => the FilesystemBackend itself (not wrapped read-only), still virtual_mode.
-        assert isinstance(writable, FilesystemBackend)
-        assert writable.virtual_mode is True
+        # Writable => document-aware wrapper over the bare FilesystemBackend (not read-only wrapped).
+        assert isinstance(writable, DocumentAwareBackend)
+        fs = writable._inner
+        assert isinstance(fs, FilesystemBackend)
+        assert fs.virtual_mode is True
 
 
 # ---------------------------------------------------------------------------

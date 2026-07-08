@@ -11,6 +11,7 @@ from typing import Optional
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     HTTPException,
     Request,
@@ -38,6 +39,8 @@ from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
 from src.app.core.hitl.pending_model import PendingActionStatus
+from src.app.core.ingestion.source_repository import IngestedFileRepository
+from src.app.core.ingestion.trigger import is_ingesting, schedule_folder_ingestion
 from src.app.core.db.connect import build_db_url, connect_readonly
 from src.app.core.security import decrypt
 from src.app.core.sandbox import registry
@@ -105,6 +108,7 @@ async def connect_db(
 async def grant_folder(
     request: Request,
     body: GrantFolderRequest,
+    background: BackgroundTasks,
     session: Session = Depends(get_current_session),
 ) -> GrantFolderResponse:
     """Grant read-only access to a host folder, served by the session's FilesystemBackend."""
@@ -115,6 +119,9 @@ async def grant_folder(
     # No external resource to create — the read-only FilesystemBackend is resolved per
     # invocation from the granted path (no docker run on the first-response path).
     await registry.set_folder(session.id, path)
+    # Ingest the folder in the background (incremental) so semantic search has a corpus. Scoped to
+    # the same (user, agent) the retrieval tool queries, so the two always match.
+    schedule_folder_ingestion(background, session.user_id, session.agent_id, path)
     logger.info("folder_granted", session_id=session.id, folder=path)
     return GrantFolderResponse(granted=True, folder=path)
 
@@ -465,14 +472,19 @@ async def source_status(
     request: Request,
     session: Session = Depends(get_current_session),
 ) -> SourceStatusResponse:
-    """Report which sources are connected for this session."""
+    """Report which sources are connected for this session, plus the folder's ingestion summary."""
     res = await registry.get(session.id)
+    doc_count, page_count = await IngestedFileRepository().get_summary(session.user_id, session.agent_id)
+    indexing = is_ingesting(session.user_id, session.agent_id)
     if res is None:
-        return SourceStatusResponse(db_connected=False)
+        return SourceStatusResponse(db_connected=False, doc_count=doc_count, page_count=page_count, indexing=indexing)
     return SourceStatusResponse(
         db_connected=res.db is not None,
         dialect=res.db_dialect,
         folder=res.folder,
+        doc_count=doc_count,
+        page_count=page_count,
+        indexing=indexing,
     )
 
 
