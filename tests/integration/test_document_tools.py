@@ -11,6 +11,7 @@ from httpx import AsyncClient
 from src.app.agents.data_agent.document_tools import make_document_tools
 from src.app.core.ingestion.chunk_model import DocumentChunk
 from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
+from src.app.core.ingestion.normalize import normalize_text
 from src.app.core.ingestion.source_model import derive_doc_id
 from src.app.core.ingestion.source_repository import IngestedFileRepository
 from src.app.core.sandbox.registry import registry
@@ -102,3 +103,35 @@ class TestReadDocument:
         res = await registry.get("sess-partial")
         assert (doc_id, 1) in res.read_pages
         assert (doc_id, 2) not in res.read_pages  # page 2 was NOT read (deferred to next call)
+
+
+class TestNormalize:
+    def test_folds_accent_case_and_ordinal(self):
+        # The transcript case: the doc says "nº", the user types "no" — they must match.
+        assert normalize_text("Emenda Constitucional nº 100") == "emenda constitucional no 100"
+        assert normalize_text("SÃO  PAULO") == "sao paulo"
+
+
+class TestSearchDocuments:
+    async def test_literal_hit_across_accent_and_case(self, client: AsyncClient):
+        doc_id = await _seed_document(
+            "/docs/cf.pdf",
+            "hash_cf_0001",
+            ["Texto irrelevante.", "Ver a Emenda Constitucional nº 100, de 2019, sobre orçamento.\n270"],
+        )
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, "sess-search")}
+
+        # Query without the º and without accents still matches the accented source text.
+        out = await tools["search_documents"].ainvoke({"query": "Emenda Constitucional no 100"})
+        assert doc_id in out
+        assert "PDF pág. 2" in out and "fólio 270" in out
+        assert "Busca literal" in out and "emenda constitucional no 100" in out  # normalized query echoed
+
+    async def test_empty_result_is_distinguishable(self, client: AsyncClient):
+        await _seed_document("/docs/x.pdf", "hash_x_0001", ["conteúdo qualquer"])
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, "sess-search2")}
+
+        out = await tools["search_documents"].ainvoke({"query": "termo-que-nao-existe-42"})
+        assert "Nenhuma ocorrência literal" in out
+        assert "termo-que-nao-existe-42" in out  # the normalized query, so it's not a malformed-query mystery
+        assert "buscar_documentos" in out  # steer to semantic search for concepts

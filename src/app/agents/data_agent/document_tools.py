@@ -15,11 +15,13 @@ enforces. Reading records the pages into the session's read set — the basis fo
 """
 
 import re
+from itertools import groupby
 from typing import List, Optional
 
 from langchain_core.tools import BaseTool, tool
 
 from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
+from src.app.core.ingestion.normalize import normalize_text
 from src.app.core.ingestion.source_repository import IngestedFileRepository
 from src.app.core.sandbox.registry import registry
 
@@ -27,6 +29,9 @@ from src.app.core.sandbox.registry import registry
 # enough that reading a range is cheap, large enough for a few dense pages.
 _MAX_LIST = 50
 _MAX_READ_CHARS = 6000
+# Literal-search caps: how many hits to return, and the context padding around each match.
+_MAX_HITS = 20
+_EXCERPT_PAD = 45
 
 # A printed folio is usually a bare number (optionally dash-wrapped) on the first or last line.
 _FOLIO_RE = re.compile(r"^\s*[-–—]?\s*(\d{1,4})\s*[-–—]?\s*$")
@@ -68,6 +73,14 @@ def _page_header(pdf_index: int, total: int, text: str, needs_ocr: bool) -> str:
     elif needs_ocr:
         header += " · sem texto (provável página escaneada)"
     return header + " ==="
+
+
+def _excerpt(original: str, approx_pos: int, qlen: int) -> str:
+    """A short one-line context window around a match, taken from the original (accented) text."""
+    start = max(0, approx_pos - _EXCERPT_PAD)
+    end = min(len(original), approx_pos + qlen + _EXCERPT_PAD)
+    snippet = original[start:end].replace("\n", " ").strip()
+    return f"{'…' if start > 0 else ''}{snippet}{'…' if end < len(original) else ''}"
 
 
 def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session_id: Optional[str]) -> List[BaseTool]:
@@ -161,4 +174,57 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
             await registry.mark_pages_read(session_id, doc_id, range(start_page, end + 1))
         return "\n\n".join(blocks)
 
-    return [list_documents, read_document]
+    @tool
+    async def search_documents(query: str) -> str:
+        """Busca LITERAL de um termo exato no texto dos documentos (ignora acento e caixa).
+
+        É a ferramenta certa para termo EXATO: número de processo, CNPJ, artigo, data, valor, nome
+        próprio, "Emenda Constitucional nº 100". É a ferramenta ERRADA para conceito parafraseado ou
+        pergunta em linguagem natural — para isso use `buscar_documentos` (busca por significado).
+        Retorna as coordenadas de cada ocorrência (doc_id, página do PDF, fólio) e um trecho curto —
+        NUNCA a página inteira; para ler, chame depois `read_document(doc_id, página, página)`.
+        Informa a consulta já normalizada: se voltar vazio, o termo realmente não está no texto
+        (não é problema de acento/caixa) — tente sinônimos ou `buscar_documentos`, não repita variações de acento.
+        """
+        norm_query = normalize_text(query)
+        if not norm_query:
+            return "Consulta vazia. Informe um termo exato (número, artigo, data, valor ou nome próprio)."
+        docs = await manifest.list_all(user_id, agent_id)
+        if not docs:
+            return "Nenhum documento indexado para este agente ainda."
+        by_source = {d.source_path: d for d in docs}
+        all_chunks = await chunks_repo.get_chunks(user_id, agent_id)  # ordered by (source_path, chunk_index)
+
+        hits: List[tuple] = []
+        truncated = False
+        for source_path, group in groupby(all_chunks, key=lambda c: c.source_path):
+            doc = by_source.get(source_path)
+            if doc is None:
+                continue
+            for idx, page in enumerate(_reassemble_pages(list(group)), start=1):
+                pos = normalize_text(page["text"]).find(norm_query)
+                if pos == -1:
+                    continue
+                hits.append((doc, idx, _detect_folio(page["text"]), _excerpt(page["text"], pos, len(norm_query))))
+                if len(hits) >= _MAX_HITS:
+                    truncated = True
+                    break
+            if truncated:
+                break
+
+        if not hits:
+            return (
+                f'Nenhuma ocorrência literal de "{norm_query}" (busca exata, ignorando acento e caixa). '
+                "Se for um conceito ou termo parafraseado, use `buscar_documentos` (busca por significado)."
+            )
+        lines = [
+            f'- {doc.doc_id} "{doc.title}" · PDF pág. {idx}'
+            f'{f" · fólio {folio}" if folio is not None else ""} · "{excerpt}"'
+            for doc, idx, folio, excerpt in hits
+        ]
+        header = f'Busca literal por "{norm_query}" — {len(hits)} ocorrência(s)'
+        if truncated:
+            header += f" (mostrando as primeiras {_MAX_HITS})"
+        return header + ". Leia a página com read_document(doc_id, pág, pág):\n" + "\n".join(lines)
+
+    return [list_documents, read_document, search_documents]
