@@ -58,6 +58,17 @@ class DocumentChunkRepository:
         )
         return len(chunks)
 
+    async def count_embedded(self, user_id: int, agent_id: Optional[int]) -> int:
+        """How many chunks are embedded (searchable) for a (user, agent) — 0 means a dead corpus."""
+        with session_scope() as session:
+            statement = select(func.count()).select_from(DocumentChunk).where(
+                DocumentChunk.user_id == user_id,
+                DocumentChunk.embedding.is_not(None),
+            )
+            if agent_id is not None:
+                statement = statement.where(DocumentChunk.agent_id == agent_id)
+            return int(session.exec(statement).one())
+
     async def count_by_source(self, user_id: int, agent_id: Optional[int], source_path: str) -> int:
         """Number of chunks currently stored for one document — used to detect a wiped corpus."""
         with session_scope() as session:

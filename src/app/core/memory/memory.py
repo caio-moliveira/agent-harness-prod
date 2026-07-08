@@ -41,7 +41,6 @@ async def get_memory_instance() -> AsyncMemory:
                     "config": {"model": settings.LONG_TERM_MEMORY_MODEL},
                 },
                 "embedder": {"provider": "openai", "config": {"model": settings.LONG_TERM_MEMORY_EMBEDDER_MODEL}},
-                # "custom_fact_extraction_prompt": load_custom_fact_extraction_prompt(),
             }
         )
     return _memory_instance
@@ -88,11 +87,22 @@ async def update_memory(
         agent_id: Optional agent scope for per-agent isolation.
     """
     try:
+        # Only the USER's turns become durable memory — never the assistant's transient statements
+        # (e.g. "não encontrei" / "não tenho documentos"), which otherwise get stored as "facts" and
+        # then replayed every turn, making the agent give up before even calling its tools. This is
+        # mem0's own recommended user-only extraction pattern.
+        user_messages = [
+            m
+            for m in messages
+            if isinstance(m, dict) and m.get("role") == "user" and isinstance(m.get("content"), str) and m["content"].strip()
+        ]
+        if not user_messages:
+            return
         memory = await get_memory_instance()
         kwargs = {"user_id": str(user_id), "metadata": metadata}
         if agent_id is not None:
             kwargs["agent_id"] = str(agent_id)
-        await memory.add(messages, **kwargs)
+        await memory.add(user_messages, **kwargs)
         logger.info("long_term_memory_updated_successfully", user_id=user_id, agent_id=agent_id)
     except Exception as e:
         logger.exception(

@@ -745,6 +745,28 @@ class TestWorkspaceContext:
         assert "vendas.csv" in ctx
         assert "Projeto Vendas" in ctx  # README content inlined
 
+    def test_brief_lists_indexed_manifest_not_disk(self, tmp_path):
+        # With the ingested manifest, the brief must reflect what the tools can SEARCH.
+        from types import SimpleNamespace
+
+        from src.app.agents.data_agent.context import build_workspace_context
+
+        docs = [
+            SimpleNamespace(title="lei.pdf", page_count=5, text_layer="native"),
+            SimpleNamespace(title="representacao.pdf", page_count=12, text_layer="mixed"),
+        ]
+        ctx = build_workspace_context(str(tmp_path), None, docs)
+        assert "indexados" in ctx.lower()
+        assert "lei.pdf" in ctx and "5 págs" in ctx
+        assert "representacao.pdf" in ctx
+
+    def test_brief_says_indexing_in_progress_when_manifest_empty(self, tmp_path):
+        # Folder attached but nothing indexed yet → don't promise searchable files.
+        from src.app.agents.data_agent.context import build_workspace_context
+
+        ctx = build_workspace_context(str(tmp_path), None, [])
+        assert "sendo indexados" in ctx
+
     def test_empty_when_no_sources(self):
         from src.app.agents.data_agent.context import build_workspace_context
 

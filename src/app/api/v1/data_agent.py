@@ -39,8 +39,9 @@ from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
 from src.app.core.hitl.pending_model import PendingActionStatus
+from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
 from src.app.core.ingestion.source_repository import IngestedFileRepository
-from src.app.core.ingestion.trigger import is_ingesting, schedule_folder_ingestion
+from src.app.core.ingestion.trigger import is_ingesting, run_folder_ingestion, schedule_folder_ingestion
 from src.app.core.db.connect import build_db_url, connect_readonly
 from src.app.core.security import decrypt
 from src.app.core.sandbox import registry
@@ -155,6 +156,23 @@ async def query_sources(
         raise HTTPException(status_code=500, detail="Erro ao processar a consulta.")
 
 
+async def _selfheal_corpus_if_needed(user_id: int, agent_id: Optional[int], folder: str) -> None:
+    """Repair a stale corpus in the background so the agent never reports "no documents" wrongly.
+
+    If the agent has a bound folder but no searchable corpus (0 embedded chunks — never ingested,
+    wiped, or left un-embedded), kick off a background ingestion so the session repairs itself.
+    Best-effort and idempotent: the ingestion trigger's in-flight guard prevents concurrent runs,
+    and any failure is swallowed.
+    """
+    try:
+        if await DocumentChunkRepository().count_embedded(user_id, agent_id) > 0:
+            return  # corpus is healthy
+        logger.info("corpus_selfheal_triggered", user_id=user_id, agent_id=agent_id, folder=folder)
+        asyncio.create_task(run_folder_ingestion(user_id, agent_id, folder))
+    except Exception:  # noqa: BLE001 - self-heal must never break the chat
+        logger.exception("corpus_selfheal_failed", user_id=user_id, agent_id=agent_id)
+
+
 async def _ensure_agent_folder(res: SessionResources, session: Session, folder: str) -> None:
     """Bind the agent's configured folder into this session, if not already bound.
 
@@ -244,12 +262,18 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
                 # Read-write access is opt-in per agent (default read-only).
                 folder_writable = bool(config.get("folder_writable", False))
                 await _ensure_agent_folder(res, session, folder)
+                if res.folder:
+                    # Repair a never-ingested/wiped corpus in the background so the agent doesn't
+                    # report "no documents" for a folder it clearly has.
+                    await _selfheal_corpus_if_needed(session.user_id, session.agent_id, res.folder)
             if config.get("database"):
                 await _ensure_agent_database(res, session, config["database"])
             skills_dir = await _materialize_agent_skills(session.agent_id, agent.user_id, config.get("skills"))
-    # Prime the agent with a briefing of its attached sources (files + DB schema) so it is
-    # grounded from the first turn without needing to call a tool.
-    workspace_context = build_workspace_context(folder, res.db)
+    # Prime the agent with a briefing of its attached sources (the indexed document manifest + DB
+    # schema) so it is grounded from the first turn — and so the briefing matches exactly what the
+    # document tools can search (never a disk file the tools can't reach).
+    docs = await IngestedFileRepository().list_all(session.user_id, session.agent_id) if res.folder else None
+    workspace_context = build_workspace_context(res.folder, res.db, docs)
     return build_data_agent(
         res,
         user_id=session.user_id,
