@@ -147,6 +147,21 @@ class Settings:
         self.MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2000"))
         self.MAX_LLM_CALL_RETRIES = int(os.getenv("MAX_LLM_CALL_RETRIES", "3"))
 
+        # Chat-model provider. The agents' chat models are built by src/app/core/llm/factory.py from
+        # these settings; long-term memory (mem0) and evals keep their own OpenAI models. Anthropic
+        # (Claude Sonnet 5) is the default so prompt caching is available out of the box; set
+        # LLM_PROVIDER=openai to keep the previous OpenAI behavior.
+        self.LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic").lower()
+        self.ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+        self.ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
+        # Anthropic requires an explicit output cap. Streaming is used on the hot paths, so a
+        # generous default leaves room for large deliverables without HTTP timeouts.
+        self.ANTHROPIC_MAX_TOKENS = int(os.getenv("ANTHROPIC_MAX_TOKENS", "8192"))
+        # Prompt caching (prefix match). Deep agents cache via AnthropicPromptCachingMiddleware; the
+        # chatbot caches a stable system block. Only meaningful when LLM_PROVIDER=anthropic.
+        self.PROMPT_CACHING_ENABLED = os.getenv("PROMPT_CACHING_ENABLED", "true").lower() in ("true", "1", "yes")
+        self.PROMPT_CACHE_TTL = os.getenv("PROMPT_CACHE_TTL", "5m")  # "5m" or "1h"
+
         # Long term memory Configuration
         self.LONG_TERM_MEMORY_MODEL = os.getenv("LONG_TERM_MEMORY_MODEL", "gpt-5-nano")
         self.LONG_TERM_MEMORY_EMBEDDER_MODEL = os.getenv("LONG_TERM_MEMORY_EMBEDDER_MODEL", "text-embedding-3-small")
