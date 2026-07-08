@@ -94,7 +94,9 @@ async def ingest_file(
         )
         for cd in chunk_datas
     ]
-    await repo.add_chunks(models)
+    # Atomic swap (delete old + insert new in one transaction) so a re-ingest is idempotent and can
+    # never leave the document with zero chunks if it is interrupted.
+    await repo.replace_source(user_id, agent_id, path, models)
     page_count, text_layer, confidence = derive_manifest_meta(parsed)
     return IngestFileResult(
         chunk_count=len(models),

@@ -83,6 +83,57 @@ class TestIncrementalSync:
         await sync_folder(str(tmp_path), 1, 7, FakeEmbedder(), chunk_repo=crepo)
         assert await crepo.get_chunks(1, 8) == []
 
+    async def test_self_heals_manifest_without_chunks(self, client: AsyncClient, tmp_path):
+        # Reproduce the dead state: manifest says "ingested" but the chunks were wiped (an earlier
+        # sync interrupted between delete and re-insert). A re-sync must repair, not skip forever.
+        from src.app.core.ingestion import DocumentChunkRepository, sync_folder
+
+        (tmp_path / "a.txt").write_text("vendas e receita", encoding="utf-8")
+        crepo = DocumentChunkRepository()
+        await sync_folder(str(tmp_path), 1, 7, FakeEmbedder(), chunk_repo=crepo)
+        src = str(tmp_path / "a.txt")
+        await crepo.delete_by_source(1, 7, src)  # wipe chunks, keep the manifest row
+        assert await crepo.count_by_source(1, 7, src) == 0
+
+        # Hash is unchanged, so the old code would skip — the fix must re-ingest the missing chunks.
+        result = await sync_folder(str(tmp_path), 1, 7, FakeEmbedder(), chunk_repo=crepo)
+        assert result.unchanged == 0
+        assert await crepo.count_by_source(1, 7, src) > 0
+
+    async def test_empty_listing_does_not_wipe_corpus(self, client: AsyncClient, tmp_path):
+        # A transiently unreadable/wrong folder returns no files; that must NOT purge the corpus.
+        from src.app.core.ingestion import DocumentChunkRepository, sync_folder
+        from src.app.core.ingestion.source_repository import IngestedFileRepository
+
+        (tmp_path / "a.txt").write_text("contrato", encoding="utf-8")
+        crepo = DocumentChunkRepository()
+        await sync_folder(str(tmp_path), 1, 7, FakeEmbedder(), chunk_repo=crepo)
+        src = str(tmp_path / "a.txt")
+        assert await crepo.count_by_source(1, 7, src) > 0
+
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        result = await sync_folder(str(empty), 1, 7, FakeEmbedder(), chunk_repo=crepo)
+        assert result.removed == 0
+        assert await crepo.count_by_source(1, 7, src) > 0  # corpus preserved
+        assert len(await IngestedFileRepository().get_known(1, 7)) >= 1  # manifest preserved
+
+    async def test_reingest_swaps_atomically_no_duplicates(self, client: AsyncClient, tmp_path):
+        from src.app.core.ingestion import DocumentChunkRepository, sync_folder
+
+        f = tmp_path / "a.txt"
+        f.write_text("vendas antigas", encoding="utf-8")
+        crepo = DocumentChunkRepository()
+        await sync_folder(str(tmp_path), 1, 7, FakeEmbedder(), chunk_repo=crepo)
+
+        f.write_text("contrato com prazo novo", encoding="utf-8")  # changed → re-ingest
+        await sync_folder(str(tmp_path), 1, 7, FakeEmbedder(), chunk_repo=crepo)
+
+        chunks = await crepo.get_chunks_by_source(1, 7, str(f))
+        assert chunks  # not wiped
+        assert all("vendas" not in c.content for c in chunks)  # old content swapped out
+        assert any("contrato" in c.content for c in chunks)  # new content present
+
     async def test_sync_populates_manifest_metadata(self, client: AsyncClient, tmp_path):
         # The IngestedFile row is the document manifest: sync must fill doc_id/title/page_count so
         # the document tools can catalog the corpus without touching disk.
