@@ -81,10 +81,11 @@ class TestReadDocument:
         assert (doc_id, 1) in res.read_pages and (doc_id, 2) in res.read_pages
         assert (doc_id, 3) not in res.read_pages
 
-    async def test_unknown_doc_id(self, client: AsyncClient):
+    async def test_unknown_doc_id_empty_corpus(self, client: AsyncClient):
+        # No documents indexed at all → guide the agent to connect a folder, not a bare "not found".
         tools = {t.name: t for t in make_document_tools(USER, AGENT, "sess-x")}
         out = await tools["read_document"].ainvoke({"doc_id": "doc_missing", "start_page": 1, "end_page": 1})
-        assert "não encontrado" in out
+        assert "Nenhum documento indexado" in out
 
     async def test_out_of_range(self, client: AsyncClient):
         doc_id = await _seed_document("/docs/small.pdf", "hash_small_1", ["only page"])
@@ -196,3 +197,47 @@ class TestReadPageImage:
         tools = {t.name: t for t in make_document_tools(USER, AGENT, "sess-img4")}
         result = await tools["read_page_image"].ainvoke(_img_call(doc_id, 1))
         assert "indisponível" in result.content
+
+
+class TestFuzzyDocResolution:
+    """The real transcript failure: the model dropped the doc_ prefix and used the filename, and
+    read_document failed 5x. Resolution must tolerate those and self-correct in one step."""
+
+    async def test_resolves_by_filename(self, client: AsyncClient):
+        await _seed_document("/docs/representacao_986639.pdf", "hashrep000001", ["III – DECISÃO texto aqui", "b"])
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, "sess-fuzzy1")}
+        # Model uses the filename (no extension) instead of the opaque doc_id.
+        out = await tools["read_document"].ainvoke({"doc_id": "representacao_986639", "start_page": 1, "end_page": 1})
+        assert "DECISÃO texto aqui" in out
+
+    async def test_resolves_bare_id_without_doc_prefix(self, client: AsyncClient):
+        doc_id = await _seed_document("/docs/x.pdf", "hashbare00001", ["conteudo unico"])
+        bare = doc_id[len("doc_") :]  # the model dropped the "doc_" prefix
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, "sess-fuzzy2")}
+        out = await tools["read_document"].ainvoke({"doc_id": bare, "start_page": 1, "end_page": 1})
+        assert "conteudo unico" in out
+
+    async def test_not_found_echoes_catalog(self, client: AsyncClient):
+        await _seed_document("/docs/lei-10741.pdf", "hashlei000001", ["texto"])
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, "sess-fuzzy3")}
+        out = await tools["read_document"].ainvoke({"doc_id": "documento-inexistente", "start_page": 1, "end_page": 1})
+        assert "não encontrado" in out
+        assert "lei-10741.pdf" in out  # catalog echoed → model fixes it in one step
+
+    async def test_start_page_zero_gives_clear_range_message(self, client: AsyncClient):
+        # After resolution (by filename), an invalid start_page must give a range message — not
+        # the misleading "não encontrado" the old code returned.
+        await _seed_document("/docs/relatorio.pdf", "hashrel000001", ["p1", "p2"])
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, "sess-fuzzy4")}
+        out = await tools["read_document"].ainvoke({"doc_id": "relatorio", "start_page": 0, "end_page": 1})
+        assert "Intervalo inválido" in out
+
+    async def test_read_page_image_resolves_by_filename(self, client: AsyncClient, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "SANDBOX_ALLOWED_ROOTS", [str(tmp_path)])
+        pdf = tmp_path / "laudo_pericial.pdf"
+        _make_pdf(pdf, pages=1)
+        await _seed_document(str(pdf), "hashlaudo0001", ["p"])
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, "sess-fuzzy5")}
+        call = {"name": "read_page_image", "args": {"doc_id": "laudo_pericial", "page": 1}, "id": "c", "type": "tool_call"}
+        result = await tools["read_page_image"].ainvoke(call)
+        assert any(b.get("type") == "image" for b in result.content_blocks)

@@ -114,12 +114,58 @@ def _excerpt(original: str, approx_pos: int, qlen: int) -> str:
     return f"{'…' if start > 0 else ''}{snippet}{'…' if end < len(original) else ''}"
 
 
+def _strip_ext(name: str) -> str:
+    """Filename without its extension (so 'representacao_986639.pdf' matches 'representacao_986639')."""
+    return os.path.splitext(name)[0]
+
+
+def _catalog_lines(docs) -> str:
+    """A compact catalog (doc_id + title + pages), echoed in errors so the model self-corrects."""
+    return "\n".join(f'- {d.doc_id} · "{d.title}" ({d.page_count} pág)' for d in docs[:_MAX_LIST])
+
+
 def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session_id: Optional[str]) -> List[BaseTool]:
     """Build ``list_documents`` + ``read_document`` bound to one (user, agent) corpus. Empty if no user."""
     if user_id is None:
         return []
     manifest = IngestedFileRepository()
     chunks_repo = DocumentChunkRepository()
+
+    async def _resolve_doc(ref: str):
+        """Resolve a model-supplied document reference tolerantly.
+
+        Models rarely copy an opaque hash id verbatim, so we accept: the exact ``doc_id``, the id
+        with/without the ``doc_`` prefix, the filename/title (extension optional, accent/case-
+        insensitive), or a unique partial match. Returns ``(record, None)`` on a unique hit;
+        otherwise ``(None, message)`` where the message lists the catalog so the model can
+        self-correct in ONE step.
+        """
+        ref_s = (ref or "").strip()
+        docs = await manifest.list_all(user_id, agent_id)
+        if not docs:
+            return None, "Nenhum documento indexado para este agente ainda. (Conecte/atualize a pasta em Fontes.)"
+        # 1) doc_id, tolerating a missing/extra "doc_" prefix.
+        id_variants = {ref_s, f"doc_{ref_s}"}
+        if ref_s.startswith("doc_"):
+            id_variants.add(ref_s[len("doc_") :])
+        by_id = [d for d in docs if d.doc_id in id_variants]
+        if len(by_id) == 1:
+            return by_id[0], None
+        # 2) filename / title (extension optional, normalized), then a unique partial match.
+        nref = normalize_text(_strip_ext(ref_s))
+        if nref:
+            by_title = [d for d in docs if normalize_text(_strip_ext(d.title)) == nref]
+            if len(by_title) == 1:
+                return by_title[0], None
+            partial = [d for d in docs if nref in normalize_text(d.title) or nref in d.doc_id.lower()]
+            if len(partial) == 1:
+                return partial[0], None
+            if len(partial) > 1:
+                return None, f'"{ref_s}" é ambíguo — use o doc_id exato:\n' + _catalog_lines(partial)
+        return None, (
+            f'Documento "{ref_s}" não encontrado. Use um destes doc_id (exato) ou o nome do arquivo:\n'
+            + _catalog_lines(docs)
+        )
 
     @tool
     async def list_documents() -> str:
@@ -152,15 +198,17 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
     async def read_document(doc_id: str, start_page: int, end_page: int) -> str:
         """Lê um intervalo EXPLÍCITO de páginas (`start_page`..`end_page`) de um documento pelo `doc_id`.
 
-        Não existe leitura do documento inteiro — informe o intervalo. Use o `doc_id` de `list_documents`
-        (nunca o título). Para saber QUAIS páginas ler, use antes `buscar_documentos` (que aponta a página).
+        Não existe leitura do documento inteiro — informe o intervalo. Identifique o documento pelo
+        `doc_id` de `list_documents`/`search_documents` (ou pelo nome do arquivo — ambos funcionam).
+        Para saber QUAIS páginas ler, use antes `search_documents` (termo exato) ou `buscar_documentos`.
         A leitura é limitada por um teto: se o intervalo não couber, devolve o que coube e informa o próximo
         intervalo a pedir (nunca trunca em silêncio). Cada página traz o índice do PDF e, quando detectável,
         o fólio impresso — com aviso de divergência entre os dois.
         """
-        record = await manifest.get_by_doc_id(user_id, agent_id, doc_id)
+        record, err = await _resolve_doc(doc_id)
         if record is None:
-            return f"Documento '{doc_id}' não encontrado. Use list_documents para ver os doc_id disponíveis."
+            return err
+        doc_id = record.doc_id  # canonicalize so page-tracking + the "continue" hint use the real id
         chunks = await chunks_repo.get_chunks_by_source(user_id, agent_id, record.source_path)
         pages = _reassemble_pages(chunks)
         total = len(pages)
@@ -269,9 +317,10 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
         que aparece em `read_document`/`search_documents`). Custa mais que ler texto — use quando a
         imagem realmente ajuda.
         """
-        record = await manifest.get_by_doc_id(user_id, agent_id, doc_id)
+        record, err = await _resolve_doc(doc_id)
         if record is None:
-            return f"Documento '{doc_id}' não encontrado. Use list_documents para ver os doc_id."
+            return err
+        doc_id = record.doc_id  # canonicalize for page-read tracking / cache key
         if not record.source_path.lower().endswith(".pdf"):
             return "read_page_image só rasteriza PDFs. Para este documento use read_document (texto)."
         if page < 1 or page > record.page_count:
