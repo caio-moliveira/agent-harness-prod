@@ -147,3 +147,8 @@ least one validation step per item. Update `- [ ]` → `- [x]` as you complete e
   target the `.venv`.
 - `schema.sql` at the root is legacy SQLite-flavored DDL — the real schema is created by SQLModel
   (`SQLModel.metadata.create_all`) and by LangGraph's checkpointer at startup. Don't rely on it.
+- **Schema changes to existing tables go through Alembic** (`migrations/`, see `migrations/README`).
+  `create_all` only creates missing tables (bootstrap + SQLite tests); it never ALTERs. Add a model
+  column → generate a migration (`make migration m="…"`), review it (autogenerate over-reaches —
+  trim to the intended change, add `server_default` for NOT NULL), then `make migrate`. When you add
+  a new `table=True` model, also add it to `src/app/core/db/models_registry.py`.
