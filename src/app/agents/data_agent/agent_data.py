@@ -10,17 +10,16 @@ from typing import Any, AsyncGenerator, Optional
 from deepagents import create_deep_agent
 from langchain.agents.middleware import PIIMiddleware
 from langchain_community.utilities import SQLDatabase
-from langchain_openai import ChatOpenAI
 
 from src.app.agents.data_agent.artifact_tools import make_artifact_tools
 from src.app.agents.data_agent.tools import make_memory_tools
 from src.app.agents.tools.search_tool import SearchAPI, get_search_tool
-from src.app.core.common.config import settings
 from src.app.core.common.graph_utils import process_messages
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
 from src.app.core.db.readonly import make_readonly_sql_tools
 from src.app.core.learning import get_reflected_preferences
+from src.app.core.llm.factory import active_model_name, create_chat_model
 from src.app.core.sandbox.backend import ROOT_DIR_CONFIG_KEY, make_backend_factory
 from src.app.core.memory.memory import bg_update_memory, get_relevant_memory
 from src.app.core.middleware import (
@@ -120,7 +119,7 @@ class DataAgent:
             user_id=user_id,
             config=self._invoke_config(session_id, user_id),
             agent_name=self.name,
-            metadata={"model_name": settings.DEFAULT_LLM_MODEL},
+            metadata={"model_name": active_model_name()},
         )
         return await self._pipeline.run(ctx)
 
@@ -339,7 +338,7 @@ def _create_data_deep_agent(
     still confined to the folder); the ``execute`` tool is never exposed (the backend is not a
     sandbox).
     """
-    model = ChatOpenAI(model=settings.DEFAULT_LLM_MODEL, temperature=0, api_key=settings.OPENAI_API_KEY)
+    model = create_chat_model()
     tools = make_memory_tools(user_id, agent_id) if memory_enabled else []
     # Semantic search over this agent's ingested documents (#14), scoped to (user, agent).
     tools = tools + make_retrieval_tools(user_id, agent_id)
@@ -364,6 +363,9 @@ def _create_data_deep_agent(
         # granted folder (still confined to /workspace).
         prompt = f"{prompt}\n{_WRITABLE_FOLDER_NOTE}"
 
+    # create_deep_agent already bundles SummarizationMiddleware (context summarization near the
+    # window) and AnthropicPromptCachingMiddleware (prompt caching, active once the model is
+    # Anthropic) into its default stack — we only add PII redaction on top.
     kwargs: dict[str, Any] = {
         "model": model,
         "tools": tools,

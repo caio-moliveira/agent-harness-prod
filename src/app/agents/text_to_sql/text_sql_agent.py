@@ -6,7 +6,6 @@ from deepagents.backends import FilesystemBackend
 from langchain.agents.middleware import PIIMiddleware
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_community.utilities import SQLDatabase
-from langchain_openai import ChatOpenAI
 
 from src.app.core.middleware import (
     AgentContext,
@@ -16,9 +15,9 @@ from src.app.core.middleware import (
     GuardrailMiddleware,
     LoggingMiddleware,
 )
-from src.app.core.common.config import settings
 from src.app.core.common.graph_utils import process_messages
 from src.app.core.common.model.message import Message
+from src.app.core.llm.factory import active_model_name, create_chat_model
 
 
 class TextSQLDeepAgent:
@@ -49,7 +48,7 @@ class TextSQLDeepAgent:
             user_id=user_id,
             config=build_invoke_config(session_id, user_id, self.name),
             agent_name=self.name,
-            metadata={"model_name": "gpt-5-mini"},
+            metadata={"model_name": active_model_name()},
         )
         return await self._pipeline.run(ctx)
 
@@ -74,12 +73,15 @@ def create_sql_deep_agent():
     db_path = os.path.join(base_dir, "chinook.db")
     db = SQLDatabase.from_uri(f"sqlite:///{db_path}", sample_rows_in_table_info=3)
 
-    model = ChatOpenAI(model="gpt-5-mini", reasoning={"effort": "medium"}, temperature=0)
+    model = create_chat_model()
 
     # Create SQL toolkit and get tools
     toolkit = SQLDatabaseToolkit(db=db, llm=model)
     sql_tools = toolkit.get_tools()
 
+    # create_deep_agent already bundles SummarizationMiddleware (context summarization near the
+    # window) and AnthropicPromptCachingMiddleware (prompt caching, active once the model is
+    # Anthropic) into its default stack — we only add PII redaction on top.
     agent = create_deep_agent(
         model=model,
         memory=["./AGENTS.md"],  # Agent identity and general instructions

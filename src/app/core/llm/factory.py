@@ -73,10 +73,11 @@ def create_chat_model(
 
 
 def caching_middleware() -> list[AgentMiddleware]:
-    """Prompt-caching middleware for ``create_agent``/deep agents, or ``[]`` when not applicable.
+    """Prompt-caching middleware for a hand-built ``create_agent``, or ``[]`` when not applicable.
 
-    Only Anthropic supports the ``cache_control`` breakpoints this middleware inserts; OpenAI caches
-    matching prefixes automatically, so nothing is returned there.
+    ``create_deep_agent`` already bundles this middleware, so the deep agents don't need it; this
+    helper is for any agent assembled directly with ``create_agent``. Only Anthropic supports the
+    ``cache_control`` breakpoints it inserts; OpenAI caches matching prefixes automatically.
     """
     if not (_is_anthropic() and settings.PROMPT_CACHING_ENABLED):
         return []
