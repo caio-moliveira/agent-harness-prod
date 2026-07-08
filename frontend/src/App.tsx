@@ -11,5 +11,7 @@ export default function App() {
     screen = hasActiveAgent ? <ChatScreen /> : <AgentsScreen />;
   }
 
-  return <div className="h-full bg-slate-950 text-slate-100">{screen}</div>;
+  // No solid background here — the body's navy vignette shows through so every screen
+  // sits on the same lit canvas.
+  return <div className="h-full text-slate-100">{screen}</div>;
 }

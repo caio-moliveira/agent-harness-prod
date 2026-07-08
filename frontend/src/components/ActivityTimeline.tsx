@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ToolStep } from "../lib/types";
 import { labelFor } from "../lib/toolLabels";
+import { IconClose, IconLayers } from "./icons";
 
 function TimelineRow({ step }: { step: ToolStep }) {
   const [open, setOpen] = useState(false);
@@ -39,11 +40,18 @@ function TimelineRow({ step }: { step: ToolStep }) {
  */
 export default function ActivityTimeline({ steps, onClose }: { steps: ToolStep[]; onClose: () => void }) {
   return (
-    <aside className="flex h-full w-72 shrink-0 flex-col border-l border-slate-800 bg-slate-950">
+    <aside className="flex h-full w-72 shrink-0 flex-col border-l border-slate-800 bg-slate-900/40">
       <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-        <h2 className="text-sm font-semibold text-slate-200">Linha do tempo</h2>
-        <button onClick={onClose} title="Ocultar" className="text-slate-500 hover:text-slate-200">
-          ✕
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-200">
+          <IconLayers className="h-4 w-4 text-indigo-300" />
+          Linha do tempo
+        </h2>
+        <button
+          onClick={onClose}
+          title="Ocultar"
+          className="grid h-7 w-7 place-items-center rounded-lg text-slate-500 hover:bg-slate-800 hover:text-slate-200"
+        >
+          <IconClose className="h-4 w-4" />
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">

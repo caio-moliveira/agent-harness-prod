@@ -19,6 +19,12 @@
       "skillPath": "config/skills/deep-agents-orchestration/SKILL.md",
       "computedHash": "bff75455339bb6c2d0aeb75ea9a25d1732228a566d34efd213b52a53f686159f"
     },
+    "design-ux": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "skillPath": "skills/design-ux/SKILL.md",
+      "computedHash": "7c6226d0c3f8887a8160ffe1e8c3e26f9e22178e571bc9a456c2092046b88768"
+    },
     "ecosystem-primer": {
       "source": "langchain-ai/langchain-skills",
       "sourceType": "github",

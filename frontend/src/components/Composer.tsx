@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { KeyboardEvent } from "react";
+import { IconSend } from "./icons";
 
 export default function Composer({
   onSend,
@@ -24,23 +25,33 @@ export default function Composer({
     }
   }
 
+  const canSend = Boolean(text.trim()) && !disabled;
+
   return (
-    <div className="flex items-end gap-2 border-t border-slate-800 bg-slate-950 p-3">
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-        rows={1}
-        placeholder="Escreva uma mensagem…  (Enter envia, Shift+Enter quebra linha)"
-        className="max-h-40 flex-1 resize-none rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm outline-none focus:border-indigo-500"
-      />
-      <button
-        onClick={submit}
-        disabled={disabled || !text.trim()}
-        className="rounded-xl bg-indigo-600 px-4 py-3 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
-      >
-        Enviar
-      </button>
+    <div className="px-3 pb-4 pt-2">
+      {/* One rounded "pill" surface holding the field + send, echoing the reference composer. */}
+      <div className="flex items-end gap-2 rounded-[26px] border border-slate-700 bg-slate-900/80 py-2 pl-4 pr-2 shadow-lg shadow-slate-950/40 backdrop-blur transition-colors focus-within:border-indigo-500/70">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={onKeyDown}
+          rows={1}
+          placeholder="Descreva o que você precisa…"
+          className="max-h-40 flex-1 resize-none self-center bg-transparent py-1.5 text-sm text-slate-100 placeholder:text-slate-500 outline-none"
+        />
+        <button
+          onClick={submit}
+          disabled={!canSend}
+          title="Enviar (Enter)"
+          className="flex shrink-0 items-center gap-1.5 rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+        >
+          <IconSend className="h-4 w-4" />
+          <span className="hidden sm:inline">Enviar</span>
+        </button>
+      </div>
+      <p className="mt-1.5 px-2 text-center text-[11px] text-slate-600">
+        Enter envia · Shift+Enter quebra linha
+      </p>
     </div>
   );
 }

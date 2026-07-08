@@ -1,5 +1,43 @@
 @import "tailwindcss";
 
+/*
+ * Design tokens — inspired by the ux-inspiration reference: a deep navy canvas with a
+ * vivid azure accent. The whole app already speaks in `slate-*` (neutral surfaces/text)
+ * and `indigo-*` (the primary accent), so instead of touching every call site we remap
+ * those two scales here. Changing a value below reskins the entire product coherently.
+ * Semantic status colors (emerald=ok, red=error, amber=warn) are intentionally left alone.
+ */
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, sans-serif;
+
+  /* Navy surface + text ramp (remaps `slate`): cool, blue-tinted neutrals. */
+  --color-slate-50: #eff5fb;
+  --color-slate-100: #e4edf7; /* primary text — near-white, faint cool cast */
+  --color-slate-200: #c6d6ea;
+  --color-slate-300: #9fb4d0; /* strong labels */
+  --color-slate-400: #7189a8; /* muted text */
+  --color-slate-500: #526a8a; /* dim / placeholder */
+  --color-slate-600: #3a4f70;
+  --color-slate-700: #273b58; /* input & control borders */
+  --color-slate-800: #1a2b44; /* dividers, hover fills */
+  --color-slate-900: #132339; /* raised surfaces (bubbles, cards, panels) */
+  --color-slate-950: #0a1728; /* app canvas — deep navy */
+
+  /* Azure accent ramp (remaps `indigo`): the primary action / brand color. */
+  --color-indigo-50: #eef4ff;
+  --color-indigo-100: #dbe7fe;
+  --color-indigo-200: #bcd2fb; /* accent text on dark */
+  --color-indigo-300: #91b4f8;
+  --color-indigo-400: #6592f4;
+  --color-indigo-500: #4780f0; /* hover */
+  --color-indigo-600: #2f6fed; /* primary */
+  --color-indigo-700: #2159d6;
+  --color-indigo-800: #1e48ab;
+  --color-indigo-900: #1d3f87;
+  --color-indigo-950: #142850; /* subtle tinted fills for ghost/secondary buttons */
+}
+
 html,
 body,
 #root {
@@ -8,5 +46,50 @@ body,
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-sans);
+  /* Soft top-lit vignette so the canvas has depth rather than reading as flat black. */
+  background:
+    radial-gradient(140% 120% at 50% -10%, #10233b 0%, #0a1728 52%, #081321 100%) fixed;
+  color: #e4edf7;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Navy-tinted scrollbars so they belong to the surface instead of the OS chrome. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #27395a transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: #27395a;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #35507c;
+  background-clip: content-box;
+}
+
+::selection {
+  background: rgba(47, 111, 237, 0.32);
+}
+
+/* Gentle rise for message bubbles / cards as they stream in. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-rise {
+  animation: rise 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }

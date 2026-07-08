@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as api from "../lib/api";
 import type { SessionResponse } from "../lib/types";
+import { IconClock, IconPencil, IconPlus, IconSparkles, IconTrash } from "./icons";
 
 /**
  * Left rail listing the current agent's past conversations. Selecting one restores it; the active
@@ -89,15 +90,33 @@ export default function ConversationsSidebar({
   }
 
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-slate-800 bg-slate-950">
-      <div className="p-3">
+    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-slate-800 bg-slate-900/40">
+      {/* Brand mark */}
+      <div className="flex items-center gap-2.5 px-4 pb-3 pt-4">
+        <div className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-white shadow-lg shadow-indigo-950/50">
+          <IconSparkles className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 leading-tight">
+          <p className="truncate text-sm font-semibold text-slate-100">Data Agent</p>
+          <p className="truncate text-[11px] text-slate-500">Seu assistente de dados</p>
+        </div>
+      </div>
+
+      <div className="px-3 pb-2">
         <button
           onClick={onNew}
-          className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+          className="flex w-full items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-500"
         >
-          <span className="text-base leading-none">＋</span> Nova conversa
+          <span className="grid h-5 w-5 place-items-center rounded-md bg-white/15">
+            <IconPlus className="h-3.5 w-3.5" />
+          </span>
+          Nova conversa
         </button>
       </div>
+
+      <p className="px-4 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-slate-600">
+        Conversas
+      </p>
 
       {actionError && (
         <div className="mx-3 mb-2 rounded-lg border border-red-900 bg-red-950/50 px-3 py-2 text-xs text-red-300">
@@ -133,10 +152,15 @@ export default function ConversationsSidebar({
               return (
                 <li key={s.session_id} ref={active ? activeRef : undefined}>
                   <div
-                    className={`group flex items-center gap-1 rounded-lg px-2 py-1.5 text-sm ${
-                      active ? "bg-slate-800 text-slate-100" : "text-slate-300 hover:bg-slate-900"
+                    className={`group flex items-center gap-2 rounded-xl px-2.5 py-2 text-sm transition-colors ${
+                      active
+                        ? "bg-indigo-600/15 text-slate-100 ring-1 ring-inset ring-indigo-500/30"
+                        : "text-slate-300 hover:bg-slate-800/60"
                     }`}
                   >
+                    <IconClock
+                      className={`h-4 w-4 shrink-0 ${active ? "text-indigo-300" : "text-slate-500"}`}
+                    />
                     <button
                       onClick={() => onSelect(s.session_id, s.token.access_token)}
                       className="min-w-0 flex-1 truncate text-left"
@@ -144,22 +168,22 @@ export default function ConversationsSidebar({
                     >
                       {s.name || "Nova conversa"}
                     </button>
-                    <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100">
+                    <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
                       <button
                         onClick={() => void handleRename(s)}
                         disabled={busyId === s.session_id}
                         title="Renomear"
-                        className="rounded p-1 text-slate-400 hover:bg-slate-700 hover:text-slate-100 disabled:opacity-50"
+                        className="rounded-md p-1 text-slate-400 hover:bg-slate-700 hover:text-slate-100 disabled:opacity-50"
                       >
-                        ✎
+                        <IconPencil className="h-3.5 w-3.5" />
                       </button>
                       <button
                         onClick={() => void handleDelete(s)}
                         disabled={busyId === s.session_id}
                         title="Excluir"
-                        className="rounded p-1 text-slate-400 hover:bg-slate-700 hover:text-red-300 disabled:opacity-50"
+                        className="rounded-md p-1 text-slate-400 hover:bg-slate-700 hover:text-red-300 disabled:opacity-50"
                       >
-                        🗑
+                        <IconTrash className="h-3.5 w-3.5" />
                       </button>
                     </div>
                   </div>

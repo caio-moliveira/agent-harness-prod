@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { useAuth } from "../context/AuthContext";
+import { IconSparkles } from "./icons";
 
 type Mode = "login" | "register";
 
@@ -28,9 +29,17 @@ export default function LoginScreen() {
 
   return (
     <div className="flex h-full items-center justify-center p-4">
-      <div className="w-full max-w-sm rounded-2xl border border-slate-800 bg-slate-900 p-8 shadow-xl">
-        <h1 className="text-xl font-semibold">Agent Harness</h1>
-        <p className="mt-1 text-sm text-slate-400">
+      <div className="w-full max-w-sm rounded-2xl border border-slate-800 bg-slate-900/70 p-8 shadow-2xl shadow-slate-950/60 backdrop-blur">
+        <div className="mb-5 flex items-center gap-3">
+          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-white shadow-lg shadow-indigo-950/50">
+            <IconSparkles className="h-6 w-6" />
+          </div>
+          <div>
+            <h1 className="text-xl font-semibold text-slate-100">Data Agent</h1>
+            <p className="text-xs text-slate-500">Seu assistente de dados</p>
+          </div>
+        </div>
+        <p className="text-sm text-slate-400">
           {mode === "login" ? "Entre para conversar com o agente." : "Crie uma conta para começar."}
         </p>
 

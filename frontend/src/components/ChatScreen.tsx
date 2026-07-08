@@ -9,6 +9,15 @@ import AgentActivity from "./AgentActivity";
 import ArtifactApproval from "./ArtifactApproval";
 import ConversationsSidebar from "./ConversationsSidebar";
 import ActivityTimeline from "./ActivityTimeline";
+import {
+  IconArrowLeft,
+  IconBroom,
+  IconDatabase,
+  IconFolder,
+  IconLayers,
+  IconLogout,
+  IconSparkles,
+} from "./icons";
 
 function updateLastAssistant(turns: Turn[], fn: (a: AssistantTurn) => AssistantTurn): Turn[] {
   const copy = [...turns];
@@ -289,85 +298,117 @@ export default function ChatScreen() {
         />
       )}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+        <header className="flex items-center justify-between border-b border-slate-800 px-4 py-2.5">
           <div className="flex min-w-0 items-center gap-2">
             <button
               onClick={leaveAgent}
               title="Trocar de agente"
-              className="rounded-lg border border-slate-700 px-2 py-1.5 text-xs hover:bg-slate-800"
+              className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-100"
             >
-              ←
+              <IconArrowLeft className="h-4 w-4" />
             </button>
             <div className="min-w-0">
-              <h1 className="truncate text-sm font-semibold">{agentName ?? "Agente"}</h1>
-              <p className="truncate text-xs text-slate-500">Agent Harness</p>
+              <h1 className="truncate text-sm font-semibold text-slate-100">{agentName ?? "Agente"}</h1>
+              <p className="truncate text-xs text-slate-500">Data Agent</p>
             </div>
           </div>
-          <div className="flex items-center gap-2 text-xs">
-            <span className={`rounded-full px-2 py-1 ${sources.db_connected ? "bg-emerald-900 text-emerald-200" : "bg-slate-800 text-slate-500"}`}>
-              🛢️ {sources.db_connected ? sources.dialect : "sem banco"}
+          <div className="flex items-center gap-1.5 text-xs">
+            <span
+              className={`hidden items-center gap-1 rounded-full px-2.5 py-1 sm:inline-flex ${sources.db_connected ? "bg-emerald-950/60 text-emerald-300 ring-1 ring-inset ring-emerald-800/50" : "bg-slate-800/70 text-slate-500"}`}
+            >
+              <IconDatabase className="h-3.5 w-3.5" />
+              {sources.db_connected ? sources.dialect : "sem banco"}
             </span>
-            <span className={`rounded-full px-2 py-1 ${sources.folder ? "bg-emerald-900 text-emerald-200" : "bg-slate-800 text-slate-500"}`}>
-              📁 {sources.folder ? "pasta" : "sem pasta"}
+            <span
+              className={`hidden items-center gap-1 rounded-full px-2.5 py-1 sm:inline-flex ${sources.folder ? "bg-emerald-950/60 text-emerald-300 ring-1 ring-inset ring-emerald-800/50" : "bg-slate-800/70 text-slate-500"}`}
+            >
+              <IconFolder className="h-3.5 w-3.5" />
+              {sources.folder ? "pasta" : "sem pasta"}
             </span>
-            <button onClick={() => void openSources()} className="rounded-lg border border-indigo-700 bg-indigo-950/40 px-3 py-1.5 text-indigo-200 hover:bg-indigo-900/50">
-              Fontes
+            <button
+              onClick={() => void openSources()}
+              className="flex items-center gap-1.5 rounded-lg bg-indigo-600/15 px-3 py-1.5 font-medium text-indigo-200 ring-1 ring-inset ring-indigo-500/30 hover:bg-indigo-600/25"
+            >
+              <IconDatabase className="h-4 w-4" />
+              <span className="hidden md:inline">Fontes</span>
             </button>
             <button
               onClick={() => setShowTimeline((v) => !v)}
               title="Linha do tempo das ações"
-              className={`rounded-lg border px-3 py-1.5 ${
+              className={`grid h-8 w-8 place-items-center rounded-lg ${
                 showTimeline
-                  ? "border-indigo-700 bg-indigo-950/40 text-indigo-200"
-                  : "border-slate-700 hover:bg-slate-800"
+                  ? "bg-indigo-600/15 text-indigo-200 ring-1 ring-inset ring-indigo-500/30"
+                  : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"
               }`}
             >
-              🕒
+              <IconLayers className="h-4 w-4" />
             </button>
-            <button onClick={handleClear} className="rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800">
-              Limpar
+            <button
+              onClick={handleClear}
+              title="Limpar a tela"
+              className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-100"
+            >
+              <IconBroom className="h-4 w-4" />
             </button>
-            <button onClick={logout} className="rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800">
-              Sair
+            <button
+              onClick={logout}
+              title="Sair"
+              className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-slate-100"
+            >
+              <IconLogout className="h-4 w-4" />
             </button>
           </div>
         </header>
+
+        <p className="border-b border-slate-800/60 px-4 py-1.5 text-center text-[11px] text-slate-600">
+          O agente pode consultar suas fontes conectadas. Revise os resultados antes de decisões críticas.
+        </p>
 
         <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-4">
           {loadingHistory ? (
             <div className="mx-auto mt-16 max-w-md text-center text-sm text-slate-500">Carregando conversa…</div>
           ) : turns.length === 0 ? (
-            <div className="mx-auto mt-16 max-w-md text-center text-sm text-slate-500">
-              <p className="text-base text-slate-300">Converse com o agente.</p>
-              <p className="mt-2">
+            <div className="mx-auto mt-20 flex max-w-md flex-col items-center text-center">
+              <div className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-white shadow-xl shadow-indigo-950/50">
+                <IconSparkles className="h-7 w-7" />
+              </div>
+              <p className="mt-4 text-lg font-semibold text-slate-200">Converse com o agente</p>
+              <p className="mt-2 text-sm leading-relaxed text-slate-500">
                 {hasSource
                   ? "Fontes conectadas — pergunte sobre seu banco ou seus arquivos."
                   : "Dica: abra Fontes para conectar um banco ou autorizar uma pasta e o agente ganha ferramentas."}
               </p>
             </div>
           ) : (
-            <div className="mx-auto max-w-3xl space-y-4">
+            <div className="mx-auto max-w-3xl space-y-5">
               {turns.map((turn, i) =>
                 turn.role === "user" ? (
-                  <MessageBubble key={i} message={{ role: "user", content: turn.content }} />
+                  <div key={i} className="animate-rise">
+                    <MessageBubble message={{ role: "user", content: turn.content }} authorName="Você" />
+                  </div>
                 ) : (
-                  <div key={i}>
-                    <AgentActivity steps={turn.steps} />
+                  <div key={i} className="animate-rise">
+                    <div className="pl-[42px]">
+                      <AgentActivity steps={turn.steps} />
+                    </div>
                     {(turn.content || turn.streaming) && (
                       <MessageBubble
                         message={{ role: "assistant", content: turn.content }}
                         pending={turn.streaming && !turn.content}
+                        authorName={agentName ?? "Agente"}
                       />
                     )}
                     {turn.approval && userToken && (
-                      <ArtifactApproval
-                        approval={turn.approval}
-                        userToken={userToken}
-                        onDecided={(status) => setApprovalStatus(turn.approval!.id, status)}
-                      />
+                      <div className="pl-[42px]">
+                        <ArtifactApproval
+                          approval={turn.approval}
+                          userToken={userToken}
+                          onDecided={(status) => setApprovalStatus(turn.approval!.id, status)}
+                        />
+                      </div>
                     )}
                     {turn.error && (
-                      <div className="mt-1 rounded-lg border border-red-900 bg-red-950/50 px-3 py-2 text-sm text-red-300">
+                      <div className="ml-[42px] mt-1 rounded-lg border border-red-900 bg-red-950/50 px-3 py-2 text-sm text-red-300">
                         {turn.error}
                       </div>
                     )}
