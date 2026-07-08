@@ -180,6 +180,9 @@ class Settings:
         # the Data Agent's read-only file tools by a per-session deepagents FilesystemBackend
         # (virtual_mode, read-only) rooted at the folder — there is no per-session container.
         self.SESSION_SOURCE_TTL = int(os.getenv("SESSION_SOURCE_TTL", "3600"))
+        # LangGraph graph-recursion cap per turn. Above the framework default of 25 so a few
+        # tool retries (e.g. correcting a SQL query) don't abort a legitimate multi-step turn.
+        self.AGENT_RECURSION_LIMIT = int(os.getenv("AGENT_RECURSION_LIMIT", "50"))
         self.SANDBOX_ENABLED = os.getenv("SANDBOX_ENABLED", "true").lower() in ("true", "1", "yes")
         # Virtual path the granted folder is exposed at (the CompositeBackend route prefix).
         self.SANDBOX_MOUNT_PATH = os.getenv("SANDBOX_MOUNT_PATH", "/workspace")
