@@ -82,3 +82,22 @@ class TestIncrementalSync:
         crepo = DocumentChunkRepository()
         await sync_folder(str(tmp_path), 1, 7, FakeEmbedder(), chunk_repo=crepo)
         assert await crepo.get_chunks(1, 8) == []
+
+    async def test_sync_populates_manifest_metadata(self, client: AsyncClient, tmp_path):
+        # The IngestedFile row is the document manifest: sync must fill doc_id/title/page_count so
+        # the document tools can catalog the corpus without touching disk.
+        from src.app.core.ingestion import DocumentChunkRepository, sync_folder
+        from src.app.core.ingestion.source_repository import IngestedFileRepository
+
+        (tmp_path / "contrato.txt").write_text("contrato com prazo", encoding="utf-8")
+        await sync_folder(str(tmp_path), 1, 7, FakeEmbedder(), chunk_repo=DocumentChunkRepository())
+
+        known = await IngestedFileRepository().get_known(1, 7)
+        record = next(r for p, r in known.items() if p.endswith("contrato.txt"))
+        assert record.doc_id.startswith("doc_") and len(record.doc_id) > 4
+        assert record.title == "contrato.txt"  # display-only file name
+        assert record.page_count == 1
+        assert record.text_layer == "native"
+        assert record.ocr_confidence == 1.0
+        # The id is derived from the content hash — stable and ASCII.
+        assert record.doc_id == f"doc_{record.content_hash[:12]}"

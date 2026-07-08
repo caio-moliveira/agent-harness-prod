@@ -66,11 +66,20 @@ async def sync_folder(
         if record is not None:
             await chunk_repo.delete_by_source(user_id, agent_id, path)
         try:
-            count = await ingest_file(path, user_id, agent_id, chunk_repo)
+            outcome = await ingest_file(path, user_id, agent_id, chunk_repo)
         except Exception:  # noqa: BLE001 - one bad file must not abort the whole sync
             logger.exception("sync_parse_failed", path=path, user_id=user_id, agent_id=agent_id)
             continue
-        await file_repo.upsert(user_id, agent_id, path, digest, count)
+        await file_repo.upsert(
+            user_id,
+            agent_id,
+            path,
+            digest,
+            outcome.chunk_count,
+            page_count=outcome.page_count,
+            text_layer=outcome.text_layer,
+            ocr_confidence=outcome.ocr_confidence,
+        )
         if record is None:
             result.added += 1
         else:

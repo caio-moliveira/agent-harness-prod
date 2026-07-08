@@ -101,6 +101,9 @@ export interface SourceStatus {
   db_connected: boolean;
   dialect?: string | null;
   folder?: string | null;
+  doc_count?: number;
+  page_count?: number;
+  indexing?: boolean;
 }
 
 // --- Data Agent streaming (observable timeline) ---
