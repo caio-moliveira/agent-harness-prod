@@ -13,6 +13,7 @@ from langchain.agents.middleware import PIIMiddleware
 from langchain_community.utilities import SQLDatabase
 
 from src.app.agents.data_agent.artifact_tools import make_artifact_tools
+from src.app.agents.data_agent.plan_tools import make_plan_tools
 from src.app.agents.data_agent.tools import make_memory_tools
 from src.app.agents.tools.search_tool import SearchAPI, get_search_tool
 from src.app.core.common.graph_utils import process_messages
@@ -294,6 +295,9 @@ Conforme as fontes que o usuário conectou, você pode ter:
   (conceito/paráfrase) → `read_document` (texto) ou `read_page_image` (imagem). Cada página traz o
   índice do PDF e o fólio impresso (com aviso de divergência).
 - **Memória de longo prazo** — `buscar_memoria(consulta)`.
+- **Aprovação de plano** — `propor_plano(titulo, passos)` propõe um plano e PAUSA para o usuário
+  aprovar antes de executar. Use só antes de tarefas grandes, com muitos passos ou irreversíveis
+  (não para perguntas simples). Após propor, aguarde a aprovação — você prossegue quando aprovado.
 - **Geração de artefato** — `gerar_artefato(titulo, formato, secoes, ...)` para produzir um
   relatório em Word (`docx`) ou PowerPoint (`pptx`). Use quando o usuário pedir um relatório/
   documento/apresentação; inclua a `fonte` de cada item (tabela+consulta ou documento).
@@ -380,6 +384,9 @@ def _create_data_deep_agent(
     # feeds the success metrics (#21) and reflection (#20). Bound to this session; the deliverable
     # lands in the granted folder when it is writable, else a temp dir.
     tools = tools + make_artifact_tools(user_id, agent_id, session_id, root_dir, folder_writable)
+    # Plan-approval (#19 gate): the agent can propose a plan and pause for the user's OK before large
+    # or irreversible work.
+    tools = tools + make_plan_tools(user_id, agent_id, session_id)
     if db is not None:
         tools = tools + make_readonly_sql_tools(db)
     if web_search:

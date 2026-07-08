@@ -154,6 +154,8 @@ export interface TurnApproval {
   title: string;
   format?: string;
   status: "pending" | "approved" | "rejected";
+  /** "export_artifact" (default) or "approve_plan" — drives the card's labels and resume behavior. */
+  action_type?: string;
 }
 
 export interface ToolStep {

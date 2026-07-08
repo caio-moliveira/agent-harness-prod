@@ -48,6 +48,18 @@ async def _export_artifact(action: PendingAction) -> dict:
     return {"exported": True, "path": path, "format": fmt}
 
 
+async def _approve_plan(action: PendingAction) -> dict:
+    """Confirm a proposed plan.
+
+    There is no side-effect to run — approval simply unblocks the agent, which resumes and executes
+    on the next turn — so this executor just records the decision.
+    """
+    payload = action.payload or {}
+    logger.info("plan_approved", action_id=action.id, steps=len(payload.get("steps") or []))
+    return {"approved": True, "title": payload.get("title")}
+
+
 def register_default_executors() -> None:
     """Register the built-in executors. Idempotent."""
     register_executor("export_artifact", _export_artifact)
+    register_executor("approve_plan", _approve_plan)
