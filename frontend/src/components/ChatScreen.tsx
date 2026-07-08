@@ -6,6 +6,7 @@ import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SourcesPanel from "./SourcesPanel";
 import AgentActivity from "./AgentActivity";
+import TodoList from "./TodoList";
 import ArtifactApproval from "./ArtifactApproval";
 import ConversationsSidebar from "./ConversationsSidebar";
 import ActivityTimeline from "./ActivityTimeline";
@@ -249,6 +250,9 @@ export default function ChatScreen() {
           );
         } else if (ev.type === "token") {
           setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, content: a.content + ev.content })));
+        } else if (ev.type === "todos") {
+          // Live plan checklist — replaced whenever the agent re-issues write_todos.
+          setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, todos: ev.items })));
         } else if (ev.type === "hitl_request") {
           // The agent parked an outward action — anchor a compact approval to this turn.
           setTurns((prev) =>
@@ -389,6 +393,7 @@ export default function ChatScreen() {
                 ) : (
                   <div key={i} className="animate-rise">
                     <div className="pl-[42px]">
+                      {turn.todos && turn.todos.length > 0 && <TodoList items={turn.todos} />}
                       <AgentActivity steps={turn.steps} />
                     </div>
                     {(turn.content || turn.streaming) && (

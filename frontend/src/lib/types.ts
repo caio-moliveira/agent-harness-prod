@@ -108,10 +108,17 @@ export interface SourceStatus {
 
 // --- Data Agent streaming (observable timeline) ---
 
+/** One task in the agent's plan (from the `write_todos` tool), rendered as a live checklist. */
+export interface TodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed" | string;
+}
+
 export type StreamEvent =
   | { type: "tool_start"; name: string; input?: string }
   | { type: "tool_end"; name: string; output?: string }
   | { type: "token"; content: string }
+  | { type: "todos"; items: TodoItem[] }
   | { type: "hitl_request"; id: number; action_type: string; title?: string; format?: string }
   | { type: "done" }
   | { type: "error"; content?: string };
@@ -169,6 +176,7 @@ export interface AssistantTurn {
   streaming: boolean;
   error?: string;
   approval?: TurnApproval;
+  todos?: TodoItem[];
 }
 
 export type Turn = UserTurn | AssistantTurn;

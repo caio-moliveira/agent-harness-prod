@@ -4,6 +4,7 @@ Mirrors the structure of ``text_sql_agent.py`` but is built PER SESSION from the
 resources in the registry, rather than as a singleton bound to a fixed database.
 """
 
+import json
 import os
 from typing import Any, AsyncGenerator, Optional
 
@@ -202,6 +203,12 @@ class DataAgent:
                     "name": tool_name,
                     "input": tool_input,
                 }
+                # Surface the plan as a live checklist (not just a raw JSON step) when the agent
+                # calls write_todos.
+                if tool_name == "write_todos":
+                    todos = _parse_todos(event.get("data", {}).get("input"))
+                    if todos:
+                        yield {"type": "todos", "items": todos}
             elif kind == "on_tool_end":
                 output = event.get("data", {}).get("output")
                 if hasattr(output, "content"):
@@ -236,6 +243,30 @@ def _short(value: Any, limit: int = 1500) -> str:
     """Render a tool input/output to a short display string."""
     text = value if isinstance(value, str) else str(value)
     return text[:limit]
+
+
+def _parse_todos(raw: Any) -> Optional[list[dict[str, str]]]:
+    """Extract the ``write_todos`` task list from a tool input, or None if it isn't parseable.
+
+    Returns ``[{"content", "status"}, ...]`` so the UI can render a live checklist instead of a raw
+    JSON blob. Tolerant of the input arriving as a dict or a JSON string.
+    """
+    data = raw
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(data, dict):
+        return None
+    todos = data.get("todos")
+    if not isinstance(todos, list):
+        return None
+    items: list[dict[str, str]] = []
+    for todo in todos:
+        if isinstance(todo, dict) and todo.get("content"):
+            items.append({"content": str(todo["content"]), "status": str(todo.get("status", "pending"))})
+    return items or None
 
 
 # Tool-usage guidance the harness ALWAYS appends to a user's custom system prompt, so a
