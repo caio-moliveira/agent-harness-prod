@@ -42,6 +42,20 @@ class DocumentChunkRepository:
             statement = statement.order_by(DocumentChunk.source_path, DocumentChunk.chunk_index)
             return list(session.exec(statement).all())
 
+    async def get_chunks_by_source(
+        self, user_id: int, agent_id: Optional[int], source_path: str
+    ) -> List[DocumentChunk]:
+        """Return one document's chunks (by source path), ordered by chunk index — page order."""
+        with session_scope() as session:
+            statement = select(DocumentChunk).where(
+                DocumentChunk.user_id == user_id,
+                DocumentChunk.source_path == source_path,
+            )
+            if agent_id is not None:
+                statement = statement.where(DocumentChunk.agent_id == agent_id)
+            statement = statement.order_by(DocumentChunk.chunk_index)
+            return list(session.exec(statement).all())
+
     async def get_chunks_without_embedding(self, user_id: int, agent_id: Optional[int] = None) -> List[DocumentChunk]:
         """Return a user's not-yet-embedded chunks (indexing work list), scoped to one agent."""
         with session_scope() as session:

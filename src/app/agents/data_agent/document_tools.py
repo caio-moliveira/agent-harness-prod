@@ -1,0 +1,164 @@
+"""Document-layer tools for the Data Agent: ``list_documents`` and ``read_document``.
+
+These complement (never replace) the deepagents filesystem built-ins. They operate on the *ingested
+manifest* — a stable ``doc_id`` catalog with page counts and text-layer state — instead of the raw
+live filesystem:
+
+- ``list_documents`` reads ONLY the manifest (never touches disk): the id circulates between tools,
+  the human-readable title is display-only and is never accepted as a parameter.
+- ``read_document`` opens an explicit, mandatory page range from the ingested text. There is no
+  whole-document read: to see everything the agent paginates (and feels the cost). It never
+  truncates silently — a partial read reports the exact next range to request.
+
+Both are scoped to one ``(user_id, agent_id)`` corpus, the same isolation the rest of the product
+enforces. Reading records the pages into the session's read set — the basis for citation checks.
+"""
+
+import re
+from typing import List, Optional
+
+from langchain_core.tools import BaseTool, tool
+
+from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
+from src.app.core.ingestion.source_repository import IngestedFileRepository
+from src.app.core.sandbox.registry import registry
+
+# Catalog cap and read budget. The read budget is a rough char proxy for a token ceiling — small
+# enough that reading a range is cheap, large enough for a few dense pages.
+_MAX_LIST = 50
+_MAX_READ_CHARS = 6000
+
+# A printed folio is usually a bare number (optionally dash-wrapped) on the first or last line.
+_FOLIO_RE = re.compile(r"^\s*[-–—]?\s*(\d{1,4})\s*[-–—]?\s*$")
+
+
+def _detect_folio(text: str) -> Optional[int]:
+    """Best-effort printed page number from a page's text (header/footer), or None."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    for line in (lines[-1], lines[0]):  # folio usually sits at the bottom, sometimes the top
+        m = _FOLIO_RE.match(line)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _reassemble_pages(chunks) -> List[dict]:
+    """Rebuild ordered pages from a document's chunks (split-page pieces re-joined by section)."""
+    pages: List[dict] = []
+    for c in chunks:
+        needs_ocr = bool((c.meta or {}).get("needs_ocr", False))
+        if pages and pages[-1]["label"] == c.section:
+            if c.content:
+                pages[-1]["text"] = (pages[-1]["text"] + "\n" + c.content).strip()
+        else:
+            pages.append({"label": c.section, "text": c.content or "", "needs_ocr": needs_ocr})
+    return pages
+
+
+def _page_header(pdf_index: int, total: int, text: str, needs_ocr: bool) -> str:
+    """Build the per-page header carrying the PDF index and the printed folio (with divergence)."""
+    folio = _detect_folio(text)
+    header = f"=== PDF pág. {pdf_index}/{total}"
+    if folio is not None:
+        header += f" · fólio impresso {folio}"
+        if folio != pdf_index:
+            header += " ⚠ divergente"
+    elif needs_ocr:
+        header += " · sem texto (provável página escaneada)"
+    return header + " ==="
+
+
+def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session_id: Optional[str]) -> List[BaseTool]:
+    """Build ``list_documents`` + ``read_document`` bound to one (user, agent) corpus. Empty if no user."""
+    if user_id is None:
+        return []
+    manifest = IngestedFileRepository()
+    chunks_repo = DocumentChunkRepository()
+
+    @tool
+    async def list_documents() -> str:
+        """Cataloga os documentos indexados desta pasta/agente (lê só o manifesto, não abre arquivos).
+
+        Use SEMPRE ANTES de ler ou citar um documento: devolve, por documento, o `doc_id` (identificador
+        estável que você passa para `read_document`), o título (só para exibir ao usuário — NUNCA use o
+        título como parâmetro), a contagem de páginas e o estado da camada de texto (nativo/ocr/misto).
+        Se a lista estiver truncada, o total é declarado.
+        """
+        docs = await manifest.list_all(user_id, agent_id)
+        if not docs:
+            return (
+                "Nenhum documento indexado para este agente ainda. Peça ao usuário para conectar/atualizar "
+                "a pasta em Fontes (a indexação roda ao conceder a pasta)."
+            )
+        total = len(docs)
+        shown = docs[:_MAX_LIST]
+        lines = [
+            f"- {d.doc_id} · \"{d.title}\" · {d.page_count} pág · texto: {d.text_layer} "
+            f"({d.ocr_confidence:.0%} das páginas com texto)"
+            for d in shown
+        ]
+        header = f"{total} documento(s) indexado(s)"
+        if total > _MAX_LIST:
+            header += f" — mostrando os primeiros {_MAX_LIST} (há {total} no total)"
+        return header + ":\n" + "\n".join(lines)
+
+    @tool
+    async def read_document(doc_id: str, start_page: int, end_page: int) -> str:
+        """Lê um intervalo EXPLÍCITO de páginas (`start_page`..`end_page`) de um documento pelo `doc_id`.
+
+        Não existe leitura do documento inteiro — informe o intervalo. Use o `doc_id` de `list_documents`
+        (nunca o título). Para saber QUAIS páginas ler, use antes `buscar_documentos` (que aponta a página).
+        A leitura é limitada por um teto: se o intervalo não couber, devolve o que coube e informa o próximo
+        intervalo a pedir (nunca trunca em silêncio). Cada página traz o índice do PDF e, quando detectável,
+        o fólio impresso — com aviso de divergência entre os dois.
+        """
+        record = await manifest.get_by_doc_id(user_id, agent_id, doc_id)
+        if record is None:
+            return f"Documento '{doc_id}' não encontrado. Use list_documents para ver os doc_id disponíveis."
+        chunks = await chunks_repo.get_chunks_by_source(user_id, agent_id, record.source_path)
+        pages = _reassemble_pages(chunks)
+        total = len(pages)
+        if total == 0:
+            return f"'{record.title}' não tem conteúdo indexado (vazio, ou escaneado sem OCR)."
+        if start_page < 1 or end_page < start_page:
+            return f"Intervalo inválido. Peça 1 <= start_page <= end_page <= {total} (o documento tem {total} páginas)."
+        if start_page > total:
+            return f"start_page {start_page} fora do documento — ele tem {total} páginas."
+
+        end = min(end_page, total)
+        blocks: List[str] = []
+        used = 0
+        for idx in range(start_page, end + 1):
+            page = pages[idx - 1]
+            header = _page_header(idx, total, page["text"], page["needs_ocr"])
+            body = page["text"] or "(sem texto extraível nesta página)"
+            block = f"{header}\n{body}"
+            # A single page that alone blows the budget: return it truncated with an escape hatch.
+            if not blocks and len(block) > _MAX_READ_CHARS:
+                if session_id:
+                    await registry.mark_pages_read(session_id, doc_id, [idx])
+                return (
+                    block[:_MAX_READ_CHARS]
+                    + f"\n\n… [a página {idx} excede o limite de leitura e foi truncada. Refine com "
+                    "`buscar_documentos` para o trecho exato.]"
+                )
+            # Adding this page would exceed the budget and we already have content: stop here.
+            if blocks and used + len(block) > _MAX_READ_CHARS:
+                included_end = start_page + len(blocks) - 1
+                if session_id:
+                    await registry.mark_pages_read(session_id, doc_id, range(start_page, included_end + 1))
+                return (
+                    "\n\n".join(blocks)
+                    + f"\n\n… leitura parcial (limite de tokens): li até a página {included_end}. "
+                    f"Continue com read_document('{doc_id}', {idx}, {end_page})."
+                )
+            blocks.append(block)
+            used += len(block)
+
+        if session_id:
+            await registry.mark_pages_read(session_id, doc_id, range(start_page, end + 1))
+        return "\n\n".join(blocks)
+
+    return [list_documents, read_document]

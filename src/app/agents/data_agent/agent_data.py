@@ -30,6 +30,7 @@ from src.app.core.middleware import (
     LoggingMiddleware,
     build_invoke_config,
 )
+from src.app.agents.data_agent.document_tools import make_document_tools
 from src.app.core.retrieval import make_retrieval_tools
 from src.app.core.session.event_recorder import bg_record_tool_event
 from src.app.core.session.event_repository import SessionEventRepository
@@ -231,7 +232,21 @@ Conforme as fontes que o usuário conectou, você pode ter:
 - **Banco SQL (somente leitura)** — ferramentas `list_tables`, `describe_tables`, `run_sql`
   (apenas `SELECT`/`WITH`/`EXPLAIN`/`SHOW`).
 - **Uma pasta concedida** exposta **somente leitura** por ferramentas de arquivo (`ls`,
-  `read_file`, `glob`, `grep`) montada em `/workspace`.
+  `read_file`, `glob`, `grep`) montada em `/workspace`. `read_file` também extrai o texto de
+  **PDF, Word (`.docx`) e Excel (`.xlsx`)** — leia o próprio arquivo, não tente decodificar bytes.
+- **Busca semântica** — `buscar_documentos(consulta)` encontra trechos por significado nos
+  documentos desta pasta/agente, cada resultado com a fonte. Prefira-a para localizar um trecho
+  específico em documentos longos; use `read_file` para ler um arquivo inteiro (ou pequeno).
+- **Catálogo e leitura de documentos** — `list_documents()` lista o acervo indexado (cada doc com
+  `doc_id`, título, nº de páginas e camada de texto); `search_documents(query)` faz **busca literal**
+  de um termo EXATO (número, artigo, data, valor, nome próprio) e devolve as coordenadas (doc_id,
+  página, fólio); `read_document(doc_id, start_page, end_page)` lê um intervalo de páginas pelo
+  `doc_id` (nunca pelo título); `read_page_image(doc_id, page)` renderiza a página como **imagem**
+  para você VER — use como 1ª escolha quando o layout importa (tabela, coluna de valores, carimbo,
+  assinatura) ou quando o doc é `ocr`/baixa confiança ou o texto sai ambíguo. Fluxo: `list_documents`
+  (achar o `doc_id`) → localizar a página com `search_documents` (termo exato) **ou** `buscar_documentos`
+  (conceito/paráfrase) → `read_document` (texto) ou `read_page_image` (imagem). Cada página traz o
+  índice do PDF e o fólio impresso (com aviso de divergência).
 - **Memória de longo prazo** — `buscar_memoria(consulta)`.
 - **Geração de artefato** — `gerar_artefato(titulo, formato, secoes, ...)` para produzir um
   relatório em Word (`docx`) ou PowerPoint (`pptx`). Use quando o usuário pedir um relatório/
@@ -241,8 +256,16 @@ Conforme as fontes que o usuário conectou, você pode ter:
   sairia corrompido. `write_file` serve só para arquivos de texto (`.md`, `.txt`, `.csv`).
 
 Regras: somente leitura em dados/banco; nunca modifique dados. Para perguntas sobre **arquivos**, use `ls`/`glob`
-em `/workspace` e `read_file` para ler o conteúdo (ex.: leia o CSV antes de responder sobre ele);
-nunca cite caminhos fora de `/workspace`. Para perguntas de **banco**, SEMPRE `list_tables` →
+em `/workspace` e depois `read_file` para ler o conteúdo — funciona com texto, CSV, **PDF, Word e Excel**
+(leia o arquivo antes de responder sobre ele). Para achar um trecho específico em documentos longos,
+prefira `buscar_documentos`. Se um arquivo falhar ao ser lido, NÃO repita a mesma leitura em loop:
+tente `buscar_documentos` ou diga que o documento não tem texto extraível. Nunca cite caminhos fora de `/workspace`.
+Para perguntas sobre **documentos** (PDFs, leis, normas): `list_documents` → localizar a página com
+`search_documents` (termo exato: artigo, número, data, nome) ou `buscar_documentos` (conceito) →
+`read_document(doc_id, páginas)`. **Seja incansável: NUNCA conclua "não encontrei" após uma única
+tentativa** — liste o acervo, tente variações do termo (sinônimos, número por extenso/algarismo) e
+leia as páginas candidatas antes de desistir; só cite uma página depois de tê-la lido. (Acento e caixa
+já são ignorados pelo `search_documents`, então não fique repetindo variações de acento.) Para perguntas de **banco**, SEMPRE `list_tables` →
 `describe_tables` (das tabelas que vai usar) → `run_sql`, para a consulta nascer do schema real.
 Executar a consulta é a validação: se `run_sql` retornar erro, corrija a partir das tabelas
 disponíveis e execute de novo — **nunca invente tabelas ou colunas**, e não dê a resposta final
@@ -304,6 +327,9 @@ def _create_data_deep_agent(
     tools = make_memory_tools(user_id, agent_id) if memory_enabled else []
     # Semantic search over this agent's ingested documents (#14), scoped to (user, agent).
     tools = tools + make_retrieval_tools(user_id, agent_id)
+    # Document-layer tools: catalog the corpus (list_documents) and read explicit page ranges
+    # (read_document) over the ingested manifest — complements the raw filesystem built-ins.
+    tools = tools + make_document_tools(user_id, agent_id, session_id)
     # Artifact generation (#18): produces Word/PPTX and records an artifact_generated event that
     # feeds the success metrics (#21) and reflection (#20). Bound to this session; the deliverable
     # lands in the granted folder when it is writable, else a temp dir.
