@@ -246,30 +246,39 @@ def build_folder_backend(root_dir: str, *, writable: bool = False) -> BackendPro
     return DocumentAwareBackend(base, root_dir)
 
 
-def make_backend_factory(root_dir: str, *, writable: bool = False) -> BackendFactory:
+# Virtual mount for bundled read-only skills (SKILL.md files). deepagents' SkillsMiddleware reads
+# skills through the agent's backend, so host-path skills only load when routed here.
+SKILLS_MOUNT = "/skills/"
+
+
+def make_backend_factory(
+    root_dir: str, *, writable: bool = False, skills_dir: Optional[str] = None
+) -> BackendFactory:
     """Return a per-session backend factory for a Data Agent bound to ``root_dir``.
 
     The returned callable resolves the authorized root directory from the invocation's
     ``config["configurable"]`` (falling back to the ``root_dir`` captured for this session's
     agent), then returns a ``CompositeBackend`` routing ``/workspace/`` → the granted folder
-    backend and every other path → ephemeral ``StateBackend`` scratch. ``writable`` (a per-agent
-    capability, off by default) decides whether the folder allows writes; either way writes stay
-    confined to ``root_dir`` via ``virtual_mode``. The factory does no setup I/O (no external
-    resource is created) — a pure config read plus object construction, so first-response latency
-    carries no ``docker run`` cost.
+    backend, ``/skills/`` → a read-only backend over ``skills_dir`` (when given), and every other
+    path → ephemeral ``StateBackend`` scratch. ``writable`` (a per-agent capability, off by default)
+    decides whether the folder allows writes; either way writes stay confined to ``root_dir`` via
+    ``virtual_mode``. The factory does no setup I/O (no external resource is created) — a pure config
+    read plus object construction, so first-response latency carries no ``docker run`` cost.
     """
     prefix = _workspace_prefix()
 
     def backend_factory(runtime: Any) -> BackendProtocol:
         resolved = _resolve_root_dir(runtime) or root_dir
         default = StateBackend(runtime)
-        if not resolved:
-            # No folder for this session — ephemeral state only (framework default behavior).
+        routes: dict[str, BackendProtocol] = {}
+        if resolved:
+            routes[prefix] = build_folder_backend(resolved, writable=writable)
+        if skills_dir:
+            routes[SKILLS_MOUNT] = ReadOnlyBackend(FilesystemBackend(root_dir=skills_dir, virtual_mode=True))
+        if not routes:
+            # No folder and no skills for this session — ephemeral state only (framework default).
             return default
-        return CompositeBackend(
-            default=default,
-            routes={prefix: build_folder_backend(resolved, writable=writable)},
-        )
+        return CompositeBackend(default=default, routes=routes)
 
     return backend_factory
 

@@ -22,7 +22,7 @@ from src.app.core.common.model.message import Message
 from src.app.core.db.readonly import make_readonly_sql_tools
 from src.app.core.learning import get_reflected_preferences
 from src.app.core.llm.factory import active_model_name, create_chat_model
-from src.app.core.sandbox.backend import ROOT_DIR_CONFIG_KEY, make_backend_factory
+from src.app.core.sandbox.backend import ROOT_DIR_CONFIG_KEY, SKILLS_MOUNT, make_backend_factory
 from src.app.core.memory.memory import bg_update_memory, get_relevant_memory
 from src.app.core.middleware import (
     AgentContext,
@@ -39,6 +39,11 @@ from src.app.core.session.event_repository import SessionEventRepository
 
 # One stateless repository instance for recording episodic events off the streaming path.
 _event_repo = SessionEventRepository()
+
+# Bundled skills (SKILL.md files) shipped with the agent, always available via progressive
+# disclosure regardless of whether the session has a granted folder. Mounted read-only at
+# SKILLS_MOUNT by the per-session backend.
+_BUNDLED_SKILLS_DIR = os.path.join(os.path.dirname(__file__), "skills")
 
 
 def load_system_prompt() -> str:
@@ -410,13 +415,13 @@ def _create_data_deep_agent(
         "system_prompt": prompt,
         "middleware": [PIIMiddleware("email")],
     }
-    if skills_dir is not None:
-        # deepagents loads SKILL.md files from this directory (progressive disclosure).
-        kwargs["skills"] = [skills_dir]
-    # When a folder is granted, route the built-in file tools (ls/read_file/glob/grep) to a
-    # per-session FilesystemBackend under /workspace (resolved per invocation from config),
-    # read-only unless folder_writable. No folder => the framework default StateBackend.
-    if root_dir is not None:
-        kwargs["backend"] = make_backend_factory(root_dir, writable=folder_writable)
+    # Bundled skills mounted at SKILLS_MOUNT are always available; a caller-provided skills_dir is
+    # appended (higher priority) for per-agent customization (progressive disclosure).
+    kwargs["skills"] = [SKILLS_MOUNT] + ([skills_dir] if skills_dir is not None else [])
+    # Route the built-in file tools: /workspace → the granted folder (when set), /skills → the
+    # bundled read-only skills, everything else → the framework's ephemeral StateBackend scratch.
+    kwargs["backend"] = make_backend_factory(
+        root_dir or "", writable=folder_writable, skills_dir=_BUNDLED_SKILLS_DIR
+    )
 
     return create_deep_agent(**kwargs)
