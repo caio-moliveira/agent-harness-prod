@@ -5,10 +5,12 @@ stable doc_id, read_document opens an explicit page range with a token budget, p
 detection (with divergence vs the PDF index), and records the pages it read into the session.
 """
 
+import pymupdf
 import pytest
 from httpx import AsyncClient
 
 from src.app.agents.data_agent.document_tools import make_document_tools
+from src.app.core.common.config import settings
 from src.app.core.ingestion.chunk_model import DocumentChunk
 from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
 from src.app.core.ingestion.normalize import normalize_text
@@ -135,3 +137,62 @@ class TestSearchDocuments:
         assert "Nenhuma ocorrência literal" in out
         assert "termo-que-nao-existe-42" in out  # the normalized query, so it's not a malformed-query mystery
         assert "buscar_documentos" in out  # steer to semantic search for concepts
+
+
+def _make_pdf(path, pages: int = 1) -> None:
+    doc = pymupdf.open()
+    for i in range(pages):
+        page = doc.new_page()
+        page.insert_text((72, 72), f"Página {i + 1}")
+    doc.save(str(path))
+    doc.close()
+
+
+def _img_call(doc_id: str, page: int) -> dict:
+    return {"name": "read_page_image", "args": {"doc_id": doc_id, "page": page}, "id": "call_x", "type": "tool_call"}
+
+
+class TestReadPageImage:
+    async def test_renders_page_as_image_block(self, client: AsyncClient, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "SANDBOX_ALLOWED_ROOTS", [str(tmp_path)])
+        pdf = tmp_path / "laudo.pdf"
+        _make_pdf(pdf, pages=2)
+        doc_id = await _seed_document(str(pdf), "hash_img_0001", ["p1", "p2"])
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, "sess-img")}
+
+        result = await tools["read_page_image"].ainvoke(_img_call(doc_id, 1))
+        # The model receives an actual image content block, not text.
+        assert any(b.get("type") == "image" for b in result.content_blocks)
+
+        res = await registry.get("sess-img")
+        assert (doc_id, 1) in res.read_pages
+
+        # Second call hits the on-disk cache and still returns an image.
+        again = await tools["read_page_image"].ainvoke(_img_call(doc_id, 1))
+        assert any(b.get("type") == "image" for b in again.content_blocks)
+
+    async def test_non_pdf_is_rejected(self, client: AsyncClient, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "SANDBOX_ALLOWED_ROOTS", [str(tmp_path)])
+        doc_id = await _seed_document(str(tmp_path / "planilha.xlsx"), "hash_xlsx_1", ["a"])
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, "sess-img2")}
+        result = await tools["read_page_image"].ainvoke(_img_call(doc_id, 1))
+        assert "só rasteriza PDFs" in result.content
+
+    async def test_out_of_range(self, client: AsyncClient, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "SANDBOX_ALLOWED_ROOTS", [str(tmp_path)])
+        pdf = tmp_path / "doc.pdf"
+        _make_pdf(pdf, pages=1)
+        doc_id = await _seed_document(str(pdf), "hash_img_oor", ["p1"])
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, "sess-img3")}
+        result = await tools["read_page_image"].ainvoke(_img_call(doc_id, 9))
+        assert "fora do documento" in result.content
+
+    async def test_outside_allowed_roots_is_blocked(self, client: AsyncClient, tmp_path, monkeypatch):
+        # A path not under any allowed root must be refused even if the file exists on disk.
+        monkeypatch.setattr(settings, "SANDBOX_ALLOWED_ROOTS", ["/some/other/root"])
+        pdf = tmp_path / "secret.pdf"
+        _make_pdf(pdf, pages=1)
+        doc_id = await _seed_document(str(pdf), "hash_img_sec", ["p1"])
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, "sess-img4")}
+        result = await tools["read_page_image"].ainvoke(_img_call(doc_id, 1))
+        assert "indisponível" in result.content

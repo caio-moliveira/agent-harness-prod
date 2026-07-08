@@ -14,15 +14,25 @@ Both are scoped to one ``(user_id, agent_id)`` corpus, the same isolation the re
 enforces. Reading records the pages into the session's read set — the basis for citation checks.
 """
 
+import asyncio
+import base64
+import os
 import re
+import tempfile
 from itertools import groupby
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
-from langchain_core.tools import BaseTool, tool
+import pymupdf
+from langchain_core.messages import ToolMessage
+from langchain_core.messages.content import create_image_block
+from langchain_core.tools import BaseTool, InjectedToolCallId, tool
 
+from src.app.core.common.config import settings
+from src.app.core.common.logging import logger
 from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
 from src.app.core.ingestion.normalize import normalize_text
 from src.app.core.ingestion.source_repository import IngestedFileRepository
+from src.app.core.sandbox.paths import is_within_allowed_roots
 from src.app.core.sandbox.registry import registry
 
 # Catalog cap and read budget. The read budget is a rough char proxy for a token ceiling — small
@@ -32,6 +42,27 @@ _MAX_READ_CHARS = 6000
 # Literal-search caps: how many hits to return, and the context padding around each match.
 _MAX_HITS = 20
 _EXCERPT_PAD = 45
+# Page-image rasterization: DPI (legible without being huge) + an on-disk cache. The cache key uses
+# the content-addressed doc_id, so a changed document (new doc_id) never serves a stale image.
+_PAGE_IMAGE_DPI = 150
+_PAGE_CACHE_DIR = os.path.join(tempfile.gettempdir(), "data_agent_page_cache")
+
+
+def _render_page_png(pdf_path: str, page_index: int, doc_id: str) -> bytes:
+    """Rasterize one PDF page to PNG bytes, caching the result on disk (blocking — run in a thread)."""
+    cache_file = os.path.join(_PAGE_CACHE_DIR, f"{doc_id}_{page_index}_{_PAGE_IMAGE_DPI}.png")
+    if os.path.isfile(cache_file):
+        with open(cache_file, "rb") as f:
+            return f.read()
+    doc = pymupdf.open(pdf_path)
+    try:
+        png = doc[page_index].get_pixmap(dpi=_PAGE_IMAGE_DPI).tobytes("png")
+    finally:
+        doc.close()
+    os.makedirs(_PAGE_CACHE_DIR, exist_ok=True)
+    with open(cache_file, "wb") as f:
+        f.write(png)
+    return png
 
 # A printed folio is usually a bare number (optionally dash-wrapped) on the first or last line.
 _FOLIO_RE = re.compile(r"^\s*[-–—]?\s*(\d{1,4})\s*[-–—]?\s*$")
@@ -227,4 +258,42 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
             header += f" (mostrando as primeiras {_MAX_HITS})"
         return header + ". Leia a página com read_document(doc_id, pág, pág):\n" + "\n".join(lines)
 
-    return [list_documents, read_document, search_documents]
+    @tool
+    async def read_page_image(doc_id: str, page: int, tool_call_id: Annotated[str, InjectedToolCallId]):
+        """Renderiza uma página de PDF como IMAGEM e a entrega para você VER (não como texto).
+
+        Use como PRIMEIRA escolha — não como plano B — quando o layout carrega significado: tabela
+        contábil, coluna de valores, quadro comparativo de licitação, assinatura, carimbo; e sempre
+        que o documento estiver como camada de texto `ocr`/baixa confiança (em `list_documents`) ou o
+        texto extraído por `read_document` sair ambíguo/embaralhado. `page` é o índice do PDF (o mesmo
+        que aparece em `read_document`/`search_documents`). Custa mais que ler texto — use quando a
+        imagem realmente ajuda.
+        """
+        record = await manifest.get_by_doc_id(user_id, agent_id, doc_id)
+        if record is None:
+            return f"Documento '{doc_id}' não encontrado. Use list_documents para ver os doc_id."
+        if not record.source_path.lower().endswith(".pdf"):
+            return "read_page_image só rasteriza PDFs. Para este documento use read_document (texto)."
+        if page < 1 or page > record.page_count:
+            return f"Página {page} fora do documento — ele tem {record.page_count} páginas."
+        # Security: re-validate the host path against the allow-list on every use (a tightened
+        # SANDBOX_ALLOWED_ROOTS revokes access), and confirm the file still exists.
+        if not is_within_allowed_roots(record.source_path, settings.SANDBOX_ALLOWED_ROOTS) or not os.path.isfile(
+            record.source_path
+        ):
+            return "Arquivo indisponível (fora das raízes permitidas agora, ou removido do disco)."
+        try:
+            png = await asyncio.to_thread(_render_page_png, record.source_path, page - 1, doc_id)
+        except Exception as e:  # noqa: BLE001 - never crash the turn on a render failure
+            logger.exception("page_image_render_failed", doc_id=doc_id, page=page, error_type=type(e).__name__)
+            return f"Falha ao renderizar a página {page} ({type(e).__name__}). Tente read_document (texto)."
+        if session_id:
+            await registry.mark_pages_read(session_id, doc_id, [page])
+        image_b64 = base64.standard_b64encode(png).decode("utf-8")
+        return ToolMessage(
+            content_blocks=[create_image_block(base64=image_b64, mime_type="image/png")],
+            name="read_page_image",
+            tool_call_id=tool_call_id,
+        )
+
+    return [list_documents, read_document, search_documents, read_page_image]
