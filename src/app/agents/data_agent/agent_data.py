@@ -9,13 +9,14 @@ import os
 from typing import Any, AsyncGenerator, Optional
 
 from deepagents import create_deep_agent
-from langchain.agents.middleware import PIIMiddleware
+from langchain.agents.middleware import ModelCallLimitMiddleware, PIIMiddleware
 from langchain_community.utilities import SQLDatabase
 
 from src.app.agents.data_agent.artifact_tools import make_artifact_tools
 from src.app.agents.data_agent.plan_tools import make_plan_tools
 from src.app.agents.data_agent.tools import make_memory_tools
 from src.app.agents.tools.search_tool import SearchAPI, get_search_tool
+from src.app.core.common.config import settings
 from src.app.core.common.graph_utils import process_messages
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
@@ -461,12 +462,16 @@ def _create_data_deep_agent(
 
     # create_deep_agent already bundles SummarizationMiddleware (context summarization near the
     # window) and AnthropicPromptCachingMiddleware (prompt caching, active once the model is
-    # Anthropic) into its default stack — we only add PII redaction on top.
+    # Anthropic) into its default stack — we add PII redaction and a hard model-call cap (safety net
+    # so a runaway tool/planning loop ends gracefully instead of burning tokens).
     kwargs: dict[str, Any] = {
         "model": model,
         "tools": tools,
         "system_prompt": prompt,
-        "middleware": [PIIMiddleware("email")],
+        "middleware": [
+            PIIMiddleware("email"),
+            ModelCallLimitMiddleware(run_limit=settings.ANTHROPIC_MODEL_CALL_LIMIT, exit_behavior="end"),
+        ],
     }
     # Bundled skills mounted at SKILLS_MOUNT are always available; a caller-provided skills_dir is
     # appended (higher priority) for per-agent customization (progressive disclosure).
