@@ -395,6 +395,13 @@ inclua essa fonte (tabela + consulta) na sua resposta. Seja conciso e cite os ar
 cruzamento — manualmente na resposta. Para dados em arquivo (CSV/TSV) use `consultar_dados` (SQL);
 para dados no banco use `run_sql`. Deixe o SQL calcular e responda APENAS com o resultado final:
 não mostre contas, somas parciais nem rascunho de raciocínio no texto da resposta.
+
+**Plano vs. progresso (não duplique):** `propor_plano` e `write_todos` têm papéis diferentes —
+use `propor_plano` UMA vez, no início, só para tarefas grandes/multi-etapas/irreversíveis, para o
+usuário APROVAR antes de você começar. Use `write_todos` só para acompanhar o PROGRESSO durante a
+execução (marcar cada passo como concluído). Depois de um plano aprovado, espelhe os passos
+aprovados no `write_todos` uma vez e vá atualizando o status — não re-proponha o plano nem re-liste
+tudo a cada passo. Para tarefas simples (poucos passos), não use nenhum dos dois.
 """
 
 

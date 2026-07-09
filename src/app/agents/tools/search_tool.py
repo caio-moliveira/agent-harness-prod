@@ -70,7 +70,7 @@ async def web_search(queries: List[str]) -> str:
         return "Busca web falhou. Tente consultas diferentes."
 
     output = "Resultados da busca web (Tavily):\n\n"
-    for i, (query, result) in enumerate(zip(queries, results)):
+    for i, (query, result) in enumerate(zip(queries, results, strict=False)):
         output += f"--- CONSULTA {i + 1}: {query} ---\n{_format_result(result)}\n" + "-" * 60 + "\n\n"
     return output
 

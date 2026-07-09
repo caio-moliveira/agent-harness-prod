@@ -40,7 +40,11 @@ from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
 from src.app.core.hitl.pending_model import PendingActionStatus
 from src.app.core.ingestion.source_repository import IngestedFileRepository
-from src.app.core.ingestion.trigger import is_ingesting, run_folder_ingestion, schedule_folder_ingestion
+from src.app.core.ingestion.trigger import (
+    is_ingesting,
+    run_folder_ingestion_if_changed,
+    schedule_folder_ingestion,
+)
 from src.app.core.db.connect import build_db_url, connect_readonly
 from src.app.core.security import decrypt
 from src.app.core.sandbox import registry
@@ -168,7 +172,7 @@ async def _sync_corpus_in_background(user_id: int, agent_id: Optional[int], fold
     runs, and any failure is swallowed.
     """
     try:
-        asyncio.create_task(run_folder_ingestion(user_id, agent_id, folder))
+        asyncio.create_task(run_folder_ingestion_if_changed(user_id, agent_id, folder))
     except Exception:  # noqa: BLE001 - a background sync must never break the chat
         logger.exception("corpus_sync_failed", user_id=user_id, agent_id=agent_id)
 
