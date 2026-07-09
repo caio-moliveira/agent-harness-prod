@@ -64,10 +64,10 @@ def derive_manifest_meta(parsed: ParsedDocument) -> tuple[int, str, float]:
 
 
 def _list_supported_files(folder: str) -> List[str]:
-    """Walk ``folder`` and return absolute paths of files with a registered parser.
+    r"""Walk ``folder`` and return absolute paths of files with a registered parser.
 
     Paths are normalized (``os.path.normpath``) so the manifest key is stable regardless of how the
-    folder was passed (mixed ``/`` and ``\\`` separators would otherwise create duplicate rows —
+    folder was passed (mixed ``/`` and ``\`` separators would otherwise create duplicate rows —
     the same file tracked twice — and spurious add/remove churn on every sync).
     """
     found: List[str] = []
