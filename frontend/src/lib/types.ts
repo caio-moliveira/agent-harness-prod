@@ -118,6 +118,7 @@ export type StreamEvent =
   | { type: "tool_start"; name: string; input?: string }
   | { type: "tool_end"; name: string; output?: string }
   | { type: "token"; content: string }
+  | { type: "thinking"; content: string }
   | { type: "todos"; items: TodoItem[] }
   | { type: "hitl_request"; id: number; action_type: string; title?: string; format?: string }
   | { type: "done" }
@@ -179,6 +180,8 @@ export interface AssistantTurn {
   error?: string;
   approval?: TurnApproval;
   todos?: TodoItem[];
+  /** Live reasoning (Anthropic summarized thinking), streamed before/with the answer. */
+  thinking?: string;
 }
 
 export type Turn = UserTurn | AssistantTurn;

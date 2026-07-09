@@ -157,12 +157,12 @@ class Settings:
         # Anthropic requires an explicit output cap. Streaming is used on the hot paths, so a
         # generous default leaves room for large deliverables without HTTP timeouts.
         self.ANTHROPIC_MAX_TOKENS = int(os.getenv("ANTHROPIC_MAX_TOKENS", "8192"))
-        # Thinking mode for Anthropic: "disabled" (default) or "adaptive". Sonnet 5 turns adaptive
-        # thinking ON when the param is omitted, which emits thinking blocks that must be echoed
-        # back verbatim inside a tool loop — langchain_anthropic mis-serializes them during
-        # streaming and the API 400s ("thinking.thinking: Field required"). Disabling avoids the
-        # bug and cuts token/latency cost; flip to "adaptive" only if that replay path is fixed.
-        self.ANTHROPIC_THINKING = os.getenv("ANTHROPIC_THINKING", "disabled").lower()
+        # Thinking mode for Anthropic: "adaptive" (default) or "disabled". Adaptive is sent with
+        # display="summarized" so the reasoning carries text (streamed to the UI as a live
+        # "raciocínio" panel) AND can be echoed back verbatim inside the tool loop. The empty-text
+        # "omitted" display is what previously broke the loop (400 "thinking.thinking: Field
+        # required"); summarized avoids that. Set to "disabled" to turn thinking off (lower cost).
+        self.ANTHROPIC_THINKING = os.getenv("ANTHROPIC_THINKING", "adaptive").lower()
         # Prompt caching (prefix match). Deep agents cache via AnthropicPromptCachingMiddleware; the
         # chatbot caches a stable system block. Only meaningful when LLM_PROVIDER=anthropic.
         self.PROMPT_CACHING_ENABLED = os.getenv("PROMPT_CACHING_ENABLED", "true").lower() in ("true", "1", "yes")

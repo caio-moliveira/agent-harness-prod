@@ -7,6 +7,7 @@ import Composer from "./Composer";
 import SourcesPanel from "./SourcesPanel";
 import AgentActivity from "./AgentActivity";
 import TodoList from "./TodoList";
+import ThinkingPanel from "./ThinkingPanel";
 import ArtifactApproval from "./ArtifactApproval";
 import ConversationsSidebar from "./ConversationsSidebar";
 import ActivityTimeline from "./ActivityTimeline";
@@ -256,6 +257,11 @@ export default function ChatScreen() {
           );
         } else if (ev.type === "token") {
           setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, content: a.content + ev.content })));
+        } else if (ev.type === "thinking") {
+          // Live reasoning stream — accumulate into the turn's thinking panel.
+          setTurns((prev) =>
+            updateLastAssistant(prev, (a) => ({ ...a, thinking: (a.thinking ?? "") + ev.content })),
+          );
         } else if (ev.type === "todos") {
           // Live plan checklist — replaced whenever the agent re-issues write_todos.
           setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, todos: ev.items })));
@@ -406,6 +412,13 @@ export default function ChatScreen() {
                 ) : (
                   <div key={i} className="animate-rise">
                     <div className="pl-[42px]">
+                      {turn.thinking && (
+                        <ThinkingPanel
+                          text={turn.thinking}
+                          streaming={turn.streaming}
+                          hasAnswer={Boolean(turn.content)}
+                        />
+                      )}
                       {turn.todos && turn.todos.length > 0 && <TodoList items={turn.todos} />}
                       <AgentActivity steps={turn.steps} />
                     </div>

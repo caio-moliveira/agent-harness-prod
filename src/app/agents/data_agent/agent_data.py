@@ -229,11 +229,14 @@ class DataAgent:
                 yield {"type": "tool_end", "name": event.get("name", ""), "output": short_output}
             elif kind == "on_chat_model_stream":
                 chunk = event.get("data", {}).get("chunk")
-                content = getattr(chunk, "content", "") if chunk is not None else ""
-                if content:
-                    text = content if isinstance(content, str) else str(content)
-                    answer += text
-                    yield {"type": "token", "content": text}
+                content = getattr(chunk, "content", None) if chunk is not None else None
+                # Anthropic streams text deltas as a plain string and reasoning as a list of
+                # {type: "thinking"/"text", ...} blocks. Route reasoning to a separate "thinking"
+                # event (live "raciocínio" panel) and only the answer text into the memory answer.
+                for kind_, text in _iter_stream_content(content):
+                    if kind_ == "token":
+                        answer += text
+                    yield {"type": kind_, "content": text}
 
         # Store this exchange back into long-term memory (non-blocking), scoped to this agent.
         if self.memory_enabled and user_id is not None and last_user and answer:
@@ -249,6 +252,36 @@ def _short(value: Any, limit: int = 1500) -> str:
     """Render a tool input/output to a short display string."""
     text = value if isinstance(value, str) else str(value)
     return text[:limit]
+
+
+def _iter_stream_content(content: Any):
+    """Yield ``(event_type, text)`` from a streamed chunk's content.
+
+    Anthropic streams answer text as a plain string and reasoning as a list of content blocks
+    (``{type: "thinking", thinking: "..."}`` for the summarized reasoning, ``{type: "text", ...}``
+    for the answer, plus signature blocks to ignore). Maps thinking → ``"thinking"`` events and
+    everything else that carries text → ``"token"`` events. Provider-agnostic: OpenAI's string
+    content just yields tokens.
+    """
+    if isinstance(content, str):
+        if content:
+            yield ("token", content)
+        return
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                if block:
+                    yield ("token", str(block))
+                continue
+            if block.get("type") == "thinking":
+                reasoning = block.get("thinking")
+                if reasoning:
+                    yield ("thinking", reasoning)
+            elif block.get("type") == "text":
+                text = block.get("text")
+                if text:
+                    yield ("token", text)
+            # signature / other blocks carry no user-facing text — ignore.
 
 
 def _parse_todos(raw: Any) -> Optional[list[dict[str, str]]]:

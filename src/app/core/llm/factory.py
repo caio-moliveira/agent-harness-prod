@@ -58,13 +58,13 @@ def create_chat_model(
             "max_tokens": max_tokens or settings.ANTHROPIC_MAX_TOKENS,
             "max_retries": settings.MAX_LLM_CALL_RETRIES,
         }
-        # Explicitly control thinking. Sonnet 5 runs adaptive thinking when omitted, which emits
-        # thinking blocks that break the multi-turn tool loop under streaming (langchain_anthropic
-        # re-sends them without the required text field → 400). Default to disabled.
-        if settings.ANTHROPIC_THINKING == "adaptive":
-            anthropic_kwargs["thinking"] = {"type": "adaptive"}
-        else:
+        # Explicitly control thinking. Adaptive uses display="summarized" so reasoning carries text
+        # (streamable to the UI, and echoable in the tool loop); the default empty-text "omitted"
+        # display breaks the loop with a 400. "disabled" turns thinking off entirely.
+        if settings.ANTHROPIC_THINKING == "disabled":
             anthropic_kwargs["thinking"] = {"type": "disabled"}
+        else:
+            anthropic_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
         # Only pass api_key when configured; otherwise ChatAnthropic reads ANTHROPIC_API_KEY from the
         # environment (passing None fails validation).
         if settings.ANTHROPIC_API_KEY:
