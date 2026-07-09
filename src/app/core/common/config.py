@@ -135,6 +135,9 @@ class Settings:
         # CORS Settings
         self.ALLOWED_ORIGINS = parse_list_from_env("ALLOWED_ORIGINS", ["*"])
 
+        # Web search (Tavily) — used by the Data Agent (when web_search is enabled) and Deep Research.
+        self.TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+
         # Langfuse Configuration
         self.LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
         self.LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")

@@ -469,7 +469,7 @@ def _create_data_deep_agent(
         tools = tools + make_readonly_sql_tools(db)
     if web_search:
         # Runs host-side, alongside the read-only file tools.
-        tools = tools + get_search_tool(SearchAPI.DUCKDUCKGO)
+        tools = tools + get_search_tool(SearchAPI.TAVILY)
 
     prompt = _compose_system_prompt(system_prompt)
     if workspace_context:
