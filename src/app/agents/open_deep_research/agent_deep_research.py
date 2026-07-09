@@ -52,9 +52,24 @@ class DeepResearchAgent:
     are not used directly by the graph nodes.
     """
 
-    def __init__(self, name: str, checkpointer: AsyncPostgresSaver):
+    def __init__(
+        self,
+        name: str,
+        checkpointer: Optional[AsyncPostgresSaver],
+        allow_clarification: bool = True,
+    ):
+        """Wire the supervisor/researcher subgraphs and the middleware pipeline.
+
+        ``checkpointer`` may be None for a single-shot, non-persistent run (e.g. as a subagent).
+        ``allow_clarification`` False omits the clarify_with_user node so the graph goes straight
+        to research (no user in the loop to answer a clarifying question).
+        """
         self.name = name
         self.checkpointer = checkpointer
+        # When False, the clarify_with_user node is omitted entirely so the graph goes straight to
+        # research. Used when the agent runs as a delegated subagent, where there is no user in the
+        # loop to answer a clarifying question (it would stall the parent's turn).
+        self.allow_clarification = allow_clarification
         self._graph: Optional[CompiledStateGraph] = None
         self._pipeline = AgentPipeline(
             middlewares=[LoggingMiddleware(), ErrorHandlingMiddleware(), MemoryMiddleware()],
@@ -153,17 +168,21 @@ class DeepResearchAgent:
         Returns:
             StateGraph: The uncompiled deep research graph builder.
         """
-        input_guardrail = create_input_guardrail_node(next_node="clarify_with_user")
+        # Skip the clarification node when disabled: the input guardrail routes straight to the
+        # research brief, so a delegated run never pauses to ask the (absent) user a question.
+        entry_after_guardrail = "clarify_with_user" if self.allow_clarification else "write_research_brief"
+        input_guardrail = create_input_guardrail_node(next_node=entry_after_guardrail)
         output_guardrail = create_output_guardrail_node()
 
         deep_researcher_builder = StateGraph(AgentState, input=AgentInputState)
 
         # Guardrail nodes wrap the entire research workflow
-        deep_researcher_builder.add_node("input_guardrail", input_guardrail, ends=["clarify_with_user", END])
+        deep_researcher_builder.add_node("input_guardrail", input_guardrail, ends=[entry_after_guardrail, END])
         deep_researcher_builder.add_node("output_guardrail", output_guardrail)
 
         # Main workflow nodes for the complete research process
-        deep_researcher_builder.add_node("clarify_with_user", clarify_with_user)
+        if self.allow_clarification:
+            deep_researcher_builder.add_node("clarify_with_user", clarify_with_user)
         deep_researcher_builder.add_node("write_research_brief", write_research_brief)
         deep_researcher_builder.add_node("research_supervisor", self.supervisor_subagent.get_graph())
         deep_researcher_builder.add_node("final_report_generation", final_report_generation)

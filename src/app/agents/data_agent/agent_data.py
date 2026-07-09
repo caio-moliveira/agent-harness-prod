@@ -15,9 +15,8 @@ from langchain_community.utilities import SQLDatabase
 from src.app.agents.data_agent.artifact_tools import make_artifact_tools
 from src.app.agents.data_agent.compute_tools import make_compute_tools
 from src.app.agents.data_agent.plan_tools import make_plan_tools
-from src.app.agents.data_agent.subagents import make_user_sql_subagent
+from src.app.agents.data_agent.subagents import make_deep_research_subagent_spec, make_user_sql_subagent
 from src.app.agents.data_agent.tools import make_memory_tools
-from src.app.agents.tools.search_tool import SearchAPI, get_search_tool
 from src.app.core.common.config import settings
 from src.app.core.common.graph_utils import process_messages
 from src.app.core.common.logging import logger
@@ -75,6 +74,7 @@ class DataAgent:
         folder_writable: bool = False,
         session_id: Optional[str] = None,
         sql_enabled: bool = False,
+        deep_research_runnable: Optional[Any] = None,
     ):
         """Build a Data Agent over a session's sources, isolated to one user and agent.
 
@@ -105,6 +105,7 @@ class DataAgent:
             folder_writable,
             session_id,
             sql_enabled,
+            deep_research_runnable,
         )
         self._pipeline = AgentPipeline(
             middlewares=[LoggingMiddleware(), ErrorHandlingMiddleware(), GuardrailMiddleware()],
@@ -421,6 +422,18 @@ _SQL_SUBAGENT_NOTE = (
 )
 
 
+# Appended only when web search is on AND the deep_research subagent compiled, so the guidance to
+# delegate web research appears exactly when the subagent actually exists.
+_WEB_RESEARCH_NOTE = (
+    "## Pesquisa na web (via subagente)\n"
+    "Você NÃO tem busca web direta. Para perguntas que dependem de informação EXTERNA/atual (não "
+    "presente nos documentos nem no banco), delegue ao subagente `deep_research` chamando `task` "
+    "com a pergunta COMPLETA e o que deve constar no relatório. Ele pesquisa múltiplas fontes e "
+    "devolve um relatório com citações — inclua as fontes na sua resposta. É mais lento (roda "
+    "pesquisadores em paralelo): use só quando realmente precisar da web, não para o que já sabe."
+)
+
+
 # Appended only when the granted folder is writable, so the model knows it may create/edit files
 # there (overriding the default read-only file guidance). DB access stays strictly read-only.
 _WRITABLE_FOLDER_NOTE = (
@@ -432,16 +445,27 @@ _WRITABLE_FOLDER_NOTE = (
 )
 
 
-def _build_subagents(db: Optional[SQLDatabase], sql_enabled: bool) -> list[dict[str, Any]]:
+def _build_subagents(
+    db: Optional[SQLDatabase],
+    sql_enabled: bool,
+    web_search: bool = False,
+    deep_research_runnable: Optional[Any] = None,
+) -> list[dict[str, Any]]:
     """Subagents the Data Agent delegates to via ``task()``.
 
-    The user's connected database is reached only through the isolated read-only
-    ``text_sql_agent`` — and only when a database is connected AND the ``sql`` capability is on.
-    With either condition false, the database is not queryable by any path.
+    - The user's database is reached only through the read-only ``text_sql_agent`` — and only when
+      a database is connected AND the ``sql`` capability is on.
+    - Web research is reached only through the ``deep_research`` subagent — and only when the
+      ``web_search`` capability is on AND its runnable compiled (``deep_research_runnable`` is set;
+      it is None when ``OPENAI_API_KEY`` is missing).
+
+    With the gating condition false, that capability is not reachable by any path.
     """
     subagents: list[dict[str, Any]] = []
     if db is not None and sql_enabled:
         subagents.append(make_user_sql_subagent(db))
+    if web_search and deep_research_runnable is not None:
+        subagents.append(make_deep_research_subagent_spec(deep_research_runnable))
     return subagents
 
 
@@ -471,6 +495,7 @@ def _create_data_deep_agent(
     folder_writable: bool = False,
     session_id: Optional[str] = None,
     sql_enabled: bool = False,
+    deep_research_runnable: Optional[Any] = None,
 ) -> Any:
     """Build the underlying Deep Agent with memory tools, an optional folder, and subagents.
 
@@ -488,7 +513,9 @@ def _create_data_deep_agent(
     The user's connected database is NOT a direct tool: when ``db`` is set and ``sql_enabled`` is
     True, it is reached only through the isolated read-only ``text_sql_agent`` subagent, so the
     schema-exploration/query loop stays out of this agent's context. With ``sql_enabled`` False the
-    connected DB is not queryable at all.
+    connected DB is not queryable at all. Likewise, web search is not a direct tool: when
+    ``web_search`` is True and ``deep_research_runnable`` is provided, web questions are delegated
+    to the isolated ``deep_research`` subagent (which replaces the old direct Tavily tool).
     """
     model = create_chat_model()
     tools = make_memory_tools(user_id, agent_id) if memory_enabled else []
@@ -508,14 +535,12 @@ def _create_data_deep_agent(
     # instead of the LLM summing rows by hand.
     if root_dir is not None:
         tools = tools + make_compute_tools(user_id, agent_id, root_dir, session_id)
-    if web_search:
-        # Runs host-side, alongside the read-only file tools.
-        tools = tools + get_search_tool(SearchAPI.TAVILY)
 
-    # Subagents delegated via task(). The user's connected DB is NOT a direct tool: it is reached
-    # only through the isolated read-only text_sql_agent (gated by sql_enabled), so its
-    # schema-exploration/query loop never bloats this agent's context.
-    subagents = _build_subagents(db, sql_enabled)
+    # Subagents delegated via task() — the noisy/expensive work runs in an isolated context and
+    # only the distilled result returns. The user's DB is reached only through the read-only
+    # text_sql_agent (gated by sql_enabled); web research is reached only through the deep_research
+    # subagent (gated by web_search), which replaces the old direct Tavily tool.
+    subagents = _build_subagents(db, sql_enabled, web_search, deep_research_runnable)
 
     prompt = _compose_system_prompt(system_prompt)
     if workspace_context:
@@ -524,6 +549,8 @@ def _create_data_deep_agent(
         # Tell the agent to route DB questions to the subagent (its description + the task tool are
         # auto-injected by SubAgentMiddleware, but this reinforces when and how to delegate).
         prompt = f"{prompt}\n{_SQL_SUBAGENT_NOTE}"
+    if web_search and deep_research_runnable is not None:
+        prompt = f"{prompt}\n{_WEB_RESEARCH_NOTE}"
     if root_dir is not None and folder_writable:
         # Override the default read-only file guidance: this agent may create/edit files in the
         # granted folder (still confined to /workspace).

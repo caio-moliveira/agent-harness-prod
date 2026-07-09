@@ -1,6 +1,6 @@
 """Factory for the per-session Data Agent."""
 
-from typing import Optional
+from typing import Any, Optional
 
 from src.app.agents.data_agent.agent_data import DataAgent, load_system_prompt
 from src.app.core.sandbox.registry import SessionResources
@@ -21,6 +21,7 @@ def build_data_agent(
     folder_writable: bool = False,
     session_id: Optional[str] = None,
     sql_enabled: bool = False,
+    deep_research_runnable: Optional[Any] = None,
 ) -> DataAgent:
     """Build a Data Agent for a session's live resources and stored agent config.
 
@@ -39,11 +40,14 @@ def build_data_agent(
         session_id: The session id, bound to the artifact tool for episodic-log attribution.
         sql_enabled: When True (and a db is attached), the user's database is reachable through the
             isolated read-only ``text_sql_agent`` subagent; defaults off (DB not queryable).
+        deep_research_runnable: The compiled deep-research graph, injected when ``web_search`` is on
+            (None otherwise, or when ``OPENAI_API_KEY`` is missing). Exposes the ``deep_research``
+            subagent for web research; compiled once off the per-session path and shared.
 
     Returns:
         A compiled DataAgent with a per-session FilesystemBackend over the granted folder (if any),
-        per-agent memory tools, and — when ``sql_enabled`` and a db is attached — the read-only
-        ``text_sql_agent`` subagent over the connected database.
+        per-agent memory tools, and — when enabled — the read-only ``text_sql_agent`` subagent over
+        the connected database and/or the ``deep_research`` web-research subagent.
     """
     return DataAgent(
         name=name,
@@ -59,4 +63,5 @@ def build_data_agent(
         folder_writable=folder_writable,
         session_id=session_id,
         sql_enabled=sql_enabled,
+        deep_research_runnable=deep_research_runnable,
     )

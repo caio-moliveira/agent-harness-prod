@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from src.app.agents.data_agent import build_data_agent
 from src.app.agents.data_agent.context import build_workspace_context
+from src.app.agents.data_agent.subagents import get_deep_research_subagent_runnable
 from src.app.api.security.limiter import limiter
 from src.app.api.v1.auth import get_current_session
 from src.app.api.v1.dtos.data_agent import (
@@ -278,6 +279,10 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
     # document tools can search (never a disk file the tools can't reach).
     docs = await IngestedFileRepository().list_all(session.user_id, session.agent_id) if res.folder else None
     workspace_context = build_workspace_context(res.folder, res.db, docs)
+    # Web search is delegated to the deep_research subagent (replaces the old direct Tavily tool):
+    # compile the session-independent graph once (off the per-session path) only when web search is
+    # on. None when OPENAI_API_KEY is absent, in which case the subagent is simply not registered.
+    deep_research_runnable = await get_deep_research_subagent_runnable() if web_search else None
     return build_data_agent(
         res,
         user_id=session.user_id,
@@ -290,6 +295,7 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
         workspace_context=workspace_context,
         folder_writable=folder_writable,
         session_id=session.id,
+        deep_research_runnable=deep_research_runnable,
     )
 
 
