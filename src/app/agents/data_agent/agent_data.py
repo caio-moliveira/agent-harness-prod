@@ -23,6 +23,7 @@ from src.app.core.db.readonly import make_readonly_sql_tools
 from src.app.core.learning import get_reflected_preferences
 from src.app.core.llm.factory import active_model_name, create_chat_model
 from src.app.core.sandbox.backend import ROOT_DIR_CONFIG_KEY, SKILLS_MOUNT, make_backend_factory
+from src.app.core.memory.agent_memory_repository import AgentMemoryRepository
 from src.app.core.memory.memory import bg_update_memory, get_relevant_memory
 from src.app.core.middleware import (
     AgentContext,
@@ -39,6 +40,8 @@ from src.app.core.session.event_repository import SessionEventRepository
 
 # One stateless repository instance for recording episodic events off the streaming path.
 _event_repo = SessionEventRepository()
+# Experience memory (#23), read into the session-start briefing as the "work already done" index.
+_memory_repo = AgentMemoryRepository()
 
 # Bundled skills (SKILL.md files) shipped with the agent, always available via progressive
 # disclosure regardless of whether the session has a granted folder. Mounted read-only at
@@ -176,6 +179,23 @@ class DataAgent:
                     {
                         "role": "system",
                         "content": f"Preferências aprendidas deste usuário/agente (respeite-as):\n{prefs}",
+                    }
+                )
+        # Inject the "work already done" index (#23) — recent experience-memory summaries — so a new
+        # session knows what was already delivered/decided and doesn't redo it. Only the summaries
+        # (tier 1); the agent calls ler_memoria(id) for the details when relevant.
+        if user_id is not None:
+            recent = await _memory_repo.list_recent(user_id, self.agent_id, limit=12)
+            if recent:
+                index = "\n".join(f"- [mem {m.id}] ({m.kind}) {m.summary}" for m in recent)
+                leading.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Trabalho já realizado neste agente (NÃO refaça o que já foi entregue; "
+                            "use `ler_memoria(id)` para detalhes/caminhos antes de gerar algo de novo):\n"
+                            + index
+                        ),
                     }
                 )
         payload_messages = [*leading, *history] if leading else history
