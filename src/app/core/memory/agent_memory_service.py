@@ -7,15 +7,42 @@ best-effort: a memory failure must never break a turn.
 """
 
 import asyncio
-from typing import Optional
+import math
+from typing import TYPE_CHECKING, Optional
 
 from src.app.core.common.logging import logger
 from src.app.core.memory.agent_memory_model import AgentMemory, AgentMemoryKind
 from src.app.core.memory.agent_memory_repository import AgentMemoryRepository
-from src.app.core.retrieval.embedding import Embedder, get_default_embedder
-from src.app.core.retrieval.retriever import _cosine
+
+if TYPE_CHECKING:  # avoid importing the retrieval package at module load (see note below)
+    from src.app.core.retrieval.embedding import Embedder
 
 _repo = AgentMemoryRepository()
+
+
+def _get_embedder():
+    """Return the default embedder, imported lazily.
+
+    ``src.app.core.retrieval`` and ``src.app.core.ingestion`` have a package-init import cycle;
+    importing the embedder at module top would close it during app startup (this module is reached
+    early via ``init`` → ``hitl.executors``). A function-local import defers it to first use, when
+    both packages are fully loaded.
+    """
+    from src.app.core.retrieval.embedding import get_default_embedder
+
+    return get_default_embedder()
+
+
+def _cosine(a: list, b: list) -> float:
+    """Cosine similarity between two vectors; 0 when either is empty or zero-length."""
+    if not a or not b:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
 
 
 class ScoredMemory:
@@ -35,13 +62,13 @@ async def record_memory(
     summary: str,
     body: Optional[dict] = None,
     refs: Optional[dict] = None,
-    embedder: Optional[Embedder] = None,
+    embedder: Optional["Embedder"] = None,
 ) -> Optional[int]:
     """Embed ``summary`` and persist a memory entry; returns its id, or None on failure."""
     if not summary or not summary.strip():
         return None
     try:
-        embedder = embedder or get_default_embedder()
+        embedder = embedder or _get_embedder()
         vector = await embedder.embed_query(summary)
         row = AgentMemory(
             user_id=user_id,
@@ -79,13 +106,13 @@ async def search_memory(
     agent_id: Optional[int],
     query: str,
     k: int = 5,
-    embedder: Optional[Embedder] = None,
+    embedder: Optional["Embedder"] = None,
 ) -> list[ScoredMemory]:
     """Return the top-``k`` entries whose summary is most similar to ``query`` (tier-1 search)."""
     rows = await _repo.get_embedded(user_id, agent_id)
     if not rows:
         return []
-    qvec = await (embedder or get_default_embedder()).embed_query(query)
+    qvec = await (embedder or _get_embedder()).embed_query(query)
     scored = [ScoredMemory(r, _cosine(qvec, r.embedding or [])) for r in rows]
     scored.sort(key=lambda s: s.score, reverse=True)
     return scored[:k]
