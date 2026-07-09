@@ -12,9 +12,11 @@ subagent there is no user in the loop to answer a clarifying question, so it goe
 research. It internally uses the Tavily search tool (which is why Tavily stays in the codebase).
 """
 
+import asyncio
 from typing import Any, Optional
 
 from langchain_core.runnables import Runnable
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.app.agents.open_deep_research.agent_deep_research import DeepResearchAgent
 from src.app.core.common.config import settings
@@ -31,30 +33,47 @@ _DESCRIPTION = (
     "citado. Não use para perguntas simples respondíveis sem a web."
 )
 
-# Compiled once and reused (the graph does not depend on session/user/agent).
+# Compiled once and reused (the graph does not depend on session/user/agent). Guarded by a lock so
+# concurrent first-callers don't race, and ONLY the successful result is cached — a failed compile
+# is retried on the next request instead of disabling the capability process-wide until restart.
 _runnable: Optional[Runnable] = None
-_compiled = False
+_compile_lock = asyncio.Lock()
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+async def _compile_deep_research_agent() -> Runnable:
+    """Compile the deep-research graph, retried with exponential backoff on transient failures.
+
+    No checkpointer: a single-shot delegated run needs no persistence, and an ephemeral graph can
+    never collide with the parent turn's checkpointer. Clarification off (no user in the loop).
+    """
+    agent = DeepResearchAgent("Deep Research (subagent)", checkpointer=None, allow_clarification=False)
+    return await agent.compile()
 
 
 async def get_deep_research_subagent_runnable() -> Optional[Runnable]:
     """Compile (once) and return the deep-research graph as a runnable, or None if unavailable.
 
-    Returns None — with a clear warning, not an exception — when ``OPENAI_API_KEY`` is missing, so
-    a session without the key simply runs without the web-research subagent instead of crashing the
-    whole Data Agent build (the pinned research models are ``openai:gpt-4.1``).
+    Returns None — with a clear log, not an exception — when ``OPENAI_API_KEY`` is missing or the
+    compile ultimately fails, so a session simply runs without the web-research subagent instead of
+    crashing the whole Data Agent build (the pinned research models are ``openai:gpt-4.1``). Only a
+    successful compile is cached; a failure is retried on the next request.
     """
-    global _runnable, _compiled
-    if _compiled:
+    global _runnable
+    if _runnable is not None:
         return _runnable
-    _compiled = True
     if not settings.OPENAI_API_KEY:
         logger.warning("deep_research_subagent_unavailable", reason="missing_openai_api_key")
-        _runnable = None
         return None
-    # No checkpointer: a single-shot delegated run needs no persistence, and an ephemeral graph
-    # can never collide with the parent turn's checkpointer. Clarification off (no user in loop).
-    agent = DeepResearchAgent("Deep Research (subagent)", checkpointer=None, allow_clarification=False)
-    _runnable = await agent.compile()
+    # Serialize concurrent first-callers so the graph is compiled once; re-check inside the lock.
+    async with _compile_lock:
+        if _runnable is not None:
+            return _runnable
+        try:
+            _runnable = await _compile_deep_research_agent()
+        except Exception:
+            logger.exception("deep_research_subagent_compile_failed")
+            return None
     logger.info("deep_research_subagent_compiled")
     return _runnable
 
