@@ -39,9 +39,12 @@ from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
 from src.app.core.hitl.pending_model import PendingActionStatus
-from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
 from src.app.core.ingestion.source_repository import IngestedFileRepository
-from src.app.core.ingestion.trigger import is_ingesting, run_folder_ingestion, schedule_folder_ingestion
+from src.app.core.ingestion.trigger import (
+    is_ingesting,
+    run_folder_ingestion_if_changed,
+    schedule_folder_ingestion,
+)
 from src.app.core.db.connect import build_db_url, connect_readonly
 from src.app.core.security import decrypt
 from src.app.core.sandbox import registry
@@ -156,21 +159,22 @@ async def query_sources(
         raise HTTPException(status_code=500, detail="Erro ao processar a consulta.")
 
 
-async def _selfheal_corpus_if_needed(user_id: int, agent_id: Optional[int], folder: str) -> None:
-    """Repair a stale corpus in the background so the agent never reports "no documents" wrongly.
+async def _sync_corpus_in_background(user_id: int, agent_id: Optional[int], folder: str) -> None:
+    """Keep the corpus + map fresh on every session, in the background (#23).
 
-    If the agent has a bound folder but no searchable corpus (0 embedded chunks — never ingested,
-    wiped, or left un-embedded), kick off a background ingestion so the session repairs itself.
-    Best-effort and idempotent: the ingestion trigger's in-flight guard prevents concurrent runs,
-    and any failure is swallowed.
+    An incremental ``sync_folder`` runs on each session build so files added or removed from the
+    folder between sessions are picked up deterministically (new files ingested + described, removed
+    files soft-deleted) — without the agent having to notice a discrepancy. It also self-heals a
+    wiped/un-embedded corpus (the incremental sync re-ingests anything missing its chunks). The
+    session's briefing reflects the *previous* sync (this one runs after the response starts), so a
+    just-made change shows up on the next session — an acceptable one-session lag for not blocking
+    the turn. Best-effort and idempotent: the ingestion trigger's in-flight guard prevents concurrent
+    runs, and any failure is swallowed.
     """
     try:
-        if await DocumentChunkRepository().count_embedded(user_id, agent_id) > 0:
-            return  # corpus is healthy
-        logger.info("corpus_selfheal_triggered", user_id=user_id, agent_id=agent_id, folder=folder)
-        asyncio.create_task(run_folder_ingestion(user_id, agent_id, folder))
-    except Exception:  # noqa: BLE001 - self-heal must never break the chat
-        logger.exception("corpus_selfheal_failed", user_id=user_id, agent_id=agent_id)
+        asyncio.create_task(run_folder_ingestion_if_changed(user_id, agent_id, folder))
+    except Exception:  # noqa: BLE001 - a background sync must never break the chat
+        logger.exception("corpus_sync_failed", user_id=user_id, agent_id=agent_id)
 
 
 async def _ensure_agent_folder(res: SessionResources, session: Session, folder: str) -> None:
@@ -263,9 +267,9 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
                 folder_writable = bool(config.get("folder_writable", False))
                 await _ensure_agent_folder(res, session, folder)
                 if res.folder:
-                    # Repair a never-ingested/wiped corpus in the background so the agent doesn't
-                    # report "no documents" for a folder it clearly has.
-                    await _selfheal_corpus_if_needed(session.user_id, session.agent_id, res.folder)
+                    # Keep the corpus + map fresh: an incremental background sync catches files
+                    # added/removed since last session (and self-heals a wiped corpus).
+                    await _sync_corpus_in_background(session.user_id, session.agent_id, res.folder)
             if config.get("database"):
                 await _ensure_agent_database(res, session, config["database"])
             skills_dir = await _materialize_agent_skills(session.agent_id, agent.user_id, config.get("skills"))

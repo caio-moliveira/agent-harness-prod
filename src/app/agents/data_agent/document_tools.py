@@ -31,6 +31,7 @@ from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
 from src.app.core.ingestion.normalize import normalize_text
+from src.app.core.ingestion.source_model import IngestedFileStatus
 from src.app.core.ingestion.source_repository import IngestedFileRepository
 from src.app.core.sandbox.paths import is_within_allowed_roots
 from src.app.core.sandbox.registry import registry
@@ -177,22 +178,33 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
         Se a lista estiver truncada, o total é declarado.
         """
         docs = await manifest.list_all(user_id, agent_id)
-        if not docs:
+        # The map: only active files are readable; deleted rows are kept only so the agent knows a
+        # file it saw before is gone (not an error to retry).
+        active = [d for d in docs if d.status != IngestedFileStatus.DELETED]
+        if not active:
             return (
                 "Nenhum documento indexado para este agente ainda. Peça ao usuário para conectar/atualizar "
                 "a pasta em Fontes (a indexação roda ao conceder a pasta)."
             )
-        total = len(docs)
-        shown = docs[:_MAX_LIST]
-        lines = [
-            f"- {d.doc_id} · \"{d.title}\" · {d.page_count} pág · texto: {d.text_layer} "
-            f"({d.ocr_confidence:.0%} das páginas com texto)"
-            for d in shown
-        ]
+        total = len(active)
+        shown = active[:_MAX_LIST]
+        lines = []
+        for d in shown:
+            desc = f" — {d.description}" if d.description else ""
+            lines.append(
+                f"- {d.doc_id} · \"{d.title}\" · {d.page_count} pág · texto: {d.text_layer} "
+                f"({d.ocr_confidence:.0%} das páginas com texto){desc}"
+            )
         header = f"{total} documento(s) indexado(s)"
         if total > _MAX_LIST:
             header += f" — mostrando os primeiros {_MAX_LIST} (há {total} no total)"
-        return header + ":\n" + "\n".join(lines)
+        out = header + ":\n" + "\n".join(lines)
+        deleted = [d for d in docs if d.status == IngestedFileStatus.DELETED]
+        if deleted:
+            out += "\n\nRemovidos da pasta (não leia — não existem mais): " + ", ".join(
+                d.title for d in deleted[:_MAX_LIST]
+            )
+        return out
 
     @tool
     async def read_document(doc_id: str, start_page: int, end_page: int) -> str:

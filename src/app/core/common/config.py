@@ -135,6 +135,9 @@ class Settings:
         # CORS Settings
         self.ALLOWED_ORIGINS = parse_list_from_env("ALLOWED_ORIGINS", ["*"])
 
+        # Web search (Tavily) — used by the Data Agent (when web_search is enabled) and Deep Research.
+        self.TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+
         # Langfuse Configuration
         self.LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
         self.LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
@@ -157,12 +160,17 @@ class Settings:
         # Anthropic requires an explicit output cap. Streaming is used on the hot paths, so a
         # generous default leaves room for large deliverables without HTTP timeouts.
         self.ANTHROPIC_MAX_TOKENS = int(os.getenv("ANTHROPIC_MAX_TOKENS", "8192"))
-        # Thinking mode for Anthropic: "adaptive" (default) or "disabled". Adaptive is sent with
-        # display="summarized" so the reasoning carries text (streamed to the UI as a live
-        # "raciocínio" panel) AND can be echoed back verbatim inside the tool loop. The empty-text
-        # "omitted" display is what previously broke the loop (400 "thinking.thinking: Field
-        # required"); summarized avoids that. Set to "disabled" to turn thinking off (lower cost).
-        self.ANTHROPIC_THINKING = os.getenv("ANTHROPIC_THINKING", "adaptive").lower()
+        # Thinking mode for Anthropic: "disabled" (default) or "adaptive". Adaptive (display=
+        # summarized) streams the reasoning to the UI, but on a tool-heavy agent it makes the model
+        # do the whole analysis *inside* thinking and re-send a huge thinking block + signature on
+        # every tool-loop step — a runaway token cost (and re-planning loops). Off by default; set to
+        # "adaptive" to opt back in (best on light, conversational agents, not the Data Agent).
+        self.ANTHROPIC_THINKING = os.getenv("ANTHROPIC_THINKING", "disabled").lower()
+        # Hard cap on model calls per turn (safety net against a runaway agent loop). Applied to the
+        # deep agents via ModelCallLimitMiddleware; the agent ends gracefully at the cap. A legit
+        # multi-deliverable turn can use ~25-30 calls, so 40 leaves headroom while still bounding a
+        # runaway. The deep agent's recursion_limit is set above this so the graceful cap wins.
+        self.ANTHROPIC_MODEL_CALL_LIMIT = int(os.getenv("ANTHROPIC_MODEL_CALL_LIMIT", "40"))
         # Prompt caching (prefix match). Deep agents cache via AnthropicPromptCachingMiddleware; the
         # chatbot caches a stable system block. Only meaningful when LLM_PROVIDER=anthropic.
         self.PROMPT_CACHING_ENABLED = os.getenv("PROMPT_CACHING_ENABLED", "true").lower() in ("true", "1", "yes")

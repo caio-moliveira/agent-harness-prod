@@ -44,11 +44,14 @@ def create_chat_model(
     model: Optional[str] = None,
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
+    thinking: Optional[str] = None,
 ) -> BaseChatModel:
     """Build the agents' chat model for the configured provider.
 
     ``temperature`` is honored for OpenAI only; on Anthropic (Sonnet 5) it is dropped because the
-    model rejects non-default sampling parameters. ``max_tokens`` defaults per provider.
+    model rejects non-default sampling parameters. ``max_tokens`` defaults per provider. ``thinking``
+    ("adaptive"/"disabled") overrides ``settings.ANTHROPIC_THINKING`` for this model — e.g. a
+    tool-heavy agent forces "disabled" while a light agent opts into "adaptive".
     """
     if _is_anthropic():
         if temperature is not None:
@@ -61,10 +64,11 @@ def create_chat_model(
         # Explicitly control thinking. Adaptive uses display="summarized" so reasoning carries text
         # (streamable to the UI, and echoable in the tool loop); the default empty-text "omitted"
         # display breaks the loop with a 400. "disabled" turns thinking off entirely.
-        if settings.ANTHROPIC_THINKING == "disabled":
-            anthropic_kwargs["thinking"] = {"type": "disabled"}
-        else:
+        mode = (thinking or settings.ANTHROPIC_THINKING).lower()
+        if mode == "adaptive":
             anthropic_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+        else:
+            anthropic_kwargs["thinking"] = {"type": "disabled"}
         # Only pass api_key when configured; otherwise ChatAnthropic reads ANTHROPIC_API_KEY from the
         # environment (passing None fails validation).
         if settings.ANTHROPIC_API_KEY:

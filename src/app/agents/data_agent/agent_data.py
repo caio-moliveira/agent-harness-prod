@@ -9,13 +9,15 @@ import os
 from typing import Any, AsyncGenerator, Optional
 
 from deepagents import create_deep_agent
-from langchain.agents.middleware import PIIMiddleware
+from langchain.agents.middleware import ModelCallLimitMiddleware, PIIMiddleware
 from langchain_community.utilities import SQLDatabase
 
 from src.app.agents.data_agent.artifact_tools import make_artifact_tools
+from src.app.agents.data_agent.compute_tools import make_compute_tools
 from src.app.agents.data_agent.plan_tools import make_plan_tools
 from src.app.agents.data_agent.tools import make_memory_tools
 from src.app.agents.tools.search_tool import SearchAPI, get_search_tool
+from src.app.core.common.config import settings
 from src.app.core.common.graph_utils import process_messages
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
@@ -23,6 +25,7 @@ from src.app.core.db.readonly import make_readonly_sql_tools
 from src.app.core.learning import get_reflected_preferences
 from src.app.core.llm.factory import active_model_name, create_chat_model
 from src.app.core.sandbox.backend import ROOT_DIR_CONFIG_KEY, SKILLS_MOUNT, make_backend_factory
+from src.app.core.memory.agent_memory_repository import AgentMemoryRepository
 from src.app.core.memory.memory import bg_update_memory, get_relevant_memory
 from src.app.core.middleware import (
     AgentContext,
@@ -39,6 +42,8 @@ from src.app.core.session.event_repository import SessionEventRepository
 
 # One stateless repository instance for recording episodic events off the streaming path.
 _event_repo = SessionEventRepository()
+# Experience memory (#23), read into the session-start briefing as the "work already done" index.
+_memory_repo = AgentMemoryRepository()
 
 # Bundled skills (SKILL.md files) shipped with the agent, always available via progressive
 # disclosure regardless of whether the session has a granted folder. Mounted read-only at
@@ -111,6 +116,11 @@ class DataAgent:
         config = build_invoke_config(session_id, user_id, self.name)
         if self.root_dir:
             config["configurable"][ROOT_DIR_CONFIG_KEY] = self.root_dir
+        # A legit multi-deliverable turn can take ~25-30 tool calls (≈2 graph steps each), which
+        # exceeds the shared default recursion limit and would crash mid-task with
+        # GraphRecursionError. Raise it above the model-call cap so ModelCallLimitMiddleware (which
+        # ends gracefully) is what stops a runaway, not a hard crash.
+        config["recursion_limit"] = 2 * settings.ANTHROPIC_MODEL_CALL_LIMIT + 20
         return config
 
     async def agent_invoke(
@@ -176,6 +186,23 @@ class DataAgent:
                     {
                         "role": "system",
                         "content": f"Preferências aprendidas deste usuário/agente (respeite-as):\n{prefs}",
+                    }
+                )
+        # Inject the "work already done" index (#23) — recent experience-memory summaries — so a new
+        # session knows what was already delivered/decided and doesn't redo it. Only the summaries
+        # (tier 1); the agent calls ler_memoria(id) for the details when relevant.
+        if user_id is not None:
+            recent = await _memory_repo.list_recent(user_id, self.agent_id, limit=12)
+            if recent:
+                index = "\n".join(f"- [mem {m.id}] ({m.kind}) {m.summary}" for m in recent)
+                leading.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Trabalho já realizado neste agente (NÃO refaça o que já foi entregue; "
+                            "use `ler_memoria(id)` para detalhes/caminhos antes de gerar algo de novo):\n"
+                            + index
+                        ),
                     }
                 )
         payload_messages = [*leading, *history] if leading else history
@@ -332,6 +359,10 @@ Conforme as fontes que o usuário conectou, você pode ter:
   (achar o `doc_id`) → localizar a página com `search_documents` (termo exato) **ou** `buscar_documentos`
   (conceito/paráfrase) → `read_document` (texto) ou `read_page_image` (imagem). Cada página traz o
   índice do PDF e o fólio impresso (com aviso de divergência).
+- **Cálculo sobre arquivos de dados (CSV/TSV)** — `listar_dados()` mostra os arquivos da pasta como
+  tabelas SQL (colunas + nº de linhas); `consultar_dados(sql)` roda **SQL de leitura (DuckDB)** e
+  devolve o resultado **EXATO**. Use SEMPRE para somas, contagens, médias, rankings e cruzamentos
+  sobre CSV/TSV — **NUNCA some/agregue linhas na mão**. Fluxo: `listar_dados` → `consultar_dados`.
 - **Memória de longo prazo** — `buscar_memoria(consulta)`.
 - **Aprovação de plano** — `propor_plano(titulo, passos)` propõe um plano e PAUSA para o usuário
   aprovar antes de executar. Use só antes de tarefas grandes, com muitos passos ou irreversíveis
@@ -359,6 +390,18 @@ Executar a consulta é a validação: se `run_sql` retornar erro, corrija a part
 disponíveis e execute de novo — **nunca invente tabelas ou colunas**, e não dê a resposta final
 até a consulta rodar sem erro. Cada resultado de `run_sql` traz uma linha `[proveniência]`;
 inclua essa fonte (tabela + consulta) na sua resposta. Seja conciso e cite os arquivos/tabelas usados.
+
+**Cálculo (regra crítica):** NUNCA faça agregações numéricas — soma, contagem, média, ranking,
+cruzamento — manualmente na resposta. Para dados em arquivo (CSV/TSV) use `consultar_dados` (SQL);
+para dados no banco use `run_sql`. Deixe o SQL calcular e responda APENAS com o resultado final:
+não mostre contas, somas parciais nem rascunho de raciocínio no texto da resposta.
+
+**Plano vs. progresso (não duplique):** `propor_plano` e `write_todos` têm papéis diferentes —
+use `propor_plano` UMA vez, no início, só para tarefas grandes/multi-etapas/irreversíveis, para o
+usuário APROVAR antes de você começar. Use `write_todos` só para acompanhar o PROGRESSO durante a
+execução (marcar cada passo como concluído). Depois de um plano aprovado, espelhe os passos
+aprovados no `write_todos` uma vez e vá atualizando o status — não re-proponha o plano nem re-liste
+tudo a cada passo. Para tarefas simples (poucos passos), não use nenhum dos dois.
 """
 
 
@@ -425,11 +468,15 @@ def _create_data_deep_agent(
     # Plan-approval (#19 gate): the agent can propose a plan and pause for the user's OK before large
     # or irreversible work.
     tools = tools + make_plan_tools(user_id, agent_id, session_id)
+    # SQL compute over the folder's CSV/TSV files (#24), so exact aggregations are done by the engine
+    # instead of the LLM summing rows by hand.
+    if root_dir is not None:
+        tools = tools + make_compute_tools(user_id, agent_id, root_dir, session_id)
     if db is not None:
         tools = tools + make_readonly_sql_tools(db)
     if web_search:
         # Runs host-side, alongside the read-only file tools.
-        tools = tools + get_search_tool(SearchAPI.DUCKDUCKGO)
+        tools = tools + get_search_tool(SearchAPI.TAVILY)
 
     prompt = _compose_system_prompt(system_prompt)
     if workspace_context:
@@ -441,12 +488,16 @@ def _create_data_deep_agent(
 
     # create_deep_agent already bundles SummarizationMiddleware (context summarization near the
     # window) and AnthropicPromptCachingMiddleware (prompt caching, active once the model is
-    # Anthropic) into its default stack — we only add PII redaction on top.
+    # Anthropic) into its default stack — we add PII redaction and a hard model-call cap (safety net
+    # so a runaway tool/planning loop ends gracefully instead of burning tokens).
     kwargs: dict[str, Any] = {
         "model": model,
         "tools": tools,
         "system_prompt": prompt,
-        "middleware": [PIIMiddleware("email")],
+        "middleware": [
+            PIIMiddleware("email"),
+            ModelCallLimitMiddleware(run_limit=settings.ANTHROPIC_MODEL_CALL_LIMIT, exit_behavior="end"),
+        ],
     }
     # Bundled skills mounted at SKILLS_MOUNT are always available; a caller-provided skills_dir is
     # appended (higher priority) for per-agent customization (progressive disclosure).

@@ -3,9 +3,11 @@ from typing import Any, Optional
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
-from langchain.agents.middleware import PIIMiddleware
+from langchain.agents.middleware import ModelCallLimitMiddleware, PIIMiddleware
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_community.utilities import SQLDatabase
+
+from src.app.core.common.config import settings
 
 from src.app.core.middleware import (
     AgentContext,
@@ -88,7 +90,10 @@ def create_sql_deep_agent():
         skills=[
             "./skills/"
         ],  # Specialized workflows (query-writing, schema-exploration)
-        middleware=[PIIMiddleware("email")],
+        middleware=[
+            PIIMiddleware("email"),
+            ModelCallLimitMiddleware(run_limit=settings.ANTHROPIC_MODEL_CALL_LIMIT, exit_behavior="end"),
+        ],
         tools=sql_tools,  # SQL database tools
         subagents=[],  # No subagents needed
         backend=FilesystemBackend(root_dir=base_dir),  # Persistent file storage

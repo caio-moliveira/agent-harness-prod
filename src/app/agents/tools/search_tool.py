@@ -1,11 +1,20 @@
+"""Web search tool provider.
+
+Default is Tavily (LLM-oriented search: relevant snippets + source URLs), exposed as a
+``web_search(queries)`` tool that runs several queries in parallel. Provider-native options
+(Anthropic/OpenAI server-side web search) are also available for agents that bind them directly.
+"""
+
 import asyncio
+import logging
 from enum import Enum
 from typing import List
 
 from langchain_core.tools import tool
 
-from src.app.agents.tools import duckduckgo_search_tool
-import logging
+from src.app.core.common.config import settings
+
+_tavily = None
 
 
 class SearchAPI(Enum):
@@ -13,86 +22,74 @@ class SearchAPI(Enum):
 
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
-    DUCKDUCKGO = "duckduckgo"
+    TAVILY = "tavily"
     NONE = "none"
 
 
-def get_search_tool(search_api: SearchAPI):
-    """Configure and return search tools based on the specified API provider.
+def _get_tavily():
+    """Lazily build the Tavily search tool (reads TAVILY_API_KEY from settings/env)."""
+    global _tavily
+    if _tavily is None:
+        from langchain_tavily import TavilySearch
 
-    Args:
-        search_api: The search API provider to use (Anthropic, OpenAI, DuckDuckGo, or None)
-
-    Returns:
-        List of configured search tool objects for the specified provider
-    """
-    if search_api == SearchAPI.ANTHROPIC:
-        # Anthropic's native web search with usage limits
-        return [{
-            "type": "web_search_20250305",
-            "name": "web_search",
-            "max_uses": 5
-        }]
-
-    elif search_api == SearchAPI.OPENAI:
-        # OpenAI's web search preview functionality
-        return [{"type": "web_search_preview"}]
-
-    elif search_api == SearchAPI.DUCKDUCKGO:
-        # Configure DuckDuckGo search tool with metadata
-        search_tool = duckduckgo_search
-        search_tool.metadata = {
-            **(search_tool.metadata or {}),
-            "type": "search",
-            "name": "web_search"
-        }
-        return [search_tool]
-
-    elif search_api == SearchAPI.NONE:
-        # No search functionality configured
-        return []
-
-    # Default fallback for unknown search API types
-    return []
+        kwargs = {"max_results": 5}
+        if settings.TAVILY_API_KEY:
+            kwargs["tavily_api_key"] = settings.TAVILY_API_KEY
+        _tavily = TavilySearch(**kwargs)
+    return _tavily
 
 
-##########################
-# DuckDuckGo Search Tool Utils
-##########################
-DUCKDUCKGO_SEARCH_DESCRIPTION = (
-    "A search engine for comprehensive web results. "
-    "Useful for when you need to answer questions about current events."
+def _format_result(result) -> str:
+    """Render one Tavily result payload (dict with a ``results`` list) to a compact string."""
+    if isinstance(result, dict) and isinstance(result.get("results"), list):
+        items = result["results"]
+        if not items:
+            return "(sem resultados)"
+        return "\n".join(
+            f"- {it.get('title', '')} ({it.get('url', '')})\n  {(it.get('content') or '')[:300]}"
+            for it in items
+        )
+    return str(result)[:1500]
+
+
+WEB_SEARCH_DESCRIPTION = (
+    "Busca na web (Tavily) — devolve resultados relevantes com título, trecho e URL. Passe uma lista "
+    "de consultas curtas e específicas. Use para embasar recomendações com fontes; cite a URL."
 )
 
 
-@tool(description=DUCKDUCKGO_SEARCH_DESCRIPTION)
-async def duckduckgo_search(queries: List[str]) -> str:
-    """Execute multiple DuckDuckGo search queries and return formatted results.
+@tool(description=WEB_SEARCH_DESCRIPTION)
+async def web_search(queries: List[str]) -> str:
+    """Run web searches (Tavily) for each query in parallel and return formatted results + sources."""
+    tavily = _get_tavily()
+    tasks = [tavily.ainvoke({"query": q}) for q in queries]
+    try:
+        results = await asyncio.gather(*tasks)
+    except Exception:
+        logging.warning("web_search_failed", exc_info=True)
+        return "Busca web falhou. Tente consultas diferentes."
+
+    output = "Resultados da busca web (Tavily):\n\n"
+    for i, (query, result) in enumerate(zip(queries, results, strict=False)):
+        output += f"--- CONSULTA {i + 1}: {query} ---\n{_format_result(result)}\n" + "-" * 60 + "\n\n"
+    return output
+
+
+def get_search_tool(search_api: SearchAPI):
+    """Return the search tool(s) for the given provider.
 
     Args:
-        queries: List of search queries to execute
+        search_api: The search API provider (Tavily, Anthropic native, OpenAI native, or None).
 
     Returns:
-        Formatted string containing search results from all queries
+        A list of tool objects (or provider-native tool dicts) to bind to the agent.
     """
-    # Execute all search queries in parallel
-    search_tasks = [duckduckgo_search_tool.ainvoke(query) for query in queries]
-
-    try:
-        search_results = await asyncio.gather(*search_tasks)
-    except Exception:
-        logging.warning("duckduckgo_search_failed", exc_info=True)
-        return "Search failed. Please try different search queries."
-
-    # Format the results
-    if not any(search_results):
-        return "No valid search results found. Please try different search queries."
-
-    formatted_output = "Search results:\n\n"
-    for i, (query, result) in enumerate(zip(queries, search_results)):
-        formatted_output += f"--- QUERY {i + 1}: {query} ---\n"
-        formatted_output += f"{result}\n"
-        formatted_output += "-" * 80 + "\n\n"
-
-    return formatted_output
-
+    if search_api == SearchAPI.ANTHROPIC:
+        # Anthropic's native server-side web search.
+        return [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
+    if search_api == SearchAPI.OPENAI:
+        # OpenAI's native web search preview.
+        return [{"type": "web_search_preview"}]
+    if search_api == SearchAPI.TAVILY:
+        return [web_search]
+    return []

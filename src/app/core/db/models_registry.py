@@ -11,6 +11,7 @@ from src.app.core.agent import agent_model  # noqa: F401
 from src.app.core.hitl import pending_model  # noqa: F401
 from src.app.core.ingestion import chunk_model, source_model  # noqa: F401
 from src.app.core.learning import models as learning_models  # noqa: F401
+from src.app.core.memory import agent_memory_model  # noqa: F401
 from src.app.core.session import event_model, message_model, session_model  # noqa: F401
 from src.app.core.skill import skill_model  # noqa: F401
 from src.app.core.user import user_model  # noqa: F401

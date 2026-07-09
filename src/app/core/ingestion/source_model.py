@@ -14,6 +14,19 @@ from sqlmodel import Field
 from src.app.core.common.model.base import BaseModel
 
 
+class IngestedFileStatus:
+    """Lifecycle of a manifest row (the map's ``status`` column).
+
+    ``ACTIVE`` — file present on disk, described, valid to read. ``DELETED`` — the file was removed
+    from the folder; the row is kept (soft-delete) so the map remembers it existed, but its chunks
+    are purged and it is hidden from the catalog. ``PENDING`` — newly detected, not yet described.
+    """
+
+    ACTIVE = "active"
+    DELETED = "deleted"
+    PENDING = "pending"
+
+
 def derive_doc_id(content_hash: str) -> str:
     """A stable, ASCII, tool-friendly id for a document, derived from its content hash.
 
@@ -44,3 +57,8 @@ class IngestedFile(BaseModel, table=True):
     page_count: int = Field(default=0)
     text_layer: str = Field(default="native")  # native | ocr | mixed
     ocr_confidence: float = Field(default=1.0)  # heuristic: fraction of pages with extractable text
+    # The "map" (#23): a one-line semantic summary generated at ingest, and a lifecycle status. The
+    # briefing lists ``title + status + description`` so the agent knows what each file is (and
+    # whether it's still valid) without reading it — and the catalog remembers deleted files.
+    description: str = Field(default="")
+    status: str = Field(default="active", index=True)  # see IngestedFileStatus

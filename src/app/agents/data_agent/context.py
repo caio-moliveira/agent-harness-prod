@@ -30,12 +30,26 @@ def _folder_brief(folder: str, docs: Optional[list] = None) -> Optional[str]:
     lines: list[str] = []
 
     if docs is not None:
-        if docs:
-            listing = [f"- {d.title} ({d.page_count} págs · texto {d.text_layer})" for d in docs[:_MAX_FILES]]
+        # The map (#23): list only ACTIVE files with their one-line description, so the agent knows
+        # what each file is (and can decide whether to open it) without reading the corpus. Deleted
+        # files are noted apart so the agent doesn't try to read something that's gone.
+        active = [d for d in docs if getattr(d, "status", "active") != "deleted"]
+        deleted = [d for d in docs if getattr(d, "status", "active") == "deleted"]
+        if active:
+            listing = []
+            for d in active[:_MAX_FILES]:
+                desc = f" — {d.description}" if getattr(d, "description", "") else ""
+                listing.append(f"- {d.title} ({d.page_count} págs · texto {d.text_layer}){desc}")
             lines.append(
-                "Documentos indexados em `/workspace` (pesquisáveis com `list_documents`, "
-                "`search_documents`, `read_document`):\n" + "\n".join(listing)
+                "Mapa dos documentos em `/workspace` (nome + descrição; pesquise com `list_documents`, "
+                "`search_documents`, `read_document`; leia um documento só quando a descrição indicar "
+                "que ele tem o que você precisa):\n" + "\n".join(listing)
             )
+            if deleted:
+                lines.append(
+                    "Removidos da pasta (não existem mais, não tente ler): "
+                    + ", ".join(d.title for d in deleted[:_MAX_FILES])
+                )
         else:
             lines.append(
                 "A pasta em `/workspace` foi conectada e seus documentos estão sendo indexados — "
