@@ -115,6 +115,11 @@ class DataAgent:
         config = build_invoke_config(session_id, user_id, self.name)
         if self.root_dir:
             config["configurable"][ROOT_DIR_CONFIG_KEY] = self.root_dir
+        # A legit multi-deliverable turn can take ~25-30 tool calls (≈2 graph steps each), which
+        # exceeds the shared default recursion limit and would crash mid-task with
+        # GraphRecursionError. Raise it above the model-call cap so ModelCallLimitMiddleware (which
+        # ends gracefully) is what stops a runaway, not a hard crash.
+        config["recursion_limit"] = 2 * settings.ANTHROPIC_MODEL_CALL_LIMIT + 20
         return config
 
     async def agent_invoke(

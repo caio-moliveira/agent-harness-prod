@@ -164,8 +164,10 @@ class Settings:
         # "adaptive" to opt back in (best on light, conversational agents, not the Data Agent).
         self.ANTHROPIC_THINKING = os.getenv("ANTHROPIC_THINKING", "disabled").lower()
         # Hard cap on model calls per turn (safety net against a runaway agent loop). Applied to the
-        # deep agents via ModelCallLimitMiddleware; the agent ends gracefully at the cap.
-        self.ANTHROPIC_MODEL_CALL_LIMIT = int(os.getenv("ANTHROPIC_MODEL_CALL_LIMIT", "30"))
+        # deep agents via ModelCallLimitMiddleware; the agent ends gracefully at the cap. A legit
+        # multi-deliverable turn can use ~25-30 calls, so 40 leaves headroom while still bounding a
+        # runaway. The deep agent's recursion_limit is set above this so the graceful cap wins.
+        self.ANTHROPIC_MODEL_CALL_LIMIT = int(os.getenv("ANTHROPIC_MODEL_CALL_LIMIT", "40"))
         # Prompt caching (prefix match). Deep agents cache via AnthropicPromptCachingMiddleware; the
         # chatbot caches a stable system block. Only meaningful when LLM_PROVIDER=anthropic.
         self.PROMPT_CACHING_ENABLED = os.getenv("PROMPT_CACHING_ENABLED", "true").lower() in ("true", "1", "yes")
