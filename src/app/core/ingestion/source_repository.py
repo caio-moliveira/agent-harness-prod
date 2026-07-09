@@ -7,7 +7,7 @@ from sqlmodel import delete, select
 
 from src.app.core.common.logging import logger
 from src.app.core.db.database import session_scope
-from src.app.core.ingestion.source_model import IngestedFile, derive_doc_id
+from src.app.core.ingestion.source_model import IngestedFile, IngestedFileStatus, derive_doc_id
 
 
 class IngestedFileRepository:
@@ -61,11 +61,15 @@ class IngestedFileRepository:
         page_count: int = 0,
         text_layer: str = "native",
         ocr_confidence: float = 1.0,
+        description: str = "",
+        status: str = IngestedFileStatus.ACTIVE,
     ) -> None:
         """Insert or update the tracking + manifest record for one source file.
 
         ``doc_id`` (from the content hash) and ``title`` (the file name, display-only) are derived
-        here so every ingestion path fills the catalog consistently.
+        here so every ingestion path fills the catalog consistently. ``description`` (the map blurb)
+        is only overwritten when a non-empty value is given, so a failed description pass never wipes
+        an existing one. ``status`` is set to active on (re)ingest — an ingested file is valid.
         """
         with session_scope() as session:
             statement = select(IngestedFile).where(
@@ -83,8 +87,49 @@ class IngestedFileRepository:
             record.page_count = page_count
             record.text_layer = text_layer
             record.ocr_confidence = ocr_confidence
+            record.status = status
+            if description:
+                record.description = description
             session.add(record)
             session.commit()
+
+    async def set_description(
+        self, user_id: int, agent_id: Optional[int], source_path: str, description: str
+    ) -> None:
+        """Fill in a manifest row's map description (used to backfill already-ingested files)."""
+        with session_scope() as session:
+            statement = select(IngestedFile).where(
+                IngestedFile.user_id == user_id,
+                IngestedFile.agent_id == agent_id,
+                IngestedFile.source_path == source_path,
+            )
+            record = session.exec(statement).first()
+            if record is None:
+                return
+            record.description = description
+            session.add(record)
+            session.commit()
+
+    async def mark_deleted(self, user_id: int, agent_id: Optional[int], source_path: str) -> None:
+        """Soft-delete a manifest row (the file was removed from the folder).
+
+        The row is kept with ``status=deleted`` so the map remembers the file existed; its chunks
+        are purged separately by the caller so it's no longer searchable.
+        """
+        with session_scope() as session:
+            statement = select(IngestedFile).where(
+                IngestedFile.user_id == user_id,
+                IngestedFile.agent_id == agent_id,
+                IngestedFile.source_path == source_path,
+            )
+            record = session.exec(statement).first()
+            if record is None:
+                return
+            record.status = IngestedFileStatus.DELETED
+            record.chunk_count = 0
+            session.add(record)
+            session.commit()
+            logger.info("ingested_file_soft_deleted", user_id=user_id, source_path=source_path)
 
     async def delete(self, user_id: int, agent_id: Optional[int], source_path: str) -> None:
         """Drop the tracking record for one source file (it was removed from the folder)."""

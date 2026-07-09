@@ -33,6 +33,12 @@ class IngestFileResult(BaseModel):
     page_count: int = 0
     text_layer: str = "native"  # native | ocr | mixed
     ocr_confidence: float = 1.0
+    # Head of the extracted text, so a caller (sync) can generate the map description (#23) without
+    # re-parsing the file.
+    text_preview: str = ""
+
+
+_TEXT_PREVIEW_CHARS = 4000
 
 
 def derive_manifest_meta(parsed: ParsedDocument) -> tuple[int, str, float]:
@@ -58,11 +64,16 @@ def derive_manifest_meta(parsed: ParsedDocument) -> tuple[int, str, float]:
 
 
 def _list_supported_files(folder: str) -> List[str]:
-    """Walk ``folder`` and return absolute paths of files with a registered parser."""
+    """Walk ``folder`` and return absolute paths of files with a registered parser.
+
+    Paths are normalized (``os.path.normpath``) so the manifest key is stable regardless of how the
+    folder was passed (mixed ``/`` and ``\\`` separators would otherwise create duplicate rows —
+    the same file tracked twice — and spurious add/remove churn on every sync).
+    """
     found: List[str] = []
     for root, _dirs, files in os.walk(folder):
         for name in files:
-            path = os.path.join(root, name)
+            path = os.path.normpath(os.path.join(root, name))
             if is_supported(path):
                 found.append(path)
     return sorted(found)
@@ -98,11 +109,13 @@ async def ingest_file(
     # never leave the document with zero chunks if it is interrupted.
     await repo.replace_source(user_id, agent_id, path, models)
     page_count, text_layer, confidence = derive_manifest_meta(parsed)
+    preview = "\n".join(s.text for s in parsed.sections if s.text.strip())[:_TEXT_PREVIEW_CHARS]
     return IngestFileResult(
         chunk_count=len(models),
         page_count=page_count,
         text_layer=text_layer,
         ocr_confidence=confidence,
+        text_preview=preview,
     )
 
 
