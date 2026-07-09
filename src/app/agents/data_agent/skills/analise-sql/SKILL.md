@@ -1,14 +1,23 @@
 ---
 name: analise-sql
-description: Para responder perguntas sobre o banco de dados com rigor — descobrir o schema real, escrever SQL somente-leitura correto e citar a proveniência dos números.
+description: Para calcular com exatidão sobre dados — no banco (run_sql) OU em arquivos CSV/TSV da pasta (consultar_dados) — descobrindo o schema real e escrevendo SQL somente-leitura, sem somar à mão.
 ---
 
-# Análise de dados em SQL
+# Análise de dados em SQL (banco OU arquivos CSV/TSV)
 
 ## Quando usar
 
-Use quando a pergunta depender de dados que estão no **banco de dados** conectado (contagens,
-somas, rankings, tendências, cruzamentos entre tabelas).
+Use SEMPRE que a pergunta exigir cálculo exato — somas, contagens, médias, rankings, tendências,
+cruzamentos — seja sobre o **banco de dados** conectado OU sobre **arquivos CSV/TSV** na pasta.
+Regra de ouro: **você nunca soma/agrega linhas na mão** — o SQL calcula.
+
+## Qual ferramenta
+
+- **Arquivos CSV/TSV na pasta** → `listar_dados()` (mostra os arquivos como tabelas + colunas) e
+  `consultar_dados(sql)` (roda SQL DuckDB sobre eles). Cada arquivo é uma tabela pelo nome (ex.:
+  `vendas_2025.csv` → `vendas_2025`). Ex.:
+  `SELECT regiao, SUM(receita) AS receita FROM vendas_2025 WHERE mes IN ('jul','ago','set') GROUP BY regiao ORDER BY receita DESC`
+- **Banco de dados** conectado → `list_tables` / `describe_tables` / `run_sql`.
 
 ## Fluxo obrigatório
 

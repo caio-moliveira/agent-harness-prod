@@ -13,6 +13,7 @@ from langchain.agents.middleware import ModelCallLimitMiddleware, PIIMiddleware
 from langchain_community.utilities import SQLDatabase
 
 from src.app.agents.data_agent.artifact_tools import make_artifact_tools
+from src.app.agents.data_agent.compute_tools import make_compute_tools
 from src.app.agents.data_agent.plan_tools import make_plan_tools
 from src.app.agents.data_agent.tools import make_memory_tools
 from src.app.agents.tools.search_tool import SearchAPI, get_search_tool
@@ -358,6 +359,10 @@ Conforme as fontes que o usuário conectou, você pode ter:
   (achar o `doc_id`) → localizar a página com `search_documents` (termo exato) **ou** `buscar_documentos`
   (conceito/paráfrase) → `read_document` (texto) ou `read_page_image` (imagem). Cada página traz o
   índice do PDF e o fólio impresso (com aviso de divergência).
+- **Cálculo sobre arquivos de dados (CSV/TSV)** — `listar_dados()` mostra os arquivos da pasta como
+  tabelas SQL (colunas + nº de linhas); `consultar_dados(sql)` roda **SQL de leitura (DuckDB)** e
+  devolve o resultado **EXATO**. Use SEMPRE para somas, contagens, médias, rankings e cruzamentos
+  sobre CSV/TSV — **NUNCA some/agregue linhas na mão**. Fluxo: `listar_dados` → `consultar_dados`.
 - **Memória de longo prazo** — `buscar_memoria(consulta)`.
 - **Aprovação de plano** — `propor_plano(titulo, passos)` propõe um plano e PAUSA para o usuário
   aprovar antes de executar. Use só antes de tarefas grandes, com muitos passos ou irreversíveis
@@ -385,6 +390,11 @@ Executar a consulta é a validação: se `run_sql` retornar erro, corrija a part
 disponíveis e execute de novo — **nunca invente tabelas ou colunas**, e não dê a resposta final
 até a consulta rodar sem erro. Cada resultado de `run_sql` traz uma linha `[proveniência]`;
 inclua essa fonte (tabela + consulta) na sua resposta. Seja conciso e cite os arquivos/tabelas usados.
+
+**Cálculo (regra crítica):** NUNCA faça agregações numéricas — soma, contagem, média, ranking,
+cruzamento — manualmente na resposta. Para dados em arquivo (CSV/TSV) use `consultar_dados` (SQL);
+para dados no banco use `run_sql`. Deixe o SQL calcular e responda APENAS com o resultado final:
+não mostre contas, somas parciais nem rascunho de raciocínio no texto da resposta.
 """
 
 
@@ -451,6 +461,10 @@ def _create_data_deep_agent(
     # Plan-approval (#19 gate): the agent can propose a plan and pause for the user's OK before large
     # or irreversible work.
     tools = tools + make_plan_tools(user_id, agent_id, session_id)
+    # SQL compute over the folder's CSV/TSV files (#24), so exact aggregations are done by the engine
+    # instead of the LLM summing rows by hand.
+    if root_dir is not None:
+        tools = tools + make_compute_tools(user_id, agent_id, root_dir, session_id)
     if db is not None:
         tools = tools + make_readonly_sql_tools(db)
     if web_search:
