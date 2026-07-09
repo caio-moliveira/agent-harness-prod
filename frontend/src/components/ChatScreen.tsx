@@ -6,6 +6,8 @@ import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SourcesPanel from "./SourcesPanel";
 import AgentActivity from "./AgentActivity";
+import TodoList from "./TodoList";
+import ThinkingPanel from "./ThinkingPanel";
 import ArtifactApproval from "./ArtifactApproval";
 import ConversationsSidebar from "./ConversationsSidebar";
 import ActivityTimeline from "./ActivityTimeline";
@@ -87,7 +89,9 @@ export default function ChatScreen() {
     if (!userToken) return;
     try {
       const pending = await api.listPendingActions(userToken);
-      const mine = pending.filter((a) => a.session_id === sid && a.action_type === "export_artifact");
+      const mine = pending.filter(
+        (a) => a.session_id === sid && (a.action_type === "export_artifact" || a.action_type === "approve_plan"),
+      );
       if (!mine.length) return;
       const action = mine[mine.length - 1];
       for (let i = built.length - 1; i >= 0; i--) {
@@ -95,9 +99,13 @@ export default function ChatScreen() {
         if (t.role === "assistant") {
           t.approval = {
             id: action.id,
-            title: (action.payload?.spec as { title?: string } | undefined)?.title ?? "artefato",
+            title:
+              (action.payload?.spec as { title?: string } | undefined)?.title ??
+              (action.payload?.title as string | undefined) ??
+              (action.action_type === "approve_plan" ? "plano" : "artefato"),
             format: action.payload?.fmt as string | undefined,
             status: "pending",
+            action_type: action.action_type,
           };
           break;
         }
@@ -249,12 +257,27 @@ export default function ChatScreen() {
           );
         } else if (ev.type === "token") {
           setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, content: a.content + ev.content })));
+        } else if (ev.type === "thinking") {
+          // Live reasoning stream — accumulate into the turn's thinking panel.
+          setTurns((prev) =>
+            updateLastAssistant(prev, (a) => ({ ...a, thinking: (a.thinking ?? "") + ev.content })),
+          );
+        } else if (ev.type === "todos") {
+          // Live plan checklist — replaced whenever the agent re-issues write_todos.
+          setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, todos: ev.items })));
         } else if (ev.type === "hitl_request") {
-          // The agent parked an outward action — anchor a compact approval to this turn.
+          // The agent parked an outward action (artifact export or a plan) — anchor a compact
+          // approval to this turn.
           setTurns((prev) =>
             updateLastAssistant(prev, (a) => ({
               ...a,
-              approval: { id: ev.id, title: ev.title ?? "artefato", format: ev.format, status: "pending" },
+              approval: {
+                id: ev.id,
+                title: ev.title ?? "artefato",
+                format: ev.format,
+                status: "pending",
+                action_type: ev.action_type,
+              },
             })),
           );
         } else if (ev.type === "error") {
@@ -389,6 +412,14 @@ export default function ChatScreen() {
                 ) : (
                   <div key={i} className="animate-rise">
                     <div className="pl-[42px]">
+                      {turn.thinking && (
+                        <ThinkingPanel
+                          text={turn.thinking}
+                          streaming={turn.streaming}
+                          hasAnswer={Boolean(turn.content)}
+                        />
+                      )}
+                      {turn.todos && turn.todos.length > 0 && <TodoList items={turn.todos} />}
                       <AgentActivity steps={turn.steps} />
                     </div>
                     {(turn.content || turn.streaming) && (
@@ -404,6 +435,7 @@ export default function ChatScreen() {
                           approval={turn.approval}
                           userToken={userToken}
                           onDecided={(status) => setApprovalStatus(turn.approval!.id, status)}
+                          onApprovedResume={() => void handleSend("Plano aprovado, pode prosseguir com a execução.")}
                         />
                       </div>
                     )}

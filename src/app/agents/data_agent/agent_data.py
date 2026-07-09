@@ -4,24 +4,25 @@ Mirrors the structure of ``text_sql_agent.py`` but is built PER SESSION from the
 resources in the registry, rather than as a singleton bound to a fixed database.
 """
 
+import json
 import os
 from typing import Any, AsyncGenerator, Optional
 
 from deepagents import create_deep_agent
 from langchain.agents.middleware import PIIMiddleware
 from langchain_community.utilities import SQLDatabase
-from langchain_openai import ChatOpenAI
 
 from src.app.agents.data_agent.artifact_tools import make_artifact_tools
+from src.app.agents.data_agent.plan_tools import make_plan_tools
 from src.app.agents.data_agent.tools import make_memory_tools
 from src.app.agents.tools.search_tool import SearchAPI, get_search_tool
-from src.app.core.common.config import settings
 from src.app.core.common.graph_utils import process_messages
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
 from src.app.core.db.readonly import make_readonly_sql_tools
 from src.app.core.learning import get_reflected_preferences
-from src.app.core.sandbox.backend import ROOT_DIR_CONFIG_KEY, make_backend_factory
+from src.app.core.llm.factory import active_model_name, create_chat_model
+from src.app.core.sandbox.backend import ROOT_DIR_CONFIG_KEY, SKILLS_MOUNT, make_backend_factory
 from src.app.core.memory.memory import bg_update_memory, get_relevant_memory
 from src.app.core.middleware import (
     AgentContext,
@@ -38,6 +39,11 @@ from src.app.core.session.event_repository import SessionEventRepository
 
 # One stateless repository instance for recording episodic events off the streaming path.
 _event_repo = SessionEventRepository()
+
+# Bundled skills (SKILL.md files) shipped with the agent, always available via progressive
+# disclosure regardless of whether the session has a granted folder. Mounted read-only at
+# SKILLS_MOUNT by the per-session backend.
+_BUNDLED_SKILLS_DIR = os.path.join(os.path.dirname(__file__), "skills")
 
 
 def load_system_prompt() -> str:
@@ -120,7 +126,7 @@ class DataAgent:
             user_id=user_id,
             config=self._invoke_config(session_id, user_id),
             agent_name=self.name,
-            metadata={"model_name": settings.DEFAULT_LLM_MODEL},
+            metadata={"model_name": active_model_name()},
         )
         return await self._pipeline.run(ctx)
 
@@ -203,6 +209,12 @@ class DataAgent:
                     "name": tool_name,
                     "input": tool_input,
                 }
+                # Surface the plan as a live checklist (not just a raw JSON step) when the agent
+                # calls write_todos.
+                if tool_name == "write_todos":
+                    todos = _parse_todos(event.get("data", {}).get("input"))
+                    if todos:
+                        yield {"type": "todos", "items": todos}
             elif kind == "on_tool_end":
                 output = event.get("data", {}).get("output")
                 if hasattr(output, "content"):
@@ -217,11 +229,14 @@ class DataAgent:
                 yield {"type": "tool_end", "name": event.get("name", ""), "output": short_output}
             elif kind == "on_chat_model_stream":
                 chunk = event.get("data", {}).get("chunk")
-                content = getattr(chunk, "content", "") if chunk is not None else ""
-                if content:
-                    text = content if isinstance(content, str) else str(content)
-                    answer += text
-                    yield {"type": "token", "content": text}
+                content = getattr(chunk, "content", None) if chunk is not None else None
+                # Anthropic streams text deltas as a plain string and reasoning as a list of
+                # {type: "thinking"/"text", ...} blocks. Route reasoning to a separate "thinking"
+                # event (live "raciocínio" panel) and only the answer text into the memory answer.
+                for kind_, text in _iter_stream_content(content):
+                    if kind_ == "token":
+                        answer += text
+                    yield {"type": kind_, "content": text}
 
         # Store this exchange back into long-term memory (non-blocking), scoped to this agent.
         if self.memory_enabled and user_id is not None and last_user and answer:
@@ -237,6 +252,60 @@ def _short(value: Any, limit: int = 1500) -> str:
     """Render a tool input/output to a short display string."""
     text = value if isinstance(value, str) else str(value)
     return text[:limit]
+
+
+def _iter_stream_content(content: Any):
+    """Yield ``(event_type, text)`` from a streamed chunk's content.
+
+    Anthropic streams answer text as a plain string and reasoning as a list of content blocks
+    (``{type: "thinking", thinking: "..."}`` for the summarized reasoning, ``{type: "text", ...}``
+    for the answer, plus signature blocks to ignore). Maps thinking → ``"thinking"`` events and
+    everything else that carries text → ``"token"`` events. Provider-agnostic: OpenAI's string
+    content just yields tokens.
+    """
+    if isinstance(content, str):
+        if content:
+            yield ("token", content)
+        return
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                if block:
+                    yield ("token", str(block))
+                continue
+            if block.get("type") == "thinking":
+                reasoning = block.get("thinking")
+                if reasoning:
+                    yield ("thinking", reasoning)
+            elif block.get("type") == "text":
+                text = block.get("text")
+                if text:
+                    yield ("token", text)
+            # signature / other blocks carry no user-facing text — ignore.
+
+
+def _parse_todos(raw: Any) -> Optional[list[dict[str, str]]]:
+    """Extract the ``write_todos`` task list from a tool input, or None if it isn't parseable.
+
+    Returns ``[{"content", "status"}, ...]`` so the UI can render a live checklist instead of a raw
+    JSON blob. Tolerant of the input arriving as a dict or a JSON string.
+    """
+    data = raw
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(data, dict):
+        return None
+    todos = data.get("todos")
+    if not isinstance(todos, list):
+        return None
+    items: list[dict[str, str]] = []
+    for todo in todos:
+        if isinstance(todo, dict) and todo.get("content"):
+            items.append({"content": str(todo["content"]), "status": str(todo.get("status", "pending"))})
+    return items or None
 
 
 # Tool-usage guidance the harness ALWAYS appends to a user's custom system prompt, so a
@@ -264,6 +333,9 @@ Conforme as fontes que o usuário conectou, você pode ter:
   (conceito/paráfrase) → `read_document` (texto) ou `read_page_image` (imagem). Cada página traz o
   índice do PDF e o fólio impresso (com aviso de divergência).
 - **Memória de longo prazo** — `buscar_memoria(consulta)`.
+- **Aprovação de plano** — `propor_plano(titulo, passos)` propõe um plano e PAUSA para o usuário
+  aprovar antes de executar. Use só antes de tarefas grandes, com muitos passos ou irreversíveis
+  (não para perguntas simples). Após propor, aguarde a aprovação — você prossegue quando aprovado.
 - **Geração de artefato** — `gerar_artefato(titulo, formato, secoes, ...)` para produzir um
   relatório em Word (`docx`) ou PowerPoint (`pptx`). Use quando o usuário pedir um relatório/
   documento/apresentação; inclua a `fonte` de cada item (tabela+consulta ou documento).
@@ -339,7 +411,7 @@ def _create_data_deep_agent(
     still confined to the folder); the ``execute`` tool is never exposed (the backend is not a
     sandbox).
     """
-    model = ChatOpenAI(model=settings.DEFAULT_LLM_MODEL, temperature=0, api_key=settings.OPENAI_API_KEY)
+    model = create_chat_model()
     tools = make_memory_tools(user_id, agent_id) if memory_enabled else []
     # Semantic search over this agent's ingested documents (#14), scoped to (user, agent).
     tools = tools + make_retrieval_tools(user_id, agent_id)
@@ -350,6 +422,9 @@ def _create_data_deep_agent(
     # feeds the success metrics (#21) and reflection (#20). Bound to this session; the deliverable
     # lands in the granted folder when it is writable, else a temp dir.
     tools = tools + make_artifact_tools(user_id, agent_id, session_id, root_dir, folder_writable)
+    # Plan-approval (#19 gate): the agent can propose a plan and pause for the user's OK before large
+    # or irreversible work.
+    tools = tools + make_plan_tools(user_id, agent_id, session_id)
     if db is not None:
         tools = tools + make_readonly_sql_tools(db)
     if web_search:
@@ -364,19 +439,22 @@ def _create_data_deep_agent(
         # granted folder (still confined to /workspace).
         prompt = f"{prompt}\n{_WRITABLE_FOLDER_NOTE}"
 
+    # create_deep_agent already bundles SummarizationMiddleware (context summarization near the
+    # window) and AnthropicPromptCachingMiddleware (prompt caching, active once the model is
+    # Anthropic) into its default stack — we only add PII redaction on top.
     kwargs: dict[str, Any] = {
         "model": model,
         "tools": tools,
         "system_prompt": prompt,
         "middleware": [PIIMiddleware("email")],
     }
-    if skills_dir is not None:
-        # deepagents loads SKILL.md files from this directory (progressive disclosure).
-        kwargs["skills"] = [skills_dir]
-    # When a folder is granted, route the built-in file tools (ls/read_file/glob/grep) to a
-    # per-session FilesystemBackend under /workspace (resolved per invocation from config),
-    # read-only unless folder_writable. No folder => the framework default StateBackend.
-    if root_dir is not None:
-        kwargs["backend"] = make_backend_factory(root_dir, writable=folder_writable)
+    # Bundled skills mounted at SKILLS_MOUNT are always available; a caller-provided skills_dir is
+    # appended (higher priority) for per-agent customization (progressive disclosure).
+    kwargs["skills"] = [SKILLS_MOUNT] + ([skills_dir] if skills_dir is not None else [])
+    # Route the built-in file tools: /workspace → the granted folder (when set), /skills → the
+    # bundled read-only skills, everything else → the framework's ephemeral StateBackend scratch.
+    kwargs["backend"] = make_backend_factory(
+        root_dir or "", writable=folder_writable, skills_dir=_BUNDLED_SKILLS_DIR
+    )
 
     return create_deep_agent(**kwargs)

@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, Any, AsyncGenerator
 
 from asgiref.sync import sync_to_async
-from langchain_core.messages import SystemMessage, ToolMessage, convert_to_openai_messages
+from langchain_core.messages import ToolMessage, convert_to_openai_messages
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import END
@@ -33,15 +33,10 @@ from src.app.core.context import truncate_tool_call_if_too_long
 from src.app.core.mcp.mcp_utils import handle_mcp_tool_call
 from src.app.core.mcp.session_manager import get_mcp_session_manager
 from src.app.core.memory.memory import bg_update_memory, get_relevant_memory
+from src.app.core.llm.factory import active_model_name, build_system_message, create_chat_model
 
-from langchain.chat_models import init_chat_model
 
-
-chatbot_model = init_chat_model(
-    model=f"openai:{settings.DEFAULT_LLM_MODEL}",
-    api_key=settings.OPENAI_API_KEY,
-    max_tokens=settings.MAX_TOKENS,
-)
+chatbot_model = create_chat_model(max_tokens=settings.MAX_TOKENS)
 
 class AgentChatbot:
     """Example agent to demonstrate the agentic framework."""
@@ -60,7 +55,7 @@ class AgentChatbot:
                 MemoryMiddleware(),
                 SummarizationMiddleware(
                     llm=chatbot_model,
-                    model_name=f"openai:{settings.DEFAULT_LLM_MODEL}",
+                    model_name=active_model_name(),
                 ),
                 TrimLongMessagesMiddleware(
                     llm=chatbot_model,
@@ -258,8 +253,14 @@ class AgentChatbot:
                 ctx, messages=messages, model_name=settings.DEFAULT_LLM_MODEL,
             )
 
-        system_prompt = load_system_prompt(long_term_memory=state.long_term_memory)
-        prepared = [SystemMessage(content=system_prompt)] + list(messages)
+        # Keep the cacheable prefix byte-stable: the persona/instructions live in a stable system
+        # block, while the per-turn volatile context (date + long-term memory) goes after the cache
+        # breakpoint. On Anthropic this makes the system prompt + tools a cache hit across turns.
+        stable_prompt = load_system_prompt()
+        volatile_parts = [f"# Current date and time\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"]
+        if state.long_term_memory:
+            volatile_parts.append(f"# What you know about the user\n{state.long_term_memory}")
+        prepared = [build_system_message(stable_prompt, "\n\n".join(volatile_parts))] + list(messages)
 
         model = (
             chatbot_model
@@ -315,11 +316,11 @@ class AgentChatbot:
             raise e
 
 
-def load_system_prompt(**kwargs):
-    """Load the system prompt from the file."""
+def load_system_prompt() -> str:
+    """Load the stable (cacheable) chatbot system prompt.
+
+    Only the deploy-stable ``agent_name`` is interpolated; volatile per-turn context (date, long-term
+    memory) is appended separately by the caller so the cached prefix stays byte-stable.
+    """
     with open(os.path.join(os.path.dirname(__file__), "system.md"), "r") as f:
-        return f.read().format(
-            agent_name=settings.PROJECT_NAME + " Agent",
-            current_date_and_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            **kwargs,
-        )
+        return f.read().format(agent_name=settings.PROJECT_NAME + " Agent")

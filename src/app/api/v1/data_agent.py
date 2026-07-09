@@ -375,7 +375,8 @@ def _hitl_event(action) -> dict:
         "type": "hitl_request",
         "id": action.id,
         "action_type": action.action_type,
-        "title": spec.get("title") or "Ação pendente",
+        # export_artifact carries the title in its spec; approve_plan carries it at the top level.
+        "title": spec.get("title") or payload.get("title") or "Ação pendente",
         "format": payload.get("fmt"),
     }
 

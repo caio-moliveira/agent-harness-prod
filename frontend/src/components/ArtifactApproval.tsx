@@ -12,21 +12,29 @@ export default function ArtifactApproval({
   approval,
   userToken,
   onDecided,
+  onApprovedResume,
 }: {
   approval: TurnApproval;
   userToken: string;
   onDecided: (status: "approved" | "rejected") => void;
+  /** Called after a plan is approved, so the caller can resume the agent (auto-send "proceed"). */
+  onApprovedResume?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isPlan = approval.action_type === "approve_plan";
   const fmt = approval.format?.toUpperCase();
   const label = `“${approval.title}”${fmt ? ` (${fmt})` : ""}`;
 
   if (approval.status === "approved") {
-    return <p className="mt-1 text-xs text-emerald-400">📄 Artefato {label} gerado.</p>;
+    return (
+      <p className="mt-1 text-xs text-emerald-400">
+        {isPlan ? `✅ Plano ${label} aprovado.` : `📄 Artefato ${label} gerado.`}
+      </p>
+    );
   }
   if (approval.status === "rejected") {
-    return <p className="mt-1 text-xs text-slate-500">Geração recusada.</p>;
+    return <p className="mt-1 text-xs text-slate-500">{isPlan ? "Plano recusado." : "Geração recusada."}</p>;
   }
 
   async function decide(approve: boolean) {
@@ -36,6 +44,7 @@ export default function ArtifactApproval({
       if (approve) await api.confirmAction(userToken, approval.id);
       else await api.rejectAction(userToken, approval.id);
       onDecided(approve ? "approved" : "rejected");
+      if (approve && isPlan) onApprovedResume?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao processar.");
       setBusy(false);
@@ -44,7 +53,7 @@ export default function ArtifactApproval({
 
   return (
     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
-      <span>Gerar o artefato {label}?</span>
+      <span>{isPlan ? `Executar o plano ${label}?` : `Gerar o artefato ${label}?`}</span>
       <button
         onClick={() => void decide(true)}
         disabled={busy}
