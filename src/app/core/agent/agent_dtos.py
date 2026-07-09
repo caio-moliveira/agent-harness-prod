@@ -18,7 +18,8 @@ class AgentCreate(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=100, description="Agent name")
     system_prompt: str = Field(default="", max_length=10000, description="Agent system prompt")
-    web_search: bool = Field(default=False, description="Allow the agent to search the web")
+    web_search: bool = Field(default=False, description="Allow web research via the deep_research subagent")
+    sql: bool = Field(default=False, description="Allow querying the connected database via the text_sql_agent subagent")
     memory: bool = Field(default=True, description="Enable long-term memory for the agent")
 
     @field_validator("name")
@@ -36,7 +37,8 @@ class AgentUpdate(BaseModel):
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     system_prompt: Optional[str] = Field(default=None, max_length=10000)
-    web_search: Optional[bool] = Field(default=None, description="Allow the agent to search the web")
+    web_search: Optional[bool] = Field(default=None, description="Allow web research via the deep_research subagent")
+    sql: Optional[bool] = Field(default=None, description="Allow querying the connected database via the text_sql_agent subagent")
     memory: Optional[bool] = Field(default=None, description="Enable long-term memory for the agent")
 
     @field_validator("name")
@@ -58,6 +60,7 @@ class AgentResponse(BaseModel):
     name: str
     system_prompt: str
     web_search: bool = False
+    sql: bool = False
     memory: bool = True
     folder: Optional[str] = Field(default=None, description="Bound sandboxed folder path, if any")
     folder_writable: bool = Field(default=False, description="Whether the bound folder allows writes")

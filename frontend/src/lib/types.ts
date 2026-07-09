@@ -59,6 +59,7 @@ export interface Agent {
   name: string;
   system_prompt: string;
   web_search: boolean;
+  sql: boolean;
   memory: boolean;
   folder?: string | null;
   folder_writable?: boolean;

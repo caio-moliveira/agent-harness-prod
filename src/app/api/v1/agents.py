@@ -67,6 +67,7 @@ def _to_response(agent: Agent) -> AgentResponse:
         name=agent.name,
         system_prompt=agent.system_prompt,
         web_search=bool(config.get("web_search", False)),
+        sql=bool(config.get("sql", False)),
         memory=config.get("memory") is not False,
         folder=config.get("folder"),
         folder_writable=bool(config.get("folder_writable", False)),
@@ -98,7 +99,7 @@ async def create_agent(
     request: Request, body: AgentCreate, user: User = Depends(get_current_user)
 ) -> AgentResponse:
     """Create a new agent owned by the authenticated user."""
-    config = {"web_search": body.web_search, "memory": body.memory}
+    config = {"web_search": body.web_search, "sql": body.sql, "memory": body.memory}
     agent = await agent_repository.create_agent(user.id, body.name, body.system_prompt, config=config)
     logger.info("agent_api_created", agent_id=agent.id, user_id=user.id)
     return _to_response(agent)
@@ -132,6 +133,8 @@ async def update_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
     if body.web_search is not None:
         updated = await agent_repository.set_config_value(agent_id, "web_search", body.web_search)
+    if body.sql is not None:
+        updated = await agent_repository.set_config_value(agent_id, "sql", body.sql)
     if body.memory is not None:
         updated = await agent_repository.set_config_value(agent_id, "memory", body.memory)
     logger.info("agent_api_updated", agent_id=agent_id, user_id=user.id)

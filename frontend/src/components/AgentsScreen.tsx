@@ -17,6 +17,7 @@ export default function AgentsScreen() {
   const [prompt, setPrompt] = useState("");
   const [folder, setFolder] = useState("");
   const [webSearch, setWebSearch] = useState(false);
+  const [sqlEnabled, setSqlEnabled] = useState(false);
   const [memory, setMemory] = useState(true);
   const [busy, setBusy] = useState(false);
 
@@ -79,6 +80,7 @@ export default function AgentsScreen() {
     try {
       const agent = await api.createAgent(userToken, name.trim(), prompt.trim(), {
         web_search: webSearch,
+        sql: sqlEnabled,
         memory,
       });
       let created = agent;
@@ -90,6 +92,7 @@ export default function AgentsScreen() {
       setPrompt("");
       setFolder("");
       setWebSearch(false);
+      setSqlEnabled(false);
       setMemory(true);
       setCreating(false);
       setAgents((prev) => [...prev, created]);
@@ -176,9 +179,9 @@ export default function AgentsScreen() {
     }
   }
 
-  async function toggleCapability(agent: Agent, key: "web_search" | "memory") {
+  async function toggleCapability(agent: Agent, key: "web_search" | "sql" | "memory") {
     if (!userToken) return;
-    const next = key === "web_search" ? !agent.web_search : !agent.memory;
+    const next = !agent[key];
     try {
       const updated = await api.updateAgent(userToken, agent.id, { [key]: next });
       setAgents((prev) => prev.map((a) => (a.id === agent.id ? updated : a)));
@@ -416,6 +419,12 @@ export default function AgentsScreen() {
                   🌐 web {agent.web_search ? "on" : "off"}
                 </button>
                 <button
+                  onClick={() => void toggleCapability(agent, "sql")}
+                  className={`rounded-full px-2 py-1 ${agent.sql ? "bg-emerald-900 text-emerald-200" : "bg-slate-800 text-slate-500"}`}
+                >
+                  🗄️ sql {agent.sql ? "on" : "off"}
+                </button>
+                <button
                   onClick={() => void toggleCapability(agent, "memory")}
                   className={`rounded-full px-2 py-1 ${agent.memory ? "bg-emerald-900 text-emerald-200" : "bg-slate-800 text-slate-500"}`}
                 >
@@ -494,10 +503,14 @@ export default function AgentsScreen() {
               placeholder="Pasta (opcional) — caminho dentro de SANDBOX_ALLOWED_ROOTS"
               className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-indigo-600"
             />
-            <div className="flex gap-4 text-sm text-slate-300">
+            <div className="flex flex-wrap gap-4 text-sm text-slate-300">
               <label className="flex items-center gap-2">
                 <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} />
-                🌐 Busca na web
+                🌐 Pesquisa na web
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={sqlEnabled} onChange={(e) => setSqlEnabled(e.target.checked)} />
+                🗄️ Banco de dados
               </label>
               <label className="flex items-center gap-2">
                 <input type="checkbox" checked={memory} onChange={(e) => setMemory(e.target.checked)} />

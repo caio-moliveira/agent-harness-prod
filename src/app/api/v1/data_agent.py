@@ -239,6 +239,7 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
     system_prompt = None
     name = "Data Agent"
     web_search = False
+    sql_enabled = False
     memory_enabled = True
     skills_dir = None
     folder = None
@@ -260,6 +261,7 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
             system_prompt = agent.system_prompt or None
             name = agent.name or name
             web_search = bool(config.get("web_search", False))
+            sql_enabled = bool(config.get("sql", False))
             # Treat a missing OR null memory flag as enabled (default on).
             memory_enabled = config.get("memory") is not False
             folder = config.get("folder")
@@ -295,6 +297,7 @@ async def _build_agent_for_session(res: SessionResources, session: Session):
         workspace_context=workspace_context,
         folder_writable=folder_writable,
         session_id=session.id,
+        sql_enabled=sql_enabled,
         deep_research_runnable=deep_research_runnable,
     )
 
