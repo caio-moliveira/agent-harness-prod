@@ -36,7 +36,7 @@ from src.app.core.middleware import (
 )
 from src.app.agents.data_agent.document_tools import make_document_tools
 from src.app.core.retrieval import make_retrieval_tools
-from src.app.core.session.event_recorder import bg_record_tool_event
+from src.app.core.session.event_recorder import bg_record_delegation_event, bg_record_tool_event
 from src.app.core.session.event_repository import SessionEventRepository
 
 # One stateless repository instance for recording episodic events off the streaming path.
@@ -217,28 +217,45 @@ class DataAgent:
             kind = event.get("event")
             if kind == "on_tool_start":
                 tool_name = event.get("name", "")
-                tool_input = _short(event.get("data", {}).get("input"))
+                raw_input = event.get("data", {}).get("input")
+                tool_input = _short(raw_input)
+                # A task() call delegates to a subagent — surface a human label ("Consultando o
+                # banco…" / "Pesquisando na web…") so the timeline reads clearly and never looks
+                # frozen during a long delegated run. subagent_type is None for non-task tools.
+                display_name, subagent_type = _display_for_tool(tool_name, raw_input)
                 # A followable, one-line trace of what the agent is doing this turn.
                 logger.info(
                     "agent_tool_start",
                     tool=tool_name,
+                    subagent=subagent_type,
                     session_id=session_id,
                     agent_id=self.agent_id,
                     tool_input=tool_input,
                 )
-                # Audit trail (#10): record document reads / SQL executions off the hot path.
-                bg_record_tool_event(
-                    _event_repo,
-                    user_id=user_id,
-                    agent_id=self.agent_id,
-                    session_id=session_id,
-                    tool_name=tool_name,
-                    tool_input=tool_input,
-                    scope="database" if tool_name == "run_sql" else "folder",
-                )
+                # Audit trail (#10): record a delegation at its boundary (robust — does not rely on
+                # the subagent's nested events propagating); otherwise record document reads / SQL.
+                if subagent_type is not None:
+                    bg_record_delegation_event(
+                        _event_repo,
+                        user_id=user_id,
+                        agent_id=self.agent_id,
+                        session_id=session_id,
+                        subagent_type=subagent_type,
+                        task=tool_input,
+                    )
+                else:
+                    bg_record_tool_event(
+                        _event_repo,
+                        user_id=user_id,
+                        agent_id=self.agent_id,
+                        session_id=session_id,
+                        tool_name=tool_name,
+                        tool_input=tool_input,
+                        scope="database" if tool_name == "run_sql" else "folder",
+                    )
                 yield {
                     "type": "tool_start",
-                    "name": tool_name,
+                    "name": display_name,
                     "input": tool_input,
                 }
                 # Surface the plan as a live checklist (not just a raw JSON step) when the agent
@@ -252,13 +269,14 @@ class DataAgent:
                 if hasattr(output, "content"):
                     output = output.content
                 short_output = _short(output)
+                end_display_name, _ = _display_for_tool(event.get("name", ""), event.get("data", {}).get("input"))
                 logger.info(
                     "agent_tool_end",
                     tool=event.get("name", ""),
                     session_id=session_id,
                     output=short_output,
                 )
-                yield {"type": "tool_end", "name": event.get("name", ""), "output": short_output}
+                yield {"type": "tool_end", "name": end_display_name, "output": short_output}
             elif kind == "on_chat_model_stream":
                 chunk = event.get("data", {}).get("chunk")
                 content = getattr(chunk, "content", None) if chunk is not None else None
@@ -284,6 +302,28 @@ def _short(value: Any, limit: int = 1500) -> str:
     """Render a tool input/output to a short display string."""
     text = value if isinstance(value, str) else str(value)
     return text[:limit]
+
+
+# Human labels for a task() delegation, keyed by the subagent it targets, so the streamed timeline
+# shows what is happening instead of a raw "task" step. Unknown subagents get a generic label.
+_SUBAGENT_STREAM_LABELS = {
+    "text_sql_agent": "Consultando o banco de dados…",
+    "deep_research": "Pesquisando na web…",
+}
+
+
+def _display_for_tool(tool_name: str, raw_input: Any) -> tuple[str, Optional[str]]:
+    """Map a tool event to ``(display_name, subagent_type)``.
+
+    For a ``task()`` delegation, the display name is a human label and ``subagent_type`` is the
+    targeted subagent (read from the tool input). For any other tool, the display name is the tool
+    name and ``subagent_type`` is None.
+    """
+    if tool_name != "task":
+        return tool_name, None
+    subagent_type = raw_input.get("subagent_type") if isinstance(raw_input, dict) else None
+    label = _SUBAGENT_STREAM_LABELS.get(subagent_type, "Executando subtarefa…")
+    return label, subagent_type
 
 
 def _iter_stream_content(content: Any):

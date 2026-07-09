@@ -21,6 +21,7 @@ class SessionEventType:
     QUERY_EXECUTED = "query_executed"
     SKILL_USED = "skill_used"
     ARTIFACT_GENERATED = "artifact_generated"
+    WEB_RESEARCH = "web_research"
 
 
 class SessionEvent(BaseModel, table=True):

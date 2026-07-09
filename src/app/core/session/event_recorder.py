@@ -21,10 +21,23 @@ _TOOL_EVENT_MAP = {
     "glob": SessionEventType.DOCUMENT_READ,
 }
 
+# task() subagent_type -> (event type, scope). Recorded at the delegation boundary (the parent's
+# task() call, which always fires) so the audit trail is robust regardless of whether the
+# subagent's own nested tool events propagate to the parent stream.
+_DELEGATION_EVENT_MAP = {
+    "text_sql_agent": (SessionEventType.QUERY_EXECUTED, "database"),
+    "deep_research": (SessionEventType.WEB_RESEARCH, "web"),
+}
+
 
 def classify_tool_event(tool_name: str) -> Optional[str]:
     """Return the event type for a runtime tool, or ``None`` if it is not auditable."""
     return _TOOL_EVENT_MAP.get(tool_name)
+
+
+def classify_delegation(subagent_type: str) -> Optional[tuple[str, str]]:
+    """Return ``(event_type, scope)`` for a task() delegation, or ``None`` if not auditable."""
+    return _DELEGATION_EVENT_MAP.get(subagent_type)
 
 
 async def record_tool_event(
@@ -71,4 +84,50 @@ def bg_record_tool_event(
         return
     asyncio.create_task(
         record_tool_event(repo, user_id, agent_id, session_id, tool_name, tool_input, scope)
+    )
+
+
+async def record_delegation_event(
+    repo: SessionEventRepository,
+    user_id: Optional[int],
+    agent_id: Optional[int],
+    session_id: str,
+    subagent_type: str,
+    task: Optional[str] = None,
+) -> None:
+    """Record a task() delegation to a subagent as an episodic event, if it is auditable.
+
+    Guard clauses first: skip unknown subagents and anonymous runs. Any failure is swallowed
+    (logged) so the audit trail can never break the agent's response stream.
+    """
+    mapping = classify_delegation(subagent_type)
+    if mapping is None or user_id is None:
+        return
+    event_type, scope = mapping
+    try:
+        await repo.record_event(
+            user_id=user_id,
+            session_id=session_id,
+            event_type=event_type,
+            agent_id=agent_id,
+            payload={"delegated_to": subagent_type, "task": (task or "")[:1000]},
+            scope=scope,
+        )
+    except Exception:
+        logger.exception("session_delegation_record_failed", subagent=subagent_type, session_id=session_id)
+
+
+def bg_record_delegation_event(
+    repo: SessionEventRepository,
+    user_id: Optional[int],
+    agent_id: Optional[int],
+    session_id: str,
+    subagent_type: str,
+    task: Optional[str] = None,
+) -> None:
+    """Fire-and-forget wrapper around ``record_delegation_event`` so auditing never blocks streaming."""
+    if classify_delegation(subagent_type) is None or user_id is None:
+        return
+    asyncio.create_task(
+        record_delegation_event(repo, user_id, agent_id, session_id, subagent_type, task)
     )
