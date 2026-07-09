@@ -20,6 +20,7 @@ def build_data_agent(
     workspace_context: str = "",
     folder_writable: bool = False,
     session_id: Optional[str] = None,
+    sql_enabled: bool = False,
 ) -> DataAgent:
     """Build a Data Agent for a session's live resources and stored agent config.
 
@@ -36,10 +37,13 @@ def build_data_agent(
         folder_writable: When True, the granted folder allows writes (still confined to it);
             defaults to read-only.
         session_id: The session id, bound to the artifact tool for episodic-log attribution.
+        sql_enabled: When True (and a db is attached), the user's database is reachable through the
+            isolated read-only ``text_sql_agent`` subagent; defaults off (DB not queryable).
 
     Returns:
-        A compiled DataAgent with SQL tools (if a db is attached), a per-session
-        FilesystemBackend over the granted folder (if any), and per-agent memory tools.
+        A compiled DataAgent with a per-session FilesystemBackend over the granted folder (if any),
+        per-agent memory tools, and — when ``sql_enabled`` and a db is attached — the read-only
+        ``text_sql_agent`` subagent over the connected database.
     """
     return DataAgent(
         name=name,
@@ -54,4 +58,5 @@ def build_data_agent(
         workspace_context=workspace_context,
         folder_writable=folder_writable,
         session_id=session_id,
+        sql_enabled=sql_enabled,
     )

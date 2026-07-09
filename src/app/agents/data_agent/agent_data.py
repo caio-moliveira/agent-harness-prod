@@ -15,13 +15,13 @@ from langchain_community.utilities import SQLDatabase
 from src.app.agents.data_agent.artifact_tools import make_artifact_tools
 from src.app.agents.data_agent.compute_tools import make_compute_tools
 from src.app.agents.data_agent.plan_tools import make_plan_tools
+from src.app.agents.data_agent.subagents import make_user_sql_subagent
 from src.app.agents.data_agent.tools import make_memory_tools
 from src.app.agents.tools.search_tool import SearchAPI, get_search_tool
 from src.app.core.common.config import settings
 from src.app.core.common.graph_utils import process_messages
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
-from src.app.core.db.readonly import make_readonly_sql_tools
 from src.app.core.learning import get_reflected_preferences
 from src.app.core.llm.factory import active_model_name, create_chat_model
 from src.app.core.sandbox.backend import ROOT_DIR_CONFIG_KEY, SKILLS_MOUNT, make_backend_factory
@@ -74,6 +74,7 @@ class DataAgent:
         workspace_context: str = "",
         folder_writable: bool = False,
         session_id: Optional[str] = None,
+        sql_enabled: bool = False,
     ):
         """Build a Data Agent over a session's sources, isolated to one user and agent.
 
@@ -82,7 +83,9 @@ class DataAgent:
         each invocation's config so the backend factory resolves it per session. ``folder_writable``
         (a per-agent capability, off by default) allows the folder to be written; either way writes
         stay confined to ``root_dir``. ``session_id`` binds the artifact tool so generated
-        deliverables are attributed to this session in the episodic log.
+        deliverables are attributed to this session in the episodic log. ``sql_enabled`` (a per-agent
+        capability, off by default) exposes the user's connected database through the isolated
+        ``text_sql_agent`` subagent; when off, the connected DB is not queryable at all.
         """
         self.name = name
         self.user_id = user_id
@@ -101,6 +104,7 @@ class DataAgent:
             workspace_context,
             folder_writable,
             session_id,
+            sql_enabled,
         )
         self._pipeline = AgentPipeline(
             middlewares=[LoggingMiddleware(), ErrorHandlingMiddleware(), GuardrailMiddleware()],
@@ -341,8 +345,9 @@ _HARNESS_CAPABILITIES = """
 
 ## Ferramentas desta sessão (não removível)
 Conforme as fontes que o usuário conectou, você pode ter:
-- **Banco SQL (somente leitura)** — ferramentas `list_tables`, `describe_tables`, `run_sql`
-  (apenas `SELECT`/`WITH`/`EXPLAIN`/`SHOW`).
+- **Banco SQL do usuário (somente leitura)** — NÃO é uma ferramenta direta: delegue ao subagente
+  `text_sql_agent` via `task`. Só está disponível quando o usuário conectou um banco e ativou a
+  capacidade; se o subagente não constar entre os disponíveis, você não tem banco nesta sessão.
 - **Uma pasta concedida** exposta **somente leitura** por ferramentas de arquivo (`ls`,
   `read_file`, `glob`, `grep`) montada em `/workspace`. `read_file` também extrai o texto de
   **PDF, Word (`.docx`) e Excel (`.xlsx`)** — leia o próprio arquivo, não tente decodificar bytes.
@@ -384,17 +389,15 @@ Para perguntas sobre **documentos** (PDFs, leis, normas): `list_documents` → l
 `read_document(doc_id, páginas)`. **Seja incansável: NUNCA conclua "não encontrei" após uma única
 tentativa** — liste o acervo, tente variações do termo (sinônimos, número por extenso/algarismo) e
 leia as páginas candidatas antes de desistir; só cite uma página depois de tê-la lido. (Acento e caixa
-já são ignorados pelo `search_documents`, então não fique repetindo variações de acento.) Para perguntas de **banco**, SEMPRE `list_tables` →
-`describe_tables` (das tabelas que vai usar) → `run_sql`, para a consulta nascer do schema real.
-Executar a consulta é a validação: se `run_sql` retornar erro, corrija a partir das tabelas
-disponíveis e execute de novo — **nunca invente tabelas ou colunas**, e não dê a resposta final
-até a consulta rodar sem erro. Cada resultado de `run_sql` traz uma linha `[proveniência]`;
-inclua essa fonte (tabela + consulta) na sua resposta. Seja conciso e cite os arquivos/tabelas usados.
+já são ignorados pelo `search_documents`, então não fique repetindo variações de acento.) Para perguntas
+sobre o **banco do usuário**, delegue ao subagente `text_sql_agent` via `task` (ele explora o schema,
+escreve e executa o SQL somente-leitura e devolve o resultado com proveniência); inclua a fonte que ele
+retornar na sua resposta. Seja conciso e cite os arquivos/tabelas usados.
 
 **Cálculo (regra crítica):** NUNCA faça agregações numéricas — soma, contagem, média, ranking,
 cruzamento — manualmente na resposta. Para dados em arquivo (CSV/TSV) use `consultar_dados` (SQL);
-para dados no banco use `run_sql`. Deixe o SQL calcular e responda APENAS com o resultado final:
-não mostre contas, somas parciais nem rascunho de raciocínio no texto da resposta.
+para dados no banco do usuário, delegue ao subagente `text_sql_agent`. Deixe o SQL calcular e responda
+APENAS com o resultado final: não mostre contas, somas parciais nem rascunho de raciocínio no texto da resposta.
 
 **Plano vs. progresso (não duplique):** `propor_plano` e `write_todos` têm papéis diferentes —
 use `propor_plano` UMA vez, no início, só para tarefas grandes/multi-etapas/irreversíveis, para o
@@ -403,6 +406,19 @@ execução (marcar cada passo como concluído). Depois de um plano aprovado, esp
 aprovados no `write_todos` uma vez e vá atualizando o status — não re-proponha o plano nem re-liste
 tudo a cada passo. Para tarefas simples (poucos passos), não use nenhum dos dois.
 """
+
+
+# Appended only when the session has a connected DB AND the sql capability is on, so the guidance
+# to delegate DB questions appears exactly when the text_sql_agent subagent actually exists.
+_SQL_SUBAGENT_NOTE = (
+    "## Banco de dados do usuário (via subagente)\n"
+    "Há um banco SQL conectado nesta sessão. Ele NÃO é uma ferramenta direta sua: para qualquer "
+    "pergunta que dependa dos dados do banco (contagens, somas, médias, rankings, listagens, "
+    "cruzamentos), delegue ao subagente `text_sql_agent` chamando `task` com a pergunta COMPLETA "
+    "em linguagem natural e dizendo o que ele deve devolver. Ele é somente-leitura, explora o "
+    "schema, escreve e executa o SQL e retorna o resultado com a proveniência (tabelas + consulta) "
+    "— inclua essa fonte na sua resposta. NUNCA agregue números na mão: deixe o subagente calcular."
+)
 
 
 # Appended only when the granted folder is writable, so the model knows it may create/edit files
@@ -416,12 +432,26 @@ _WRITABLE_FOLDER_NOTE = (
 )
 
 
+def _build_subagents(db: Optional[SQLDatabase], sql_enabled: bool) -> list[dict[str, Any]]:
+    """Subagents the Data Agent delegates to via ``task()``.
+
+    The user's connected database is reached only through the isolated read-only
+    ``text_sql_agent`` — and only when a database is connected AND the ``sql`` capability is on.
+    With either condition false, the database is not queryable by any path.
+    """
+    subagents: list[dict[str, Any]] = []
+    if db is not None and sql_enabled:
+        subagents.append(make_user_sql_subagent(db))
+    return subagents
+
+
 def _compose_system_prompt(system_prompt: Optional[str]) -> str:
     """Return the effective system prompt.
 
     With no user prompt, use the bundled default (which already documents the tools). With a
     user-authored prompt, keep it as the persona but append the non-removable capabilities
-    guidance so the model still knows how to use the filesystem/SQL/memory tools.
+    guidance so the model still knows how to use the filesystem/memory tools (DB access is
+    delegated to the text_sql_agent subagent, documented separately when enabled).
     """
     if not system_prompt:
         return load_system_prompt()
@@ -440,8 +470,9 @@ def _create_data_deep_agent(
     workspace_context: str = "",
     folder_writable: bool = False,
     session_id: Optional[str] = None,
+    sql_enabled: bool = False,
 ) -> Any:
-    """Build the underlying Deep Agent with read-only SQL, memory tools, and optional folder.
+    """Build the underlying Deep Agent with memory tools, an optional folder, and subagents.
 
     ``system_prompt`` sets the agent's persona; the harness capabilities guidance is always
     appended so tool usage survives. ``agent_id`` scopes the memory tools per agent.
@@ -453,6 +484,11 @@ def _create_data_deep_agent(
     there — read-only unless ``folder_writable`` is True (then write_file/edit_file also work,
     still confined to the folder); the ``execute`` tool is never exposed (the backend is not a
     sandbox).
+
+    The user's connected database is NOT a direct tool: when ``db`` is set and ``sql_enabled`` is
+    True, it is reached only through the isolated read-only ``text_sql_agent`` subagent, so the
+    schema-exploration/query loop stays out of this agent's context. With ``sql_enabled`` False the
+    connected DB is not queryable at all.
     """
     model = create_chat_model()
     tools = make_memory_tools(user_id, agent_id) if memory_enabled else []
@@ -472,15 +508,22 @@ def _create_data_deep_agent(
     # instead of the LLM summing rows by hand.
     if root_dir is not None:
         tools = tools + make_compute_tools(user_id, agent_id, root_dir, session_id)
-    if db is not None:
-        tools = tools + make_readonly_sql_tools(db)
     if web_search:
         # Runs host-side, alongside the read-only file tools.
         tools = tools + get_search_tool(SearchAPI.TAVILY)
 
+    # Subagents delegated via task(). The user's connected DB is NOT a direct tool: it is reached
+    # only through the isolated read-only text_sql_agent (gated by sql_enabled), so its
+    # schema-exploration/query loop never bloats this agent's context.
+    subagents = _build_subagents(db, sql_enabled)
+
     prompt = _compose_system_prompt(system_prompt)
     if workspace_context:
         prompt = f"{prompt}\n\n{workspace_context}"
+    if db is not None and sql_enabled:
+        # Tell the agent to route DB questions to the subagent (its description + the task tool are
+        # auto-injected by SubAgentMiddleware, but this reinforces when and how to delegate).
+        prompt = f"{prompt}\n{_SQL_SUBAGENT_NOTE}"
     if root_dir is not None and folder_writable:
         # Override the default read-only file guidance: this agent may create/edit files in the
         # granted folder (still confined to /workspace).
@@ -494,6 +537,7 @@ def _create_data_deep_agent(
         "model": model,
         "tools": tools,
         "system_prompt": prompt,
+        "subagents": subagents,
         "middleware": [
             PIIMiddleware("email"),
             ModelCallLimitMiddleware(run_limit=settings.ANTHROPIC_MODEL_CALL_LIMIT, exit_behavior="end"),
