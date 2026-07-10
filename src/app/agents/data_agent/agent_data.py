@@ -405,6 +405,10 @@ Conforme as fontes que o usuário conectou, você pode ter:
   (achar o `doc_id`) → localizar a página com `search_documents` (termo exato) **ou** `buscar_documentos`
   (conceito/paráfrase) → `read_document` (texto) ou `read_page_image` (imagem). Cada página traz o
   índice do PDF e o fólio impresso (com aviso de divergência).
+- **Estrutura em árvore do documento** — `get_document_structure(doc_id)` mostra o ÍNDICE de seções
+  (node_id, faixa de páginas/linhas, título); `get_node_content(doc_id, node_id)` lê o texto de UMA
+  seção. Para um documento longo e estruturado (acórdão, contrato, norma), navegue pela árvore em vez
+  de ler tudo: `list_documents` → `get_document_structure` → `get_node_content` na seção relevante.
 - **Cálculo sobre arquivos de dados (CSV/TSV)** — `listar_dados()` mostra os arquivos da pasta como
   tabelas SQL (colunas + nº de linhas); `consultar_dados(sql)` roda **SQL de leitura (DuckDB)** e
   devolve o resultado **EXATO**. Use SEMPRE para somas, contagens, médias, rankings e cruzamentos

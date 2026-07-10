@@ -241,3 +241,51 @@ class TestFuzzyDocResolution:
         call = {"name": "read_page_image", "args": {"doc_id": "laudo_pericial", "page": 1}, "id": "c", "type": "tool_call"}
         result = await tools["read_page_image"].ainvoke(call)
         assert any(b.get("type") == "image" for b in result.content_blocks)
+
+
+class TestStructureTools:
+    """get_document_structure (the tree outline) + get_node_content (section text from disk)."""
+
+    async def test_outline_then_read_section(self, client: AsyncClient, tmp_path, monkeypatch):
+        import json
+
+        from src.app.core.structure.builder import build_document_tree
+        from src.app.core.ingestion.parsers import extract_document
+
+        md = tmp_path / "notas.md"
+        md.write_text("# Título\n\nintro\n\n## Seção A\ncorpo da seção A\n", encoding="utf-8")
+        tree = await build_document_tree(extract_document(str(md)))
+        await IngestedFileRepository().upsert(
+            USER, AGENT, str(md), "hash_md_00001", 0, page_count=1, structure=tree.model_dump_json()
+        )
+        monkeypatch.setattr(settings, "SANDBOX_ALLOWED_ROOTS", [str(tmp_path)])
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, None)}
+
+        outline = await tools["get_document_structure"].ainvoke({"doc_id": "notas"})
+        assert "Título" in outline and "Seção A" in outline
+
+        flat, stack = [], list(json.loads(tree.model_dump_json())["structure"])
+        while stack:
+            node = stack.pop()
+            flat.append(node)
+            stack.extend(node["nodes"])
+        node_id = next(n["node_id"] for n in flat if n["title"] == "Seção A")
+
+        content = await tools["get_node_content"].ainvoke({"doc_id": "notas", "node_id": node_id})
+        assert "corpo da seção A" in content
+
+    async def test_get_node_content_unknown_node_id(self, client: AsyncClient, tmp_path, monkeypatch):
+        from src.app.core.structure.builder import build_document_tree
+        from src.app.core.ingestion.parsers import extract_document
+
+        md = tmp_path / "x.md"
+        md.write_text("# H\n\ntexto\n", encoding="utf-8")
+        tree = await build_document_tree(extract_document(str(md)))
+        await IngestedFileRepository().upsert(
+            USER, AGENT, str(md), "hash_md_00002", 0, page_count=1, structure=tree.model_dump_json()
+        )
+        monkeypatch.setattr(settings, "SANDBOX_ALLOWED_ROOTS", [str(tmp_path)])
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, None)}
+
+        out = await tools["get_node_content"].ainvoke({"doc_id": "x", "node_id": "9999"})
+        assert "não existe" in out

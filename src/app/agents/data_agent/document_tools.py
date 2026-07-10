@@ -16,6 +16,7 @@ enforces. Reading records the pages into the session's read set — the basis fo
 
 import asyncio
 import base64
+import json
 import os
 import re
 import tempfile
@@ -31,6 +32,7 @@ from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
 from src.app.core.ingestion.normalize import normalize_text
+from src.app.core.ingestion.parsers import extract_document
 from src.app.core.ingestion.source_model import IngestedFileStatus
 from src.app.core.ingestion.source_repository import IngestedFileRepository
 from src.app.core.sandbox.paths import is_within_allowed_roots
@@ -123,6 +125,33 @@ def _strip_ext(name: str) -> str:
 def _catalog_lines(docs) -> str:
     """A compact catalog (doc_id + title + pages), echoed in errors so the model self-corrects."""
     return "\n".join(f'- {d.doc_id} · "{d.title}" ({d.page_count} pág)' for d in docs[:_MAX_LIST])
+
+
+# Extensions whose structure tree locates sections by LINE number (single parsed section) rather
+# than by section ordinal (pdf pages / docx blocks / xlsx sheets) — so content serving slices right.
+_LINE_BASED_EXTS = {".md", ".txt", ".log", ".json", ".csv", ".tsv"}
+
+
+def _find_node(nodes: list, node_id: str) -> Optional[dict]:
+    """Depth-first search for a node by ``node_id`` in a structure-tree dict list, or ``None``."""
+    for n in nodes:
+        if n.get("node_id") == node_id:
+            return n
+        found = _find_node(n.get("nodes", []), node_id)
+        if found is not None:
+            return found
+    return None
+
+
+def _render_outline(nodes: list, depth: int = 0) -> List[str]:
+    """Render a structure tree as indented ``node_id [span] title`` lines (depth-first)."""
+    lines: List[str] = []
+    for n in nodes:
+        start, end = n.get("start_index"), n.get("end_index")
+        span = "" if start is None else (f" [{start}]" if end in (start, None) else f" [{start}-{end}]")
+        lines.append(f"{'  ' * depth}{n.get('node_id', '')}{span} {n.get('title', '')}".rstrip())
+        lines.extend(_render_outline(n.get("nodes", []), depth + 1))
+    return lines
 
 
 def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session_id: Optional[str]) -> List[BaseTool]:
@@ -357,4 +386,92 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
             tool_call_id=tool_call_id,
         )
 
-    return [list_documents, read_document, search_documents, read_page_image]
+    @tool
+    async def get_document_structure(doc_id: str) -> str:
+        """Mostra o ÍNDICE (árvore de seções) de um documento pelo `doc_id`: node_id, faixa e título.
+
+        Primeiro passo para navegar um documento longo: em vez de ler tudo, veja a estrutura e leia só
+        a seção relevante com `get_node_content(doc_id, node_id)`. Cada linha traz o `node_id` (que você
+        passa adiante), a faixa (páginas do PDF, ou linhas), e o título da seção. Identifique o documento
+        pelo `doc_id` de `list_documents` (ou pelo nome do arquivo).
+        """
+        record, err = await _resolve_doc(doc_id)
+        if record is None:
+            return err
+        if not record.structure:
+            return (
+                f"'{record.title}' ainda não tem árvore de estrutura indexada "
+                "(indexado antes deste recurso, ou sem seções). Use read_document(doc_id, pág, pág)."
+            )
+        try:
+            tree = json.loads(record.structure)
+        except (ValueError, TypeError):
+            return f"Estrutura de '{record.title}' ilegível. Use read_document(doc_id, pág, pág)."
+        outline = _render_outline(tree.get("structure", []))
+        if not outline:
+            return f"'{record.title}' não tem seções detectadas (documento plano). Use read_document."
+        return (
+            f'Estrutura de "{record.title}" (doc_id {record.doc_id}) — leia uma seção com '
+            f"get_node_content('{record.doc_id}', node_id):\n" + "\n".join(outline)
+        )
+
+    @tool
+    async def get_node_content(doc_id: str, node_id: str) -> str:
+        """Lê o conteúdo de UMA seção do documento, identificada pelo `node_id` de `get_document_structure`.
+
+        Reparseia o arquivo do disco e devolve o texto daquela seção (a faixa de páginas/linhas do nó).
+        Fluxo: `get_document_structure(doc_id)` → escolha o `node_id` → `get_node_content(doc_id, node_id)`.
+        Limitado por um teto: se a seção não couber, devolve o começo e avisa (não trunca em silêncio).
+        """
+        record, err = await _resolve_doc(doc_id)
+        if record is None:
+            return err
+        if not record.structure:
+            return f"'{record.title}' não tem árvore indexada. Use read_document(doc_id, pág, pág)."
+        try:
+            tree = json.loads(record.structure)
+        except (ValueError, TypeError):
+            return f"Estrutura de '{record.title}' ilegível. Use read_document(doc_id, pág, pág)."
+        node = _find_node(tree.get("structure", []), node_id)
+        if node is None:
+            return f"node_id '{node_id}' não existe em '{record.title}'. Veja get_document_structure(doc_id)."
+        start, end = node.get("start_index"), node.get("end_index")
+        if start is None:
+            return f"O nó '{node.get('title', '')}' não tem conteúdo direto (ex.: coluna — use consultar_dados)."
+        # Security: re-validate the host path against the allow-list on every use, and confirm the
+        # file still exists (a tightened SANDBOX_ALLOWED_ROOTS or a deleted file revokes access).
+        if not is_within_allowed_roots(record.source_path, settings.SANDBOX_ALLOWED_ROOTS) or not os.path.isfile(
+            record.source_path
+        ):
+            return "Arquivo indisponível (fora das raízes permitidas agora, ou removido do disco)."
+        try:
+            parsed = await asyncio.to_thread(extract_document, record.source_path)
+        except Exception as e:  # noqa: BLE001 - never crash the turn on a parse failure
+            logger.exception("node_content_parse_failed", doc_id=record.doc_id, error_type=type(e).__name__)
+            return f"Falha ao ler o arquivo ({type(e).__name__}). Tente read_document (texto)."
+
+        ext = os.path.splitext(record.source_path)[1].lower()
+        if ext in _LINE_BASED_EXTS:
+            lines = parsed.sections[0].text.splitlines() if parsed.sections else []
+            body = "\n".join(lines[start - 1 : end]).strip()
+        else:  # pdf pages / docx blocks / xlsx sheets — located by section ordinal
+            body = "\n\n".join(f"=== {s.location} ===\n{s.text}".strip() for s in parsed.sections[start - 1 : end]).strip()
+        if not body:
+            return f"Seção '{node.get('title', '')}' sem texto extraível (pode ser página escaneada)."
+
+        truncated = len(body) > _MAX_READ_CHARS
+        body = body[:_MAX_READ_CHARS] if truncated else body
+        # Record the pages into the session read set (citation basis) when the locator is page-based.
+        if session_id and ext == ".pdf":
+            await registry.mark_pages_read(session_id, record.doc_id, range(start, end + 1))
+        suffix = "\n\n… [seção truncada no limite de leitura — refine com read_document]" if truncated else ""
+        return f"=== {node.get('title', '')} (doc {record.doc_id}, nó {node_id}) ===\n{body}{suffix}"
+
+    return [
+        list_documents,
+        read_document,
+        search_documents,
+        read_page_image,
+        get_document_structure,
+        get_node_content,
+    ]

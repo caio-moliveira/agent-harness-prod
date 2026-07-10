@@ -86,8 +86,9 @@ def docx_headings(parsed: ParsedDocument) -> Tuple[List[RawHeading], int]:
 
 
 def text_headings(parsed: ParsedDocument) -> Tuple[List[RawHeading], int]:
-    """Plain text/log/json: no headings — a single node covering the file."""
-    return [RawHeading(title="conteúdo", level=1, start=1)], 1
+    """Plain text/log/json: no headings — a single node spanning the whole file (line 1..N)."""
+    lines = parsed.sections[0].text.splitlines() if parsed.sections else []
+    return [RawHeading(title="conteúdo", level=1, start=1)], max(1, len(lines))
 
 
 # --------------------------- PDF heuristics (refined by LLM) ---------------------------
@@ -157,9 +158,10 @@ def xlsx_schema(parsed: ParsedDocument) -> List[TreeNode]:
 
 
 def tabular_schema(parsed: ParsedDocument, delimiter: str) -> List[TreeNode]:
-    """CSV/TSV: a single table node whose children are its columns."""
+    """CSV/TSV: a single table node (spanning the whole file) whose children are its columns."""
     text = parsed.sections[0].text if parsed.sections else ""
-    root = [TreeNode(title="tabela", start_index=1, end_index=1, nodes=[TreeNode(title=c) for c in _first_row(text, delimiter)])]
+    end = max(1, len(text.splitlines()))
+    root = [TreeNode(title="tabela", start_index=1, end_index=end, nodes=[TreeNode(title=c) for c in _first_row(text, delimiter)])]
     _assign_ids(root, count())
     return root
 
