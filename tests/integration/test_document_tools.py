@@ -11,8 +11,6 @@ from httpx import AsyncClient
 
 from src.app.agents.data_agent.document_tools import make_document_tools
 from src.app.core.common.config import settings
-from src.app.core.ingestion.chunk_model import DocumentChunk
-from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
 from src.app.core.ingestion.normalize import normalize_text
 from src.app.core.ingestion.source_model import derive_doc_id
 from src.app.core.ingestion.source_repository import IngestedFileRepository
@@ -24,24 +22,16 @@ USER, AGENT = 1, 7
 
 
 async def _seed_document(source_path: str, content_hash: str, pages: list[str]) -> str:
-    """Insert a manifest row + one chunk per page; return the derived doc_id."""
-    await IngestedFileRepository().upsert(
-        USER, AGENT, source_path, content_hash, len(pages), page_count=len(pages), text_layer="native"
+    """Insert a manifest row with the located text (content) for the given pages; return the doc_id."""
+    import json
+
+    content = json.dumps(
+        [{"location": f"página {i}", "text": text, "needs_ocr": False} for i, text in enumerate(pages, start=1)],
+        ensure_ascii=False,
     )
-    chunks = [
-        DocumentChunk(
-            user_id=USER,
-            agent_id=AGENT,
-            source_path=source_path,
-            doc_type="pdf",
-            section=f"página {i}",
-            chunk_index=i - 1,
-            content=text,
-            meta={"needs_ocr": False},
-        )
-        for i, text in enumerate(pages, start=1)
-    ]
-    await DocumentChunkRepository().add_chunks(chunks)
+    await IngestedFileRepository().upsert(
+        USER, AGENT, source_path, content_hash, page_count=len(pages), text_layer="native", content=content
+    )
     return derive_doc_id(content_hash)
 
 
@@ -137,7 +127,7 @@ class TestSearchDocuments:
         out = await tools["search_documents"].ainvoke({"query": "termo-que-nao-existe-42"})
         assert "Nenhuma ocorrência literal" in out
         assert "termo-que-nao-existe-42" in out  # the normalized query, so it's not a malformed-query mystery
-        assert "buscar_documentos" in out  # steer to semantic search for concepts
+        assert "get_document_structure" in out  # steer to structure navigation for concepts
 
 
 def _make_pdf(path, pages: int = 1) -> None:
@@ -241,3 +231,63 @@ class TestFuzzyDocResolution:
         call = {"name": "read_page_image", "args": {"doc_id": "laudo_pericial", "page": 1}, "id": "c", "type": "tool_call"}
         result = await tools["read_page_image"].ainvoke(call)
         assert any(b.get("type") == "image" for b in result.content_blocks)
+
+
+def _content_json(parsed) -> str:
+    """Serialize parsed sections into the manifest ``content`` JSON (what the reading tools slice)."""
+    import json
+
+    return json.dumps(
+        [{"location": s.location, "text": s.text, "needs_ocr": s.needs_ocr} for s in parsed.sections],
+        ensure_ascii=False,
+    )
+
+
+class TestStructureTools:
+    """get_document_structure (the tree outline) + get_node_content (section text from the index)."""
+
+    async def test_outline_then_read_section(self, client: AsyncClient, tmp_path):
+        import json
+
+        from src.app.core.ingestion.parsers import extract_document
+        from src.app.core.structure.builder import build_document_tree
+
+        md = tmp_path / "notas.md"
+        md.write_text("# Título\n\nintro\n\n## Seção A\ncorpo da seção A\n", encoding="utf-8")
+        parsed = extract_document(str(md))
+        tree = await build_document_tree(parsed)
+        await IngestedFileRepository().upsert(
+            USER, AGENT, str(md), "hash_md_00001", page_count=1,
+            structure=tree.model_dump_json(), content=_content_json(parsed),
+        )
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, None)}
+
+        outline = await tools["get_document_structure"].ainvoke({"doc_id": "notas"})
+        assert "Título" in outline and "Seção A" in outline
+
+        flat, stack = [], list(json.loads(tree.model_dump_json())["structure"])
+        while stack:
+            node = stack.pop()
+            flat.append(node)
+            stack.extend(node["nodes"])
+        node_id = next(n["node_id"] for n in flat if n["title"] == "Seção A")
+
+        content = await tools["get_node_content"].ainvoke({"doc_id": "notas", "node_id": node_id})
+        assert "corpo da seção A" in content
+
+    async def test_get_node_content_unknown_node_id(self, client: AsyncClient, tmp_path):
+        from src.app.core.ingestion.parsers import extract_document
+        from src.app.core.structure.builder import build_document_tree
+
+        md = tmp_path / "x.md"
+        md.write_text("# H\n\ntexto\n", encoding="utf-8")
+        parsed = extract_document(str(md))
+        tree = await build_document_tree(parsed)
+        await IngestedFileRepository().upsert(
+            USER, AGENT, str(md), "hash_md_00002", page_count=1,
+            structure=tree.model_dump_json(), content=_content_json(parsed),
+        )
+        tools = {t.name: t for t in make_document_tools(USER, AGENT, None)}
+
+        out = await tools["get_node_content"].ainvoke({"doc_id": "x", "node_id": "9999"})
+        assert "não existe" in out

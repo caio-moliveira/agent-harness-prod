@@ -98,14 +98,14 @@ class TestReadWithinRoot:
         assert "receita" in out
         assert "1000" in out
 
-    def test_read_scanned_document_steers_to_semantic_search(self, tmp_path):
+    def test_read_scanned_document_steers_to_page_image(self, tmp_path):
         # A document with no extractable text must not loop — it returns a clear, terminal hint.
         from openpyxl import Workbook
 
         Workbook().save(str(tmp_path / "empty.xlsx"))  # no rows => no extractable text
         backend = _backend_for(str(tmp_path))
         out = backend.read("/workspace/empty.xlsx")
-        assert "buscar_documentos" in out
+        assert "read_page_image" in out
 
 
 # ---------------------------------------------------------------------------

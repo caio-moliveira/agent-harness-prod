@@ -115,7 +115,7 @@ def build_workspace_context(folder: Optional[str], db: Any, docs: Optional[list]
     return (
         "## Contexto do workspace (carregado no início da sessão)\n\n"
         "Você JÁ tem acesso às fontes abaixo. Baseie suas respostas nelas; para ler um arquivo "
-        "(inclusive PDF, Word e Excel) use `read_file`, para localizar um trecho específico use "
-        "`buscar_documentos`, e para consultar o banco use as ferramentas SQL.\n\n"
+        "(inclusive PDF, Word e Excel) use `read_file`, para navegar um documento longo use "
+        "`get_document_structure`/`get_node_content`, e para consultar o banco use as ferramentas SQL.\n\n"
         + "\n\n".join(parts)
     )

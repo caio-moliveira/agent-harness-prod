@@ -56,20 +56,23 @@ class IngestedFileRepository:
         agent_id: Optional[int],
         source_path: str,
         content_hash: str,
-        chunk_count: int,
         *,
         page_count: int = 0,
         text_layer: str = "native",
         ocr_confidence: float = 1.0,
         description: str = "",
         status: str = IngestedFileStatus.ACTIVE,
+        structure: Optional[str] = None,
+        content: Optional[str] = None,
     ) -> None:
         """Insert or update the tracking + manifest record for one source file.
 
         ``doc_id`` (from the content hash) and ``title`` (the file name, display-only) are derived
         here so every ingestion path fills the catalog consistently. ``description`` (the map blurb)
         is only overwritten when a non-empty value is given, so a failed description pass never wipes
-        an existing one. ``status`` is set to active on (re)ingest — an ingested file is valid.
+        an existing one. ``structure`` (the document tree JSON) and ``content`` (the located text
+        JSON) are written when provided (``None`` leaves them untouched). ``status`` is set to active
+        on (re)ingest — an ingested file is valid.
         """
         with session_scope() as session:
             statement = select(IngestedFile).where(
@@ -81,7 +84,6 @@ class IngestedFileRepository:
             if record is None:
                 record = IngestedFile(user_id=user_id, agent_id=agent_id, source_path=source_path)
             record.content_hash = content_hash
-            record.chunk_count = chunk_count
             record.doc_id = derive_doc_id(content_hash)
             record.title = os.path.basename(source_path)
             record.page_count = page_count
@@ -90,6 +92,10 @@ class IngestedFileRepository:
             record.status = status
             if description:
                 record.description = description
+            if structure is not None:
+                record.structure = structure
+            if content is not None:
+                record.content = content
             session.add(record)
             session.commit()
 
@@ -126,7 +132,6 @@ class IngestedFileRepository:
             if record is None:
                 return
             record.status = IngestedFileStatus.DELETED
-            record.chunk_count = 0
             session.add(record)
             session.commit()
             logger.info("ingested_file_soft_deleted", user_id=user_id, source_path=source_path)

@@ -1,10 +1,8 @@
-"""Integration tests for document ingestion (#13): parse -> chunk -> persist, scoped per agent.
+"""Integration tests for the document parsers (#13): ``extract_document`` per file type.
 
-Three pre-agreed seams:
-  1. ``extract_document`` — the per-type parsers (PDF/Word/Excel/text) preserve text + location.
-  2. ``chunk_document`` — splitting carries provenance metadata (section, order, author, needs_ocr).
-  3. ``ingest_folder`` — end-to-end: a folder becomes chunks persisted for (user_id, agent_id),
-     isolated from other agents/users.
+The per-type parsers (PDF/Word/Excel/text) preserve text + location so a later step can cite where
+content came from. Folder → manifest ingestion (structure tree + located text) is covered by
+``test_incremental_ingestion``; the corpus is vectorless, so there is no chunking seam.
 
 Fixtures are synthesized with the real writer libraries (python-docx / openpyxl / reportlab) so the
 parsers run against genuine files, not hand-rolled bytes.
@@ -91,71 +89,3 @@ class TestParsers:
             extract_document(str(p))
 
 
-# --------------------------- Seam 2: chunking ---------------------------
-
-class TestChunking:
-    def test_metadata_carried_and_ordered(self):
-        from src.app.core.ingestion.chunking import chunk_document
-        from src.app.core.ingestion.parsers import ParsedDocument, ParsedSection
-
-        long_text = "\n".join(f"Parágrafo {i} com algum conteúdo." for i in range(200))
-        doc = ParsedDocument(
-            path="/w/c.docx", doc_type="docx", author="Ana",
-            sections=[ParsedSection(location="Cláusula 1", text=long_text)],
-        )
-        chunks = chunk_document(doc, max_chars=300)
-        assert len(chunks) > 1
-        assert [c.chunk_index for c in chunks] == list(range(len(chunks)))
-        assert all(c.source_path == "/w/c.docx" for c in chunks)
-        assert all(c.section == "Cláusula 1" for c in chunks)
-        assert all(c.author == "Ana" for c in chunks)
-
-    def test_scanned_page_yields_needs_ocr_placeholder(self):
-        from src.app.core.ingestion.chunking import chunk_document
-        from src.app.core.ingestion.parsers import ParsedDocument, ParsedSection
-
-        doc = ParsedDocument(
-            path="/w/scan.pdf", doc_type="pdf",
-            sections=[ParsedSection(location="página 1", text="", needs_ocr=True)],
-        )
-        chunks = chunk_document(doc)
-        assert len(chunks) == 1
-        assert chunks[0].needs_ocr is True
-
-
-# --------------------------- Seam 3: ingest_folder ---------------------------
-
-class TestIngestFolder:
-    async def test_folder_becomes_scoped_chunks(self, client: AsyncClient, tmp_path):
-        from src.app.core.ingestion import DocumentChunkRepository, ingest_folder
-
-        _make_docx(tmp_path / "contrato.docx")
-        _make_xlsx(tmp_path / "vendas.xlsx")
-        (tmp_path / "nota.txt").write_text("Observação importante sobre o cliente.", encoding="utf-8")
-
-        repo = DocumentChunkRepository()
-        result = await ingest_folder(str(tmp_path), user_id=1, agent_id=7, repo=repo)
-
-        assert result.files_ingested == 3
-        assert result.chunks > 0
-
-        chunks = await repo.get_chunks(user_id=1, agent_id=7)
-        assert len(chunks) == result.chunks
-        assert {c.doc_type for c in chunks} == {"docx", "xlsx", "text"}
-        assert all(c.source_path for c in chunks)
-        assert all(c.section for c in chunks)
-
-        # Isolation: another agent and another user see nothing.
-        assert await repo.get_chunks(user_id=1, agent_id=8) == []
-        assert await repo.get_chunks(user_id=2, agent_id=7) == []
-
-    async def test_unreadable_file_is_skipped_not_fatal(self, client: AsyncClient, tmp_path):
-        from src.app.core.ingestion import DocumentChunkRepository, ingest_folder
-
-        (tmp_path / "ok.txt").write_text("conteúdo válido", encoding="utf-8")
-        # A .docx extension over non-docx bytes makes the parser raise; ingestion must survive it.
-        (tmp_path / "broken.docx").write_bytes(b"not a real docx")
-
-        result = await ingest_folder(str(tmp_path), user_id=1, agent_id=9, repo=DocumentChunkRepository())
-        assert result.files_ingested == 1
-        assert result.files_skipped == 1

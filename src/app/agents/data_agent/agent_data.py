@@ -35,7 +35,6 @@ from src.app.core.middleware import (
     build_invoke_config,
 )
 from src.app.agents.data_agent.document_tools import make_document_tools
-from src.app.core.retrieval import make_retrieval_tools
 from src.app.core.session.event_recorder import bg_record_delegation_event, bg_record_tool_event
 from src.app.core.session.event_repository import SessionEventRepository
 
@@ -392,9 +391,6 @@ Conforme as fontes que o usuário conectou, você pode ter:
 - **Uma pasta concedida** exposta **somente leitura** por ferramentas de arquivo (`ls`,
   `read_file`, `glob`, `grep`) montada em `/workspace`. `read_file` também extrai o texto de
   **PDF, Word (`.docx`) e Excel (`.xlsx`)** — leia o próprio arquivo, não tente decodificar bytes.
-- **Busca semântica** — `buscar_documentos(consulta)` encontra trechos por significado nos
-  documentos desta pasta/agente, cada resultado com a fonte. Prefira-a para localizar um trecho
-  específico em documentos longos; use `read_file` para ler um arquivo inteiro (ou pequeno).
 - **Catálogo e leitura de documentos** — `list_documents()` lista o acervo indexado (cada doc com
   `doc_id`, título, nº de páginas e camada de texto); `search_documents(query)` faz **busca literal**
   de um termo EXATO (número, artigo, data, valor, nome próprio) e devolve as coordenadas (doc_id,
@@ -402,13 +398,18 @@ Conforme as fontes que o usuário conectou, você pode ter:
   `doc_id` (nunca pelo título); `read_page_image(doc_id, page)` renderiza a página como **imagem**
   para você VER — use como 1ª escolha quando o layout importa (tabela, coluna de valores, carimbo,
   assinatura) ou quando o doc é `ocr`/baixa confiança ou o texto sai ambíguo. Fluxo: `list_documents`
-  (achar o `doc_id`) → localizar a página com `search_documents` (termo exato) **ou** `buscar_documentos`
-  (conceito/paráfrase) → `read_document` (texto) ou `read_page_image` (imagem). Cada página traz o
-  índice do PDF e o fólio impresso (com aviso de divergência).
-- **Cálculo sobre arquivos de dados (CSV/TSV)** — `listar_dados()` mostra os arquivos da pasta como
-  tabelas SQL (colunas + nº de linhas); `consultar_dados(sql)` roda **SQL de leitura (DuckDB)** e
-  devolve o resultado **EXATO**. Use SEMPRE para somas, contagens, médias, rankings e cruzamentos
-  sobre CSV/TSV — **NUNCA some/agregue linhas na mão**. Fluxo: `listar_dados` → `consultar_dados`.
+  (achar o `doc_id`) → `get_document_structure`/`search_documents` (achar a seção/página) →
+  `read_document` (texto) ou `read_page_image` (imagem). Cada página traz o índice do PDF e o fólio
+  impresso (com aviso de divergência).
+- **Estrutura em árvore do documento** — `get_document_structure(doc_id)` mostra o ÍNDICE de seções
+  (node_id, faixa de páginas/linhas, título); `get_node_content(doc_id, node_id)` lê o texto de UMA
+  seção. Para um documento longo e estruturado (acórdão, contrato, norma), navegue pela árvore em vez
+  de ler tudo: `list_documents` → `get_document_structure` → `get_node_content` na seção relevante.
+- **Cálculo sobre arquivos de dados (CSV/TSV/Excel)** — `listar_dados()` mostra os arquivos da pasta
+  como tabelas SQL (colunas + nº de linhas; cada aba do Excel é uma tabela); `consultar_dados(sql)`
+  roda **SQL de leitura (DuckDB)** e devolve o resultado **EXATO**. Use SEMPRE para somas, contagens,
+  médias, rankings e cruzamentos sobre CSV/TSV/Excel — **NUNCA some/agregue linhas na mão**. Para uma
+  planilha `.xlsx`, prefira `consultar_dados` a ler o texto com `read_file`. Fluxo: `listar_dados` → `consultar_dados`.
 - **Memória de longo prazo** — `buscar_memoria(consulta)`.
 - **Aprovação de plano** — `propor_plano(titulo, passos)` propõe um plano e PAUSA para o usuário
   aprovar antes de executar. Use só antes de tarefas grandes, com muitos passos ou irreversíveis
@@ -422,12 +423,14 @@ Conforme as fontes que o usuário conectou, você pode ter:
 
 Regras: somente leitura em dados/banco; nunca modifique dados. Para perguntas sobre **arquivos**, use `ls`/`glob`
 em `/workspace` e depois `read_file` para ler o conteúdo — funciona com texto, CSV, **PDF, Word e Excel**
-(leia o arquivo antes de responder sobre ele). Para achar um trecho específico em documentos longos,
-prefira `buscar_documentos`. Se um arquivo falhar ao ser lido, NÃO repita a mesma leitura em loop:
-tente `buscar_documentos` ou diga que o documento não tem texto extraível. Nunca cite caminhos fora de `/workspace`.
-Para perguntas sobre **documentos** (PDFs, leis, normas): `list_documents` → localizar a página com
-`search_documents` (termo exato: artigo, número, data, nome) ou `buscar_documentos` (conceito) →
-`read_document(doc_id, páginas)`. **Seja incansável: NUNCA conclua "não encontrei" após uma única
+(leia o arquivo antes de responder sobre ele). Para um documento longo e estruturado, **navegue pela
+árvore** (`get_document_structure` → `get_node_content`). Se um arquivo falhar ao ser lido, NÃO
+repita a mesma leitura em loop: tente outra seção ou diga que o documento não tem texto extraível.
+Nunca cite caminhos fora de `/workspace`.
+Para perguntas sobre **documentos** (PDFs, leis, normas): `list_documents` → `get_document_structure`
+→ `get_node_content` na seção relevante. Para um termo EXATO (artigo, número, data, nome) use
+`search_documents` e depois `read_document` na página encontrada.
+**Seja incansável: NUNCA conclua "não encontrei" após uma única
 tentativa** — liste o acervo, tente variações do termo (sinônimos, número por extenso/algarismo) e
 leia as páginas candidatas antes de desistir; só cite uma página depois de tê-la lido. (Acento e caixa
 já são ignorados pelo `search_documents`, então não fique repetindo variações de acento.) Para perguntas
@@ -559,10 +562,9 @@ def _create_data_deep_agent(
     """
     model = create_chat_model()
     tools = make_memory_tools(user_id, agent_id) if memory_enabled else []
-    # Semantic search over this agent's ingested documents (#14), scoped to (user, agent).
-    tools = tools + make_retrieval_tools(user_id, agent_id)
-    # Document-layer tools: catalog the corpus (list_documents) and read explicit page ranges
-    # (read_document) over the ingested manifest — complements the raw filesystem built-ins.
+    # Document-layer tools over the ingested manifest (vectorless): catalog (list_documents), the
+    # structure tree (get_document_structure/get_node_content), literal search + page reads — plus
+    # the raw filesystem built-ins. No embeddings/chunks: content is served from the manifest.
     tools = tools + make_document_tools(user_id, agent_id, session_id)
     # Artifact generation (#18): produces Word/PPTX and records an artifact_generated event that
     # feeds the success metrics (#21) and reflection (#20). Bound to this session; the deliverable

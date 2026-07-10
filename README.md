@@ -27,7 +27,7 @@ write agent logic; the harness runs it in production.
 | ✅ **Human-in-the-loop** | Anything that produces an outward deliverable is *parked for your approval* — it only runs after you say yes, right inside the chat. |
 | 📄 **Real deliverables** | Approve and the agent renders a native **`.docx` / `.pptx` / `.xlsx`** — not a text blob, a valid Office file — with each claim marked with its source (or flagged `[SEM FONTE]`). |
 | 🧠 **Memory + learning** | It remembers you across conversations (mem0) and *learns your preferences* (e.g. your favourite output format) from what you approve — no manual tuning. |
-| 🔎 **Grounded answers (RAG)** | Documents are chunked and embedded (pgvector) so answers are retrieved from *your* files with provenance, not hallucinated. |
+| 🔎 **Grounded answers (vectorless)** | Documents are indexed into a **structure tree** (PageIndex-style, built locally) — the agent navigates to the right section and reads exactly what it needs, with provenance. No embeddings, no chunking. Spreadsheets (CSV/Excel) are queried with exact SQL (DuckDB). |
 
 ---
 
@@ -52,7 +52,7 @@ flowchart TB
   API --> Agent
 
   subgraph Agent["Data Agent (LangGraph / Deep Agent)"]
-    Tools["Tools:<br/>list/describe/run_sql<br/>ls/read_file/glob/grep<br/>gerar_artefato · gerar_planilha"]
+    Tools["Tools:<br/>listar/consultar_dados (SQL: CSV/Excel)<br/>get_document_structure · get_node_content<br/>ls/read_file/glob/grep<br/>gerar_artefato · gerar_planilha"]
     Guard["Guardrails<br/>(PII · safety · read-only SQL)"]
   end
 
@@ -132,6 +132,16 @@ Why this shape:
 - **Folder:** a granted path is exposed **read-only** through a per-session Deep Agents
   `FilesystemBackend` mounted at `/workspace`. Paths are validated against an allow-list on every use.
 
+### Document intelligence (vectorless)
+- At ingest each file is parsed into a **structure tree** (PageIndex-style, built locally with one
+  cheap LLM refine call per PDF) plus its located text — both stored on the `IngestedFile` manifest.
+  No embeddings, no chunk store, no vector DB.
+- The agent **navigates** the tree (`get_document_structure` → `get_node_content`) to read exactly the
+  relevant section, runs **literal term search** (`search_documents`), or reads **explicit pages**
+  (`read_document`) — content is served from the manifest, not re-parsed from disk each time.
+- **Spreadsheets & CSVs** become read-only SQL tables (DuckDB) so exact aggregations run in the engine
+  (`consultar_dados`) — CSV, TSV, and each Excel sheet — never summed by hand.
+
 ### Conversation history & timeline
 - Messages persist to a dedicated, append-only `chat_message` table (indexed by session, cursor
   paginated) — fast to render and independent of graph-state blobs.
@@ -170,7 +180,7 @@ erDiagram
   CHAT_MESSAGE ||--o{ CHAT_MESSAGE_STEP : "tool activity"
   SESSION ||--o{ SESSION_EVENT : "audit log"
   SESSION ||--o{ PENDING_ACTION : "awaiting approval"
-  AGENT ||--o{ DOCUMENT_CHUNK : "ingested docs"
+  AGENT ||--o{ INGESTED_FILE : "document manifest"
 
   CHAT_MESSAGE {
     int id
@@ -194,6 +204,13 @@ erDiagram
     string event_type
     json payload
     string scope
+  }
+  INGESTED_FILE {
+    string doc_id
+    string title
+    text structure
+    text content
+    string status
   }
 ```
 
@@ -239,7 +256,8 @@ src/
 │       ├── hitl/              # park → confirm gate + executors
 │       ├── memory/ · learning/# mem0 memory + reflection/corrections
 │       ├── session/           # session, chat_message(+step), event models & repos
-│       ├── ingestion/         # document chunking + embeddings (RAG)
+│       ├── ingestion/         # parse folder → manifest (structure tree + located text)
+│       ├── structure/         # per-file document structure tree (PageIndex-style, local)
 │       ├── sandbox/           # per-session DB + FilesystemBackend registry
 │       └── guardrails/ · llm/ · mcp/ · metrics/ · middleware/
 ├── cli/                       # terminal clients per agent
@@ -293,7 +311,7 @@ source of truth). Key variables:
 | Category | Variable | Default |
 |---|---|---|
 | App | `APP_ENV` | `development` |
-| LLM | `OPENAI_API_KEY` · `DEFAULT_LLM_MODEL` | — · `gpt-5-mini` |
+| LLM | `LLM_PROVIDER` · `ANTHROPIC_API_KEY` · `OPENAI_API_KEY` | `anthropic` (Claude Sonnet 5) · — · — |
 | Memory | `LONG_TERM_MEMORY_MODEL` · `LONG_TERM_MEMORY_EMBEDDER_MODEL` | `gpt-5-nano` · `text-embedding-3-small` |
 | Sources | `SANDBOX_ENABLED` · `SANDBOX_ALLOWED_ROOTS` · `SESSION_SOURCE_TTL` | `true` · — · `3600` |
 | Auth | `JWT_SECRET_KEY` · `JWT_ACCESS_TOKEN_EXPIRE_DAYS` | — · `30` |
