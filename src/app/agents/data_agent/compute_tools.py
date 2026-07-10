@@ -140,8 +140,10 @@ def _do_list(root_dir: str) -> str:
             return "Nenhum arquivo de dados (CSV/TSV/Excel) na pasta para consultar com SQL."
         lines = []
         for tname, fname in mapping.items():
+            # Include the column TYPE (PRAGMA table_info: cid, name, type, …) so the model writes
+            # correctly-typed SQL — e.g. it won't compare a text month column like `mes` to an int.
             cols = con.execute(f'PRAGMA table_info("{tname}")').fetchall()
-            colnames = ", ".join(c[1] for c in cols)
+            colnames = ", ".join(f"{c[1]} {c[2]}" for c in cols)
             count = con.execute(f'SELECT count(*) FROM "{tname}"').fetchone()[0]
             lines.append(f"- {tname}  (arquivo: {fname}, {count} linhas)  colunas: {colnames}")
         return "Tabelas de dados disponíveis (consulte com `consultar_dados`, SQL DuckDB):\n" + "\n".join(lines)

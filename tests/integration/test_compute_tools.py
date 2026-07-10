@@ -37,6 +37,7 @@ class TestComputeTools:
 
         listed = await tools["listar_dados"].ainvoke({})
         assert "vendas" in listed and "receita" in listed
+        assert "mes VARCHAR" in listed  # column types shown so the model writes typed SQL
 
         out = await tools["consultar_dados"].ainvoke({"sql": "SELECT SUM(receita) AS s FROM vendas"})
         assert "3500" in out
