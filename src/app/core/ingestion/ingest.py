@@ -6,6 +6,7 @@ the whole run. Embedding/indexing of the persisted chunks is #14.
 """
 
 import asyncio
+import json
 import os
 from typing import List, Optional
 
@@ -40,6 +41,9 @@ class IngestFileResult(BaseModel):
     # The document's structure tree as a JSON string (empty when tree building is off), so sync can
     # persist it on the manifest without re-parsing.
     structure: str = ""
+    # The document's located text as a JSON string (the parsed sections), so the reading tools serve
+    # content from the manifest instead of re-parsing disk. Empty when indexing is off.
+    content: str = ""
 
 
 _TEXT_PREVIEW_CHARS = 4000
@@ -118,6 +122,14 @@ async def ingest_file(
     page_count, text_layer, confidence = derive_manifest_meta(parsed)
     preview = "\n".join(s.text for s in parsed.sections if s.text.strip())[:_TEXT_PREVIEW_CHARS]
     structure = (await build_document_tree(parsed)).model_dump_json() if build_tree else ""
+    content = (
+        json.dumps(
+            [{"location": s.location, "text": s.text, "needs_ocr": s.needs_ocr} for s in parsed.sections],
+            ensure_ascii=False,
+        )
+        if build_tree
+        else ""
+    )
     return IngestFileResult(
         chunk_count=len(models),
         page_count=page_count,
@@ -125,6 +137,7 @@ async def ingest_file(
         ocr_confidence=confidence,
         text_preview=preview,
         structure=structure,
+        content=content,
     )
 
 

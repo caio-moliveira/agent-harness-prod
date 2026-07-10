@@ -153,6 +153,7 @@ class TestIncrementalSync:
         md_tree = json.loads(md_row.structure)
         md_titles = [n["title"] for n in md_tree["structure"]]
         assert "Título" in md_titles  # markdown headings became the tree
+        assert "Seção A" in json.loads(md_row.content)[0]["text"]  # located text persisted too
 
         csv_row = next(r for p, r in known.items() if p.endswith("dados.csv"))
         csv_tree = json.loads(csv_row.structure)

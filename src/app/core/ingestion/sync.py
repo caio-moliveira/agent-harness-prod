@@ -104,6 +104,7 @@ async def sync_folder(
             description=description,
             status=IngestedFileStatus.ACTIVE,
             structure=outcome.structure,
+            content=outcome.content,
         )
         if record is None:
             result.added += 1

@@ -64,14 +64,16 @@ class IngestedFileRepository:
         description: str = "",
         status: str = IngestedFileStatus.ACTIVE,
         structure: Optional[str] = None,
+        content: Optional[str] = None,
     ) -> None:
         """Insert or update the tracking + manifest record for one source file.
 
         ``doc_id`` (from the content hash) and ``title`` (the file name, display-only) are derived
         here so every ingestion path fills the catalog consistently. ``description`` (the map blurb)
         is only overwritten when a non-empty value is given, so a failed description pass never wipes
-        an existing one. ``structure`` (the document tree JSON) is written when provided (``None``
-        leaves it untouched). ``status`` is set to active on (re)ingest — an ingested file is valid.
+        an existing one. ``structure`` (the document tree JSON) and ``content`` (the located text
+        JSON) are written when provided (``None`` leaves them untouched). ``status`` is set to active
+        on (re)ingest — an ingested file is valid.
         """
         with session_scope() as session:
             statement = select(IngestedFile).where(
@@ -94,6 +96,8 @@ class IngestedFileRepository:
                 record.description = description
             if structure is not None:
                 record.structure = structure
+            if content is not None:
+                record.content = content
             session.add(record)
             session.commit()
 

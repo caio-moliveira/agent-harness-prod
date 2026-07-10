@@ -32,7 +32,6 @@ from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
 from src.app.core.ingestion.normalize import normalize_text
-from src.app.core.ingestion.parsers import extract_document
 from src.app.core.ingestion.source_model import IngestedFileStatus
 from src.app.core.ingestion.source_repository import IngestedFileRepository
 from src.app.core.sandbox.paths import is_within_allowed_roots
@@ -152,6 +151,42 @@ def _render_outline(nodes: list, depth: int = 0) -> List[str]:
         lines.append(f"{'  ' * depth}{n.get('node_id', '')}{span} {n.get('title', '')}".rstrip())
         lines.extend(_render_outline(n.get("nodes", []), depth + 1))
     return lines
+
+
+def _load_sections(content_json: Optional[str]) -> Optional[List[dict]]:
+    """Parse the manifest ``content`` JSON into the list of located sections, or ``None`` if absent."""
+    if not content_json:
+        return None
+    try:
+        sections = json.loads(content_json)
+    except (ValueError, TypeError):
+        return None
+    return sections if isinstance(sections, list) else None
+
+
+def _section_pages(sections: List[dict], ext: str) -> List[dict]:
+    """Normalize stored sections into ordered ``{label, text, needs_ocr}`` pages for reading/search.
+
+    For line-located single-section types (md/txt/csv) the one blob is returned as a single page;
+    for section-ordinal types (pdf/docx/xlsx) each stored section is one page.
+    """
+    if ext in _LINE_BASED_EXTS and sections:
+        s = sections[0]
+        return [{"label": s.get("location", "conteúdo"), "text": s.get("text", ""), "needs_ocr": s.get("needs_ocr", False)}]
+    return [
+        {"label": s.get("location", ""), "text": s.get("text", ""), "needs_ocr": s.get("needs_ocr", False)}
+        for s in sections
+    ]
+
+
+def _slice_span(sections: List[dict], ext: str, start: int, end: int) -> str:
+    """Return the text spanned by ``[start, end]`` — line range (md/txt/csv) or section range."""
+    if ext in _LINE_BASED_EXTS:
+        lines = (sections[0].get("text", "") if sections else "").splitlines()
+        return "\n".join(lines[start - 1 : end]).strip()
+    return "\n\n".join(
+        f"=== {s.get('location', '')} ===\n{s.get('text', '')}".strip() for s in sections[start - 1 : end]
+    ).strip()
 
 
 def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session_id: Optional[str]) -> List[BaseTool]:
@@ -419,43 +454,30 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
     async def get_node_content(doc_id: str, node_id: str) -> str:
         """Lê o conteúdo de UMA seção do documento, identificada pelo `node_id` de `get_document_structure`.
 
-        Reparseia o arquivo do disco e devolve o texto daquela seção (a faixa de páginas/linhas do nó).
-        Fluxo: `get_document_structure(doc_id)` → escolha o `node_id` → `get_node_content(doc_id, node_id)`.
-        Limitado por um teto: se a seção não couber, devolve o começo e avisa (não trunca em silêncio).
+        Devolve o texto daquela seção (a faixa de páginas/linhas do nó), servido do índice — sem
+        reabrir o arquivo. Fluxo: `get_document_structure(doc_id)` → escolha o `node_id` →
+        `get_node_content(doc_id, node_id)`. Limitado por um teto: se a seção não couber, devolve o
+        começo e avisa (não trunca em silêncio).
         """
         record, err = await _resolve_doc(doc_id)
         if record is None:
             return err
-        if not record.structure:
-            return f"'{record.title}' não tem árvore indexada. Use read_document(doc_id, pág, pág)."
+        sections = _load_sections(record.content)
+        if not record.structure or sections is None:
+            return f"'{record.title}' não tem conteúdo indexado. Peça para reindexar a pasta em Fontes."
         try:
             tree = json.loads(record.structure)
         except (ValueError, TypeError):
-            return f"Estrutura de '{record.title}' ilegível. Use read_document(doc_id, pág, pág)."
+            return f"Estrutura de '{record.title}' ilegível. Peça para reindexar a pasta em Fontes."
         node = _find_node(tree.get("structure", []), node_id)
         if node is None:
             return f"node_id '{node_id}' não existe em '{record.title}'. Veja get_document_structure(doc_id)."
         start, end = node.get("start_index"), node.get("end_index")
         if start is None:
             return f"O nó '{node.get('title', '')}' não tem conteúdo direto (ex.: coluna — use consultar_dados)."
-        # Security: re-validate the host path against the allow-list on every use, and confirm the
-        # file still exists (a tightened SANDBOX_ALLOWED_ROOTS or a deleted file revokes access).
-        if not is_within_allowed_roots(record.source_path, settings.SANDBOX_ALLOWED_ROOTS) or not os.path.isfile(
-            record.source_path
-        ):
-            return "Arquivo indisponível (fora das raízes permitidas agora, ou removido do disco)."
-        try:
-            parsed = await asyncio.to_thread(extract_document, record.source_path)
-        except Exception as e:  # noqa: BLE001 - never crash the turn on a parse failure
-            logger.exception("node_content_parse_failed", doc_id=record.doc_id, error_type=type(e).__name__)
-            return f"Falha ao ler o arquivo ({type(e).__name__}). Tente read_document (texto)."
 
         ext = os.path.splitext(record.source_path)[1].lower()
-        if ext in _LINE_BASED_EXTS:
-            lines = parsed.sections[0].text.splitlines() if parsed.sections else []
-            body = "\n".join(lines[start - 1 : end]).strip()
-        else:  # pdf pages / docx blocks / xlsx sheets — located by section ordinal
-            body = "\n\n".join(f"=== {s.location} ===\n{s.text}".strip() for s in parsed.sections[start - 1 : end]).strip()
+        body = _slice_span(sections, ext, start, end)
         if not body:
             return f"Seção '{node.get('title', '')}' sem texto extraível (pode ser página escaneada)."
 
@@ -464,7 +486,7 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
         # Record the pages into the session read set (citation basis) when the locator is page-based.
         if session_id and ext == ".pdf":
             await registry.mark_pages_read(session_id, record.doc_id, range(start, end + 1))
-        suffix = "\n\n… [seção truncada no limite de leitura — refine com read_document]" if truncated else ""
+        suffix = "\n\n… [seção truncada no limite de leitura — leia as subseções separadamente]" if truncated else ""
         return f"=== {node.get('title', '')} (doc {record.doc_id}, nó {node_id}) ===\n{body}{suffix}"
 
     return [

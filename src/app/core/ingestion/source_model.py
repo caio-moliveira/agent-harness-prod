@@ -67,3 +67,7 @@ class IngestedFile(BaseModel, table=True):
     # invalidated by ``content_hash``; nullable because a file may not be indexed yet (and tabular
     # files carry only a schema). See ``core/structure``.
     structure: Optional[str] = Field(default=None)
+    # The document's located text as a JSON string (list of ``{location, text, needs_ocr}`` sections),
+    # captured at ingest. This is what the reading tools slice — the vectorless replacement for the
+    # chunk store: reads/searches come from here, not a re-parse of disk or an embedding index.
+    content: Optional[str] = Field(default=None)

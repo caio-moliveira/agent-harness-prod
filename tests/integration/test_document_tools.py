@@ -243,22 +243,33 @@ class TestFuzzyDocResolution:
         assert any(b.get("type") == "image" for b in result.content_blocks)
 
 
-class TestStructureTools:
-    """get_document_structure (the tree outline) + get_node_content (section text from disk)."""
+def _content_json(parsed) -> str:
+    """Serialize parsed sections into the manifest ``content`` JSON (what the reading tools slice)."""
+    import json
 
-    async def test_outline_then_read_section(self, client: AsyncClient, tmp_path, monkeypatch):
+    return json.dumps(
+        [{"location": s.location, "text": s.text, "needs_ocr": s.needs_ocr} for s in parsed.sections],
+        ensure_ascii=False,
+    )
+
+
+class TestStructureTools:
+    """get_document_structure (the tree outline) + get_node_content (section text from the index)."""
+
+    async def test_outline_then_read_section(self, client: AsyncClient, tmp_path):
         import json
 
-        from src.app.core.structure.builder import build_document_tree
         from src.app.core.ingestion.parsers import extract_document
+        from src.app.core.structure.builder import build_document_tree
 
         md = tmp_path / "notas.md"
         md.write_text("# Título\n\nintro\n\n## Seção A\ncorpo da seção A\n", encoding="utf-8")
-        tree = await build_document_tree(extract_document(str(md)))
+        parsed = extract_document(str(md))
+        tree = await build_document_tree(parsed)
         await IngestedFileRepository().upsert(
-            USER, AGENT, str(md), "hash_md_00001", 0, page_count=1, structure=tree.model_dump_json()
+            USER, AGENT, str(md), "hash_md_00001", 0, page_count=1,
+            structure=tree.model_dump_json(), content=_content_json(parsed),
         )
-        monkeypatch.setattr(settings, "SANDBOX_ALLOWED_ROOTS", [str(tmp_path)])
         tools = {t.name: t for t in make_document_tools(USER, AGENT, None)}
 
         outline = await tools["get_document_structure"].ainvoke({"doc_id": "notas"})
@@ -274,17 +285,18 @@ class TestStructureTools:
         content = await tools["get_node_content"].ainvoke({"doc_id": "notas", "node_id": node_id})
         assert "corpo da seção A" in content
 
-    async def test_get_node_content_unknown_node_id(self, client: AsyncClient, tmp_path, monkeypatch):
-        from src.app.core.structure.builder import build_document_tree
+    async def test_get_node_content_unknown_node_id(self, client: AsyncClient, tmp_path):
         from src.app.core.ingestion.parsers import extract_document
+        from src.app.core.structure.builder import build_document_tree
 
         md = tmp_path / "x.md"
         md.write_text("# H\n\ntexto\n", encoding="utf-8")
-        tree = await build_document_tree(extract_document(str(md)))
+        parsed = extract_document(str(md))
+        tree = await build_document_tree(parsed)
         await IngestedFileRepository().upsert(
-            USER, AGENT, str(md), "hash_md_00002", 0, page_count=1, structure=tree.model_dump_json()
+            USER, AGENT, str(md), "hash_md_00002", 0, page_count=1,
+            structure=tree.model_dump_json(), content=_content_json(parsed),
         )
-        monkeypatch.setattr(settings, "SANDBOX_ALLOWED_ROOTS", [str(tmp_path)])
         tools = {t.name: t for t in make_document_tools(USER, AGENT, None)}
 
         out = await tools["get_node_content"].ainvoke({"doc_id": "x", "node_id": "9999"})
