@@ -168,6 +168,11 @@ export interface ToolStep {
   done: boolean;
 }
 
+/** One chronological slice of an assistant turn: a batch of tool activity, or a block of answer text.
+ *  Interleaving these (tools → text → tools → text) mirrors the agent's actual sequence instead of
+ *  stacking every tool above one giant answer. */
+export type Segment = { kind: "tools"; steps: ToolStep[] } | { kind: "text"; text: string };
+
 export interface UserTurn {
   role: "user";
   content: string;
@@ -175,8 +180,12 @@ export interface UserTurn {
 
 export interface AssistantTurn {
   role: "assistant";
+  /** Flat list of every tool step this turn ran — used by the timeline and deliverable links. */
   steps: ToolStep[];
+  /** The full answer text (all text segments concatenated) — used for memory/copy. */
   content: string;
+  /** Tools and text in the order they streamed, so the turn renders interleaved, not stacked. */
+  segments: Segment[];
   streaming: boolean;
   error?: string;
   approval?: TurnApproval;

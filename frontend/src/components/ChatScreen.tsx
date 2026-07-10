@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
-import type { AssistantTurn, SourceStatus, ToolStep, Turn } from "../lib/types";
+import type { AssistantTurn, Segment, SourceStatus, ToolStep, Turn } from "../lib/types";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SourcesPanel from "./SourcesPanel";
@@ -43,6 +43,38 @@ function closeStep(steps: ToolStep[], name: string, output?: string): ToolStep[]
     }
   }
   return copy;
+}
+
+/** Append a tool step to the chronological segments, batching consecutive tools into one group. */
+function pushToolStep(segments: Segment[], step: ToolStep): Segment[] {
+  const last = segments[segments.length - 1];
+  if (last?.kind === "tools") {
+    return [...segments.slice(0, -1), { kind: "tools", steps: [...last.steps, step] }];
+  }
+  return [...segments, { kind: "tools", steps: [step] }];
+}
+
+/** Append a text delta to the segments, growing the current text block or opening a new one. */
+function pushText(segments: Segment[], text: string): Segment[] {
+  const last = segments[segments.length - 1];
+  if (last?.kind === "text") {
+    return [...segments.slice(0, -1), { kind: "text", text: last.text + text }];
+  }
+  return [...segments, { kind: "text", text }];
+}
+
+/** Close the most recent matching open tool step inside whichever tools segment holds it. */
+function closeStepInSegments(segments: Segment[], name: string, output?: string): Segment[] {
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const seg = segments[i];
+    if (seg.kind !== "tools") continue;
+    const idx = [...seg.steps].reverse().findIndex((s) => s.name === name && !s.done);
+    if (idx === -1) continue;
+    const realIdx = seg.steps.length - 1 - idx;
+    const steps = seg.steps.map((s, j) => (j === realIdx ? { ...s, output, done: true } : s));
+    return segments.map((s, j) => (j === i ? { kind: "tools", steps } : s));
+  }
+  return segments;
 }
 
 export default function ChatScreen() {
@@ -150,22 +182,22 @@ export default function ChatScreen() {
         if (cancelled) return;
         // Continue the live step-id counter so restored ids never collide with new ones.
         let nextStepId = stepIdRef.current;
-        const built: Turn[] = msgs.map((m) =>
-          m.role === "user"
-            ? { role: "user", content: m.content }
-            : {
-                role: "assistant",
-                content: m.content,
-                streaming: false,
-                steps: m.steps.map((s) => ({
-                  id: nextStepId++,
-                  name: s.name,
-                  input: s.input ?? undefined,
-                  output: s.output ?? undefined,
-                  done: true,
-                })),
-              },
-        );
+        const built: Turn[] = msgs.map((m) => {
+          if (m.role === "user") return { role: "user", content: m.content };
+          const steps: ToolStep[] = m.steps.map((s) => ({
+            id: nextStepId++,
+            name: s.name,
+            input: s.input ?? undefined,
+            output: s.output ?? undefined,
+            done: true,
+          }));
+          // Persisted turns don't record the tools↔text interleaving, so restore them as one tool
+          // batch followed by the answer — live turns stream true interleaved segments.
+          const segments: Segment[] = [];
+          if (steps.length > 0) segments.push({ kind: "tools", steps });
+          if (m.content) segments.push({ kind: "text", text: m.content });
+          return { role: "assistant", content: m.content, streaming: false, steps, segments };
+        });
         stepIdRef.current = nextStepId;
         // Re-anchor a still-pending artifact approval to the last assistant turn so it can be
         // decided after a reload — without floating at the bottom of the conversation.
@@ -237,7 +269,7 @@ export default function ChatScreen() {
     setTurns((prev) => [
       ...prev,
       { role: "user", content: text },
-      { role: "assistant", steps: [], content: "", streaming: true },
+      { role: "assistant", steps: [], content: "", segments: [], streaming: true },
     ]);
     setSending(true);
 
@@ -246,18 +278,30 @@ export default function ChatScreen() {
       for await (const ev of api.streamDataQuery(stoken, sid, text)) {
         if (ev.type === "tool_start") {
           const id = stepIdRef.current++;
+          const step: ToolStep = { id, name: ev.name, input: ev.input, done: false };
           setTurns((prev) =>
             updateLastAssistant(prev, (a) => ({
               ...a,
-              steps: [...a.steps, { id, name: ev.name, input: ev.input, done: false }],
+              steps: [...a.steps, step],
+              segments: pushToolStep(a.segments, step),
             })),
           );
         } else if (ev.type === "tool_end") {
           setTurns((prev) =>
-            updateLastAssistant(prev, (a) => ({ ...a, steps: closeStep(a.steps, ev.name, ev.output) })),
+            updateLastAssistant(prev, (a) => ({
+              ...a,
+              steps: closeStep(a.steps, ev.name, ev.output),
+              segments: closeStepInSegments(a.segments, ev.name, ev.output),
+            })),
           );
         } else if (ev.type === "token") {
-          setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, content: a.content + ev.content })));
+          setTurns((prev) =>
+            updateLastAssistant(prev, (a) => ({
+              ...a,
+              content: a.content + ev.content,
+              segments: pushText(a.segments, ev.content),
+            })),
+          );
         } else if (ev.type === "thinking") {
           // Live reasoning stream — accumulate into the turn's thinking panel.
           setTurns((prev) =>
@@ -421,12 +465,25 @@ export default function ChatScreen() {
                         />
                       )}
                       {turn.todos && turn.todos.length > 0 && <TodoList items={turn.todos} />}
-                      <AgentActivity steps={turn.steps} />
                     </div>
-                    {(turn.content || turn.streaming) && (
+                    {/* Tools and answer text in the order they streamed — interleaved, not stacked. */}
+                    {turn.segments.map((seg, si) =>
+                      seg.kind === "tools" ? (
+                        <div key={si} className="pl-[42px]">
+                          <AgentActivity steps={seg.steps} />
+                        </div>
+                      ) : (
+                        <MessageBubble
+                          key={si}
+                          message={{ role: "assistant", content: seg.text }}
+                          authorName={agentName ?? "Agente"}
+                        />
+                      ),
+                    )}
+                    {turn.streaming && turn.segments[turn.segments.length - 1]?.kind !== "text" && (
                       <MessageBubble
-                        message={{ role: "assistant", content: turn.content }}
-                        pending={turn.streaming && !turn.content}
+                        message={{ role: "assistant", content: "" }}
+                        pending
                         authorName={agentName ?? "Agente"}
                       />
                     )}
