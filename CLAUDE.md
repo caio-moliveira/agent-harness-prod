@@ -81,9 +81,11 @@ npm run dev                    # http://localhost:5173 (proxies /api → :8000)
 npm run build                  # type-check (tsc -b) + bundle
 ```
 
-React chat UI for the `chatbot` agent (auth, sessions sidebar, streaming). Talks to the backend
-only via the Vite proxy (`/api/*`). Two-token model: user token creates/lists sessions, session
-token is required by chat. See `/frontend` slash command and `frontend/README.md`.
+React chat UI for the `data_agent` (auth, sessions sidebar, streaming, activity timeline, inline
+HITL approval + deliverable download). Talks to the backend only via the Vite proxy (`/api/*`);
+`ChatScreen` streams `POST /data-agent/{sid}/query/stream`. Two-token model: user token
+creates/lists sessions, session token is required by chat. See `/frontend` slash command and
+`frontend/README.md`.
 
 ### Running on Windows
 
