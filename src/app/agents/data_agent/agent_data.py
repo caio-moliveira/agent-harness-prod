@@ -18,7 +18,8 @@ from src.app.agents.data_agent.compute_tools import make_compute_tools
 from src.app.agents.data_agent.plan_tools import make_plan_tools
 from src.app.agents.data_agent.subagents import make_deep_research_subagent_spec, make_user_sql_subagent
 from src.app.agents.data_agent.tools import make_memory_tools
-from src.app.core.common.config import settings
+from src.app.core.checkpoint.checkpointer import get_checkpointer
+from src.app.core.common.config import Environment, settings
 from src.app.core.common.graph_utils import process_messages
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
@@ -65,6 +66,29 @@ _READ_LEDGER_TOOLS = frozenset(
 _LEDGER_MAX = 40
 # Pull the meaningful target (file path / doc id) out of a step's serialized tool input.
 _LEDGER_TARGET = re.compile(r"(?:file_path|doc_id|document_id|path|node_id)['\"]?\s*[:=]\s*['\"]([^'\"]+)['\"]")
+
+
+async def get_data_agent_checkpointer() -> Optional[Any]:
+    """Return the Postgres checkpointer for the data-agent, or None when it isn't available.
+
+    The checkpointer is the agent's native working memory across a session's turns — with it, the
+    graph keeps the full message/tool state per ``thread_id`` and stops re-reading files/queries
+    every turn (the re-read spiral). It is Postgres-only, so:
+
+    - In tests (``Environment.TEST``, in-memory SQLite) we short-circuit to None — never attempt a
+      Postgres connection — so the suite exercises the unchanged stateless path and stays fast.
+    - If the pool can't be reached (``get_checkpointer`` raises outside production), we degrade to
+      None instead of failing agent construction.
+
+    When None, the data-agent falls back to its per-turn stateless behavior (see ``_compose_payload``).
+    """
+    if settings.ENVIRONMENT == Environment.TEST:
+        return None
+    try:
+        return await get_checkpointer()
+    except Exception:
+        logger.warning("data_agent_checkpointer_unavailable", exc_info=True)
+        return None
 
 
 def _ledger_label(name: str, raw: Optional[str]) -> str:
@@ -123,6 +147,7 @@ class DataAgent:
         session_id: Optional[str] = None,
         sql_enabled: bool = False,
         deep_research_runnable: Optional[Any] = None,
+        checkpointer: Optional[Any] = None,
     ):
         """Build a Data Agent over a session's sources, isolated to one user and agent.
 
@@ -140,6 +165,9 @@ class DataAgent:
         self.agent_id = agent_id
         self.memory_enabled = memory_enabled
         self.root_dir = root_dir
+        # The session checkpointer (or None). When present, the graph keeps native working memory per
+        # thread_id and _compose_payload sends only the new turn; when None, we stay stateless.
+        self._checkpointer = checkpointer
         self.agent = _create_data_deep_agent(
             db,
             root_dir,
@@ -154,6 +182,7 @@ class DataAgent:
             session_id,
             sql_enabled,
             deep_research_runnable,
+            checkpointer,
         )
         self._pipeline = AgentPipeline(
             middlewares=[LoggingMiddleware(), ErrorHandlingMiddleware(), GuardrailMiddleware()],
@@ -201,6 +230,34 @@ class DataAgent:
             config=ctx.config,
         )
         return process_messages(response["messages"])
+
+    async def _compose_payload(
+        self,
+        config: dict,
+        leading: list[dict],
+        history: list[dict],
+        last_user: str,
+    ) -> list[dict]:
+        """Build the model input, adapting to whether this session has a checkpointer.
+
+        Stateless (no checkpointer — tests/SQLite, or Postgres down): send the leading context + the
+        server-rebuilt window, exactly as before. This is the unchanged, test-covered path.
+
+        With a checkpointer: the thread already holds the prior turns (messages + tool results), so
+        re-sending the window would duplicate them. Instead send only the fresh leading context + the
+        new user message and let the graph restore the rest. A thread that is still empty — a session
+        created before the checkpointer existed — is seeded once with the full window so its earlier
+        turns aren't lost. The leading context is recomputed each turn (current ledger/prefs) and is
+        the only volatile block re-anchored after the graph's own summarization.
+        """
+        if self._checkpointer is None:
+            return [*leading, *history] if leading else history
+
+        snapshot = await self.agent.aget_state(config)
+        thread_has_history = bool(snapshot.values.get("messages")) if snapshot and snapshot.values else False
+        if thread_has_history:
+            return [*leading, {"role": "user", "content": last_user}]
+        return [*leading, *history] if leading else history  # seed the thread on its first turn
 
     async def astream_query_events(
         self,
@@ -274,7 +331,7 @@ class DataAgent:
                     ),
                 }
             )
-        payload_messages = [*leading, *history] if leading else history
+        payload_messages = await self._compose_payload(config, leading, history, last_user)
 
         answer = ""
         async for event in self.agent.astream_events({"messages": payload_messages}, config=config, version="v2"):
@@ -604,6 +661,7 @@ def _create_data_deep_agent(
     session_id: Optional[str] = None,
     sql_enabled: bool = False,
     deep_research_runnable: Optional[Any] = None,
+    checkpointer: Optional[Any] = None,
 ) -> Any:
     """Build the underlying Deep Agent with memory tools, an optional folder, and subagents.
 
@@ -685,5 +743,10 @@ def _create_data_deep_agent(
     kwargs["backend"] = make_backend_factory(
         root_dir or "", writable=folder_writable, skills_dir=_BUNDLED_SKILLS_DIR
     )
+    # When a checkpointer is available (Postgres), the graph persists per-thread working memory so the
+    # agent keeps prior turns' messages/tool results without them being re-sent each turn. None keeps
+    # the deep agent stateless (tests/SQLite, or Postgres down).
+    if checkpointer is not None:
+        kwargs["checkpointer"] = checkpointer
 
     return create_deep_agent(**kwargs)

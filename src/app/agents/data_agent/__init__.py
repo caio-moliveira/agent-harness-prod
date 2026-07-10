@@ -2,10 +2,10 @@
 
 from typing import Any, Optional
 
-from src.app.agents.data_agent.agent_data import DataAgent, load_system_prompt
+from src.app.agents.data_agent.agent_data import DataAgent, get_data_agent_checkpointer, load_system_prompt
 from src.app.core.sandbox.registry import SessionResources
 
-__all__ = ["DataAgent", "load_system_prompt", "build_data_agent"]
+__all__ = ["DataAgent", "load_system_prompt", "build_data_agent", "get_data_agent_checkpointer"]
 
 
 def build_data_agent(
@@ -22,6 +22,7 @@ def build_data_agent(
     session_id: Optional[str] = None,
     sql_enabled: bool = False,
     deep_research_runnable: Optional[Any] = None,
+    checkpointer: Optional[Any] = None,
 ) -> DataAgent:
     """Build a Data Agent for a session's live resources and stored agent config.
 
@@ -43,6 +44,9 @@ def build_data_agent(
         deep_research_runnable: The compiled deep-research graph, injected when ``web_search`` is on
             (None otherwise, or when ``OPENAI_API_KEY`` is missing). Exposes the ``deep_research``
             subagent for web research; compiled once off the per-session path and shared.
+        checkpointer: The Postgres session checkpointer (or None). When provided, the agent keeps
+            native working memory per ``thread_id`` across turns; None keeps it stateless (tests,
+            or when Postgres is unavailable). Obtain via ``get_data_agent_checkpointer()``.
 
     Returns:
         A compiled DataAgent with a per-session FilesystemBackend over the granted folder (if any),
@@ -64,4 +68,5 @@ def build_data_agent(
         session_id=session_id,
         sql_enabled=sql_enabled,
         deep_research_runnable=deep_research_runnable,
+        checkpointer=checkpointer,
     )
