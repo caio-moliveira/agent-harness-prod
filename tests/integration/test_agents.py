@@ -756,7 +756,7 @@ class TestWorkspaceContext:
             SimpleNamespace(title="representacao.pdf", page_count=12, text_layer="mixed"),
         ]
         ctx = build_workspace_context(str(tmp_path), None, docs)
-        assert "indexados" in ctx.lower()
+        assert "mapa dos documentos" in ctx.lower()  # the brief lists the indexed manifest
         assert "lei.pdf" in ctx and "5 págs" in ctx
         assert "representacao.pdf" in ctx
 
