@@ -8,7 +8,7 @@ provider-specific quirks so the agents never have to know them:
   (they 400). The factory never forwards sampling params to Anthropic.
 - Prompt caching is a **prefix match**: stable content must precede volatile content, with a
   ``cache_control`` breakpoint on the last stable block. Deep agents get this via
-  :func:`caching_middleware`; the raw-graph chatbot builds a cached system block via
+  :func:`caching_middleware`; a raw ``create_agent`` graph builds a cached system block via
   :func:`build_system_message`.
 
 Long-term memory (mem0) and the evals framework keep their own OpenAI models — this factory only

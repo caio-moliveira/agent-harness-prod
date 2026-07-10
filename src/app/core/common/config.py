@@ -171,8 +171,8 @@ class Settings:
         # multi-deliverable turn can use ~25-30 calls, so 40 leaves headroom while still bounding a
         # runaway. The deep agent's recursion_limit is set above this so the graceful cap wins.
         self.ANTHROPIC_MODEL_CALL_LIMIT = int(os.getenv("ANTHROPIC_MODEL_CALL_LIMIT", "40"))
-        # Prompt caching (prefix match). Deep agents cache via AnthropicPromptCachingMiddleware; the
-        # chatbot caches a stable system block. Only meaningful when LLM_PROVIDER=anthropic.
+        # Prompt caching (prefix match). Deep agents cache via AnthropicPromptCachingMiddleware; a
+        # raw create_agent graph caches a stable system block. Only meaningful when LLM_PROVIDER=anthropic.
         self.PROMPT_CACHING_ENABLED = os.getenv("PROMPT_CACHING_ENABLED", "true").lower() in ("true", "1", "yes")
         self.PROMPT_CACHE_TTL = os.getenv("PROMPT_CACHE_TTL", "5m")  # "5m" or "1h"
 
