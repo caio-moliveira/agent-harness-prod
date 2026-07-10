@@ -62,3 +62,8 @@ class IngestedFile(BaseModel, table=True):
     # whether it's still valid) without reading it — and the catalog remembers deleted files.
     description: str = Field(default="")
     status: str = Field(default="active", index=True)  # see IngestedFileStatus
+    # The document's structure tree (PageIndex-style), as a JSON string: a per-file hierarchy of
+    # located sections the agent navigates instead of a vector search. Built at ingest and
+    # invalidated by ``content_hash``; nullable because a file may not be indexed yet (and tabular
+    # files carry only a schema). See ``core/structure``.
+    structure: Optional[str] = Field(default=None)
