@@ -5,6 +5,8 @@ function StatusMark({ status }: { status: TodoItem["status"] }) {
   if (status === "completed") return <span className="text-emerald-400">✓</span>;
   if (status === "in_progress")
     return <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-600 border-t-indigo-400" />;
+  // The turn ended while this step was still running — show it paused, not spinning forever.
+  if (status === "stopped") return <span className="text-amber-400">⏸</span>;
   return <span className="h-2.5 w-2.5 rounded-full border border-slate-600" />;
 }
 

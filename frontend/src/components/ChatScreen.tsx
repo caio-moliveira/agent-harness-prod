@@ -45,6 +45,15 @@ function closeStep(steps: ToolStep[], name: string, output?: string): ToolStep[]
   return copy;
 }
 
+/** When a turn stops, an item left "in_progress" would spin forever — settle it to a paused mark. */
+function settleTodos(a: AssistantTurn): AssistantTurn {
+  if (!a.todos?.length) return a;
+  return {
+    ...a,
+    todos: a.todos.map((t) => (t.status === "in_progress" ? { ...t, status: "stopped" } : t)),
+  };
+}
+
 /** Append a tool step to the chronological segments, batching consecutive tools into one group. */
 function pushToolStep(segments: Segment[], step: ToolStep): Segment[] {
   const last = segments[segments.length - 1];
@@ -326,14 +335,18 @@ export default function ChatScreen() {
             })),
           );
         } else if (ev.type === "error") {
-          setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, streaming: false, error: ev.content })));
+          setTurns((prev) =>
+            updateLastAssistant(prev, (a) => ({ ...settleTodos(a), streaming: false, error: ev.content })),
+          );
         } else if (ev.type === "done") {
-          setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, streaming: false })));
+          setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...settleTodos(a), streaming: false })));
         }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erro ao enviar";
-      setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, streaming: false, error: message })));
+      setTurns((prev) =>
+        updateLastAssistant(prev, (a) => ({ ...settleTodos(a), streaming: false, error: message })),
+      );
     } finally {
       setSending(false);
       // The first message auto-names the session server-side — refresh the sidebar to show the name.

@@ -364,8 +364,15 @@ class DataAgent:
         # timeline with its inner tools. While inside a delegation (depth > 0) we surface nothing but
         # the delegation's own boundary: its "Pesquisando na web…" card and, on return, its result.
         delegation_depth = 0
+        # Count the parent's own model calls this turn. If it reaches the per-run cap, the deep agent's
+        # ModelCallLimitMiddleware ends the turn and injects a limit message that is NOT streamed (it's
+        # synthetic, not a model call) — so the turn would stop silently mid-task. We detect that and
+        # stream a clear "continue" hint instead. Subagent calls run in their own graph and don't count.
+        parent_model_calls = 0
         async for event in self.agent.astream_events({"messages": payload_messages}, config=config, version="v2"):
             kind = event.get("event")
+            if kind == "on_chat_model_start" and delegation_depth == 0:
+                parent_model_calls += 1
             if kind == "on_tool_start":
                 tool_name = event.get("name", "")
                 raw_input = event.get("data", {}).get("input")
@@ -452,6 +459,18 @@ class DataAgent:
                     if kind_ == "token":
                         answer += text
                     yield {"type": kind_, "content": text}
+
+        # If the parent used its whole per-run model-call budget, the middleware likely ended the turn
+        # mid-task with a synthetic (unstreamed) limit message — surface an actionable hint so the stop
+        # isn't silent. Safe wording: it doesn't assert the turn was incomplete, only offers to resume.
+        if parent_model_calls >= settings.ANTHROPIC_MODEL_CALL_LIMIT:
+            hint = (
+                "\n\n---\n\n_Cheguei ao limite de passos deste turno. Se ainda faltou algo (ex.: gerar o "
+                'arquivo), envie **"continuar"** que eu retomo daqui — mantenho todo o contexto já '
+                "apurado, sem refazer a análise._"
+            )
+            answer += hint
+            yield {"type": "token", "content": hint}
 
         # Store this exchange back into long-term memory (non-blocking), scoped to this agent.
         if self.memory_enabled and user_id is not None and last_user and answer:
