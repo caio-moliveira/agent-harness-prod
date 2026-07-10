@@ -168,12 +168,12 @@ class DocumentAwareBackend(BackendProtocol):
             logger.exception("document_read_failed", file_path=file_path, error_type=type(e).__name__)
             return (
                 f"Não foi possível extrair o texto de '{file_path}' ({type(e).__name__}). "
-                "Se for um documento escaneado, use `buscar_documentos` para consultar o conteúdo."
+                "Se for um documento escaneado, use `read_page_image` para ver a página."
             )
         if not lines:
             return (
                 f"'{file_path}' não tem texto extraível (provável documento escaneado). "
-                "Use `buscar_documentos` para consultar o conteúdo."
+                "Use `read_page_image` para ver a página como imagem."
             )
         window = lines[offset : offset + limit] if limit else lines[offset:]
         body = "\n".join(window)
@@ -181,7 +181,7 @@ class DocumentAwareBackend(BackendProtocol):
         if remaining > 0:
             body += (
                 f"\n\n… (+{remaining} linhas — continue com offset={offset + len(window)}, ou use "
-                "`grep`/`buscar_documentos` para ir direto ao trecho)"
+                "`grep`/`search_documents` para ir direto ao trecho)"
             )
         return body
 

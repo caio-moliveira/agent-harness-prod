@@ -56,7 +56,6 @@ class IngestedFileRepository:
         agent_id: Optional[int],
         source_path: str,
         content_hash: str,
-        chunk_count: int,
         *,
         page_count: int = 0,
         text_layer: str = "native",
@@ -85,7 +84,6 @@ class IngestedFileRepository:
             if record is None:
                 record = IngestedFile(user_id=user_id, agent_id=agent_id, source_path=source_path)
             record.content_hash = content_hash
-            record.chunk_count = chunk_count
             record.doc_id = derive_doc_id(content_hash)
             record.title = os.path.basename(source_path)
             record.page_count = page_count
@@ -134,7 +132,6 @@ class IngestedFileRepository:
             if record is None:
                 return
             record.status = IngestedFileStatus.DELETED
-            record.chunk_count = 0
             session.add(record)
             session.commit()
             logger.info("ingested_file_soft_deleted", user_id=user_id, source_path=source_path)

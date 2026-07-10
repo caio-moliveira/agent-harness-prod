@@ -260,7 +260,7 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
 
         Não existe leitura do documento inteiro — informe o intervalo. Identifique o documento pelo
         `doc_id` de `list_documents`/`search_documents` (ou pelo nome do arquivo — ambos funcionam).
-        Para saber QUAIS páginas ler, use antes `search_documents` (termo exato) ou `buscar_documentos`.
+        Para saber QUAIS páginas ler, use antes `search_documents` (termo exato) ou `get_document_structure`.
         A leitura é limitada por um teto: se o intervalo não couber, devolve o que coube e informa o próximo
         intervalo a pedir (nunca trunca em silêncio). Cada página traz o índice do PDF e, quando detectável,
         o fólio impresso — com aviso de divergência entre os dois.
@@ -295,8 +295,8 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
                     await registry.mark_pages_read(session_id, doc_id, [idx])
                 return (
                     block[:_MAX_READ_CHARS]
-                    + f"\n\n… [a página {idx} excede o limite de leitura e foi truncada. Refine com "
-                    "`buscar_documentos` para o trecho exato.]"
+                    + f"\n\n… [a página {idx} excede o limite de leitura e foi truncada. Navegue por "
+                    "`get_document_structure` → `get_node_content` para a seção exata.]"
                 )
             # Adding this page would exceed the budget and we already have content: stop here.
             if blocks and used + len(block) > _MAX_READ_CHARS:
@@ -320,12 +320,12 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
         """Busca LITERAL de um termo exato no texto dos documentos (ignora acento e caixa).
 
         É a ferramenta certa para termo EXATO: número de processo, CNPJ, artigo, data, valor, nome
-        próprio, "Emenda Constitucional nº 100". É a ferramenta ERRADA para conceito parafraseado ou
-        pergunta em linguagem natural — para isso use `buscar_documentos` (busca por significado).
+        próprio, "Emenda Constitucional nº 100". Para um conceito parafraseado ou pergunta em
+        linguagem natural, navegue pela estrutura (`get_document_structure` → `get_node_content`).
         Retorna as coordenadas de cada ocorrência (doc_id, página do PDF, fólio) e um trecho curto —
         NUNCA a página inteira; para ler, chame depois `read_document(doc_id, página, página)`.
-        Informa a consulta já normalizada: se voltar vazio, o termo realmente não está no texto
-        (não é problema de acento/caixa) — tente sinônimos ou `buscar_documentos`, não repita variações de acento.
+        Informa a consulta já normalizada: se voltar vazio, o termo realmente não está no texto (não é
+        problema de acento/caixa) — tente sinônimos ou navegue por `get_document_structure`.
         """
         norm_query = normalize_text(query)
         if not norm_query:
@@ -355,7 +355,7 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
         if not hits:
             return (
                 f'Nenhuma ocorrência literal de "{norm_query}" (busca exata, ignorando acento e caixa). '
-                "Se for um conceito ou termo parafraseado, use `buscar_documentos` (busca por significado)."
+                "Se for um conceito, navegue a estrutura com `get_document_structure` → `get_node_content`."
             )
         lines = [
             f'- {doc.doc_id} "{doc.title}" · PDF pág. {idx}'

@@ -18,8 +18,8 @@ entregável simples, siga direto.
 
 ## Reúna e fundamente os dados
 
-1. Levante os números com as ferramentas certas (`run_sql` para banco; `search_documents` /
-   `read_document` / `buscar_documentos` para documentos).
+1. Levante os números com as ferramentas certas (`run_sql` para banco; `get_document_structure` /
+   `get_node_content` / `search_documents` / `read_document` para documentos).
 2. Para **cada** dado, guarde a **fonte** (a tabela + a consulta que o produziu, ou o documento e a
    página). Itens sem fonte saem marcados como `[SEM FONTE]`.
 

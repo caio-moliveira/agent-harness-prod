@@ -9,7 +9,6 @@ from src.app.core.agent import AgentRepository
 from src.app.core.db.database import database_factory
 from src.app.core.hitl import HitlService, PendingActionRepository
 from src.app.core.hitl.executors import register_default_executors
-from src.app.core.ingestion import DocumentChunkRepository
 from src.app.core.learning import CorrectionRepository, PreferenceRepository
 from src.app.core.mcp.session_manager import get_mcp_session_manager
 from src.app.core.session import SessionRepository
@@ -26,7 +25,6 @@ skill_repository = SkillRepository(dbsession)
 session_event_repository = SessionEventRepository()
 chat_message_repository = ChatMessageRepository()
 chat_message_step_repository = ChatMessageStepRepository()
-document_chunk_repository = DocumentChunkRepository()
 correction_repository = CorrectionRepository()
 preference_repository = PreferenceRepository()
 pending_action_repository = PendingActionRepository()

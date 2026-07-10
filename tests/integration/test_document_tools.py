@@ -30,7 +30,7 @@ async def _seed_document(source_path: str, content_hash: str, pages: list[str]) 
         ensure_ascii=False,
     )
     await IngestedFileRepository().upsert(
-        USER, AGENT, source_path, content_hash, len(pages), page_count=len(pages), text_layer="native", content=content
+        USER, AGENT, source_path, content_hash, page_count=len(pages), text_layer="native", content=content
     )
     return derive_doc_id(content_hash)
 
@@ -127,7 +127,7 @@ class TestSearchDocuments:
         out = await tools["search_documents"].ainvoke({"query": "termo-que-nao-existe-42"})
         assert "Nenhuma ocorrência literal" in out
         assert "termo-que-nao-existe-42" in out  # the normalized query, so it's not a malformed-query mystery
-        assert "buscar_documentos" in out  # steer to semantic search for concepts
+        assert "get_document_structure" in out  # steer to structure navigation for concepts
 
 
 def _make_pdf(path, pages: int = 1) -> None:
@@ -257,7 +257,7 @@ class TestStructureTools:
         parsed = extract_document(str(md))
         tree = await build_document_tree(parsed)
         await IngestedFileRepository().upsert(
-            USER, AGENT, str(md), "hash_md_00001", 0, page_count=1,
+            USER, AGENT, str(md), "hash_md_00001", page_count=1,
             structure=tree.model_dump_json(), content=_content_json(parsed),
         )
         tools = {t.name: t for t in make_document_tools(USER, AGENT, None)}
@@ -284,7 +284,7 @@ class TestStructureTools:
         parsed = extract_document(str(md))
         tree = await build_document_tree(parsed)
         await IngestedFileRepository().upsert(
-            USER, AGENT, str(md), "hash_md_00002", 0, page_count=1,
+            USER, AGENT, str(md), "hash_md_00002", page_count=1,
             structure=tree.model_dump_json(), content=_content_json(parsed),
         )
         tools = {t.name: t for t in make_document_tools(USER, AGENT, None)}

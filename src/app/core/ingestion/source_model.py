@@ -40,7 +40,7 @@ def derive_doc_id(content_hash: str) -> str:
 class IngestedFile(BaseModel, table=True):
     """A record of one ingested source file: its content hash plus manifest metadata.
 
-    Scoped per (user, agent). ``content_hash``/``chunk_count`` drive incremental re-ingestion;
+    Scoped per (user, agent). ``content_hash`` drives incremental re-ingestion;
     ``doc_id``/``title``/``page_count``/``text_layer``/``ocr_confidence`` are the catalog fields the
     document tools expose (the id circulates between tools; the title is display-only).
     """
@@ -50,7 +50,6 @@ class IngestedFile(BaseModel, table=True):
     agent_id: Optional[int] = Field(default=None, foreign_key="agent.id", index=True)
     source_path: str = Field(index=True)
     content_hash: str = Field(default="")
-    chunk_count: int = Field(default=0)
     # Manifest / catalog metadata (populated at ingest; read by the document tools).
     doc_id: str = Field(default="", index=True)
     title: str = Field(default="")  # display-only (e.g. the file name); never a tool parameter
