@@ -22,12 +22,12 @@ src/
 │   ├── main.py                # FastAPI app + lifespan (startup/shutdown)
 │   ├── init.py                # Langfuse, MCP, repositories bootstrap
 │   ├── agents/                # ← YOUR AGENTS LIVE HERE
-│   │   ├── chatbot/           #   reference agent (simplest)
+│   │   ├── data_agent/        #   the product: folder+DB, tools, subagents, artifacts
 │   │   ├── text_to_sql/       #   reference agent (skills + tools)
 │   │   ├── open_deep_research/#   reference agent (multi-subgraph)
 │   │   └── tools/             #   shared tools (search, think)
 │   ├── api/
-│   │   ├── v1/                # versioned routes (auth, chatbot, deep_research, text_to_sql)
+│   │   ├── v1/                # versioned routes (auth, data_agent, deep_research, text_to_sql)
 │   │   │   └── dtos/          # Pydantic request/response models
 │   │   ├── security/          # JWT auth + rate limiter
 │   │   └── metrics/           # Prometheus HTTP metrics middleware
@@ -105,7 +105,8 @@ API via `run_local.py`. `uvloop` is intentionally excluded on win32.
 4. Add a rate-limit entry in `config.py` (`RATE_LIMIT_ENDPOINTS`) and an env var if needed.
 5. Invoke via `agent.agent_invoke()` / `agent.agent_invoke_stream()`.
 
-Use `src/app/agents/chatbot/` + `src/app/api/v1/chatbot.py` as the canonical reference.
+Use `src/app/agents/text_to_sql/` + `src/app/api/v1/text_to_sql.py` as a simple reference, or
+`src/app/agents/data_agent/` for the full deep-agent pattern (tools + subagents + artifacts + HITL).
 There is a `/new-agent` slash command that scaffolds this for you.
 
 ## Non-negotiable conventions
