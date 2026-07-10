@@ -9,6 +9,8 @@ the session row itself.
 import asyncio
 import os
 
+from src.app.core.checkpoint.checkpointer import clear_checkpoints
+from src.app.core.common.config import Environment, settings
 from src.app.core.common.logging import logger
 from src.app.init import (
     chat_message_repository,
@@ -40,6 +42,14 @@ async def delete_session_cascade(session_id: str) -> None:
     messages = await chat_message_repository.delete_for_session(session_id)
     events = await session_event_repository.delete_for_session(session_id)
     await pending_action_repository.delete_for_session(session_id)
+    # Clear the agent's checkpoint thread (the Postgres working memory keyed by thread_id=session_id).
+    # No FK enforces this, so a deleted session would otherwise leave orphaned checkpoint rows. It is
+    # Postgres-only and best-effort: skipped in tests (SQLite) and never allowed to fail the cascade.
+    if settings.ENVIRONMENT != Environment.TEST:
+        try:
+            await clear_checkpoints(session_id)
+        except Exception:
+            logger.warning("session_checkpoint_clear_failed", session_id=session_id, exc_info=True)
     await session_repository.delete_session(session_id)
 
     logger.info(
