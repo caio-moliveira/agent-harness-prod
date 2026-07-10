@@ -134,6 +134,36 @@ class TestIncrementalSync:
         assert all("vendas" not in c.content for c in chunks)  # old content swapped out
         assert any("contrato" in c.content for c in chunks)  # new content present
 
+    async def test_sync_persists_document_structure(self, client: AsyncClient, tmp_path):
+        # The manifest also stores the per-file structure tree (the vectorless index). It is built
+        # from the parsed document at ingest and left untouched on an unchanged re-sync.
+        import json
+
+        from src.app.core.ingestion import DocumentChunkRepository, sync_folder
+        from src.app.core.ingestion.source_repository import IngestedFileRepository
+
+        (tmp_path / "notas.md").write_text("# Título\n\n## Seção A\ntexto\n\n## Seção B\n", encoding="utf-8")
+        (tmp_path / "dados.csv").write_text("mes,receita\njan,1000\n", encoding="utf-8")
+        crepo = DocumentChunkRepository()
+
+        await sync_folder(str(tmp_path), 1, 7, FakeEmbedder(), chunk_repo=crepo)
+        known = await IngestedFileRepository().get_known(1, 7)
+
+        md_row = next(r for p, r in known.items() if p.endswith("notas.md"))
+        md_tree = json.loads(md_row.structure)
+        md_titles = [n["title"] for n in md_tree["structure"]]
+        assert "Título" in md_titles  # markdown headings became the tree
+
+        csv_row = next(r for p, r in known.items() if p.endswith("dados.csv"))
+        csv_tree = json.loads(csv_row.structure)
+        assert [c["title"] for c in csv_tree["structure"][0]["nodes"]] == ["mes", "receita"]  # schema
+
+        # Unchanged re-sync: nothing rebuilt, structure preserved.
+        second = await sync_folder(str(tmp_path), 1, 7, FakeEmbedder(), chunk_repo=crepo)
+        assert (second.added, second.updated, second.unchanged) == (0, 0, 2)
+        again = await IngestedFileRepository().get_known(1, 7)
+        assert next(r for p, r in again.items() if p.endswith("notas.md")).structure == md_row.structure
+
     async def test_sync_populates_manifest_metadata(self, client: AsyncClient, tmp_path):
         # The IngestedFile row is the document manifest: sync must fill doc_id/title/page_count so
         # the document tools can catalog the corpus without touching disk.

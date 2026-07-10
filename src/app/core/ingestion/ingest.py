@@ -16,6 +16,7 @@ from src.app.core.ingestion.chunk_model import DocumentChunk
 from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
 from src.app.core.ingestion.chunking import chunk_document
 from src.app.core.ingestion.parsers import ParsedDocument, extract_document, is_supported
+from src.app.core.structure.builder import build_document_tree
 
 
 class IngestionResult(BaseModel):
@@ -36,6 +37,9 @@ class IngestFileResult(BaseModel):
     # Head of the extracted text, so a caller (sync) can generate the map description (#23) without
     # re-parsing the file.
     text_preview: str = ""
+    # The document's structure tree as a JSON string (empty when tree building is off), so sync can
+    # persist it on the manifest without re-parsing.
+    structure: str = ""
 
 
 _TEXT_PREVIEW_CHARS = 4000
@@ -84,11 +88,14 @@ async def ingest_file(
     user_id: int,
     agent_id: Optional[int],
     repo: DocumentChunkRepository,
+    build_tree: bool = True,
 ) -> IngestFileResult:
     """Parse one file into chunks persisted for (user, agent). Returns chunk count + manifest meta.
 
     Parsing runs in a worker thread so it never blocks the event loop. Raises on a parse error
     so the caller can decide whether to skip (folder ingest) or surface it (single-file sync).
+    ``build_tree`` builds the document structure tree (one LLM refine call for PDFs); the bulk
+    ``ingest_folder`` path disables it since it doesn't persist the manifest.
     """
     parsed = await asyncio.to_thread(extract_document, path)
     chunk_datas = chunk_document(parsed)
@@ -110,12 +117,14 @@ async def ingest_file(
     await repo.replace_source(user_id, agent_id, path, models)
     page_count, text_layer, confidence = derive_manifest_meta(parsed)
     preview = "\n".join(s.text for s in parsed.sections if s.text.strip())[:_TEXT_PREVIEW_CHARS]
+    structure = (await build_document_tree(parsed)).model_dump_json() if build_tree else ""
     return IngestFileResult(
         chunk_count=len(models),
         page_count=page_count,
         text_layer=text_layer,
         ocr_confidence=confidence,
         text_preview=preview,
+        structure=structure,
     )
 
 
@@ -134,7 +143,7 @@ async def ingest_folder(
     total_chunks = 0
     for path in files:
         try:
-            total_chunks += (await ingest_file(path, user_id, agent_id, repo)).chunk_count
+            total_chunks += (await ingest_file(path, user_id, agent_id, repo, build_tree=False)).chunk_count
             ingested += 1
         except Exception:  # noqa: BLE001 - one bad file must not abort the whole ingestion
             logger.exception("document_parse_failed", path=path, user_id=user_id, agent_id=agent_id)

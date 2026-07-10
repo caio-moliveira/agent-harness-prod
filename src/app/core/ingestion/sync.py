@@ -103,6 +103,7 @@ async def sync_folder(
             ocr_confidence=outcome.ocr_confidence,
             description=description,
             status=IngestedFileStatus.ACTIVE,
+            structure=outcome.structure,
         )
         if record is None:
             result.added += 1
