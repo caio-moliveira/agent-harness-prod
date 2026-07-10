@@ -452,6 +452,8 @@ async def query_stream(
     async def event_generator():
         answer_parts: list[str] = []
         steps: list[dict] = []
+        agent_messages: list = []
+        errored = False
         try:
             known_ids = await _session_pending_ids(session)
             # Rebuild the recent context from our own persisted history (the client sends only the
@@ -471,11 +473,29 @@ async def query_stream(
             # Surface any approval the agent just parked as an inline card, before closing the turn.
             for hitl_ev in await _new_hitl_events(session, known_ids):
                 yield f"data: {json.dumps(hitl_ev)}\n\n"
-            await _persist_answer(session, "".join(answer_parts), steps)
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception:
-            logger.exception("data_stream_failed", session_id=session.id)
-            yield f"data: {json.dumps({'type': 'error', 'content': 'Erro ao processar a consulta.'})}\n\n"
+            errored = True
+            # Log the real failure with enough context to diagnose (Langfuse captured an empty
+            # statusMessage on the degraded turn — this is our own record).
+            logger.exception(
+                "data_stream_failed",
+                session_id=session.id,
+                steps=len(steps),
+                answer_chars=len("".join(answer_parts)),
+                context_messages=len(agent_messages),
+            )
+        finally:
+            # Persist whatever the turn produced (partial answer + tool trail) even on error or a
+            # client disconnect, so a failed/aborted turn is no longer lost — its work and timeline
+            # survive, and the next turn's context can build on it.
+            try:
+                await _persist_answer(session, "".join(answer_parts), steps)
+            except Exception:
+                logger.exception("data_stream_persist_failed", session_id=session.id)
+        # Always emit a terminal event so the client never hangs on silence. (Skipped only when the
+        # generator was cancelled by a disconnect — GeneratorExit — where the client is already gone.)
+        terminal = {"type": "error", "content": "Erro ao processar a consulta."} if errored else {"type": "done"}
+        yield f"data: {json.dumps(terminal)}\n\n"
 
     return StreamingResponse(
         _with_heartbeat(event_generator()), media_type="text/event-stream", headers=_SSE_HEADERS
