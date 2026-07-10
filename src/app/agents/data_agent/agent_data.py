@@ -107,6 +107,19 @@ def _ledger_label(name: str, raw: Optional[str]) -> str:
     return f"{name}: {text[:70]}" if text else name
 
 
+def _fold_context_into_user(leading: list[dict], last_user: str) -> dict:
+    """Fold the volatile leading context into the new user turn (checkpointer-safe, no system msg).
+
+    With a checkpointer the input is appended to the restored thread, where a ``system`` message would
+    be non-consecutive and rejected by Anthropic — so the volatile context rides inside the user turn
+    instead. Returns a bare user message when there's no leading context.
+    """
+    if not leading:
+        return {"role": "user", "content": last_user}
+    preamble = "\n\n".join(block["content"] for block in leading)
+    return {"role": "user", "content": f"{preamble}\n\n---\n\n{last_user}"}
+
+
 def _read_ledger(steps: list) -> str:
     """A deduped 'already read/computed this conversation' index from persisted tool steps.
 
@@ -247,24 +260,28 @@ class DataAgent:
     ) -> list[dict]:
         """Build the model input, adapting to whether this session has a checkpointer.
 
-        Stateless (no checkpointer — tests/SQLite, or Postgres down): send the leading context + the
-        server-rebuilt window, exactly as before. This is the unchanged, test-covered path.
+        Stateless (no checkpointer — tests/SQLite, or Postgres down): send the leading context as
+        system messages + the server-rebuilt window, exactly as before. This is the unchanged,
+        test-covered path — the system messages sit at the very front, so they stay consecutive.
 
-        With a checkpointer: the thread already holds the prior turns (messages + tool results), so
-        re-sending the window would duplicate them. Instead send only the fresh leading context + the
-        new user message and let the graph restore the rest. A thread that is still empty — a session
-        created before the checkpointer existed — is seeded once with the full window so its earlier
-        turns aren't lost. The leading context is recomputed each turn (current ledger/prefs) and is
-        the only volatile block re-anchored after the graph's own summarization.
+        With a checkpointer, the graph *appends* the input to the restored thread. A ``system`` message
+        appended after prior turns would sit mid-conversation, which Anthropic rejects ("multiple
+        non-consecutive system messages"). So the volatile leading context is folded into the new
+        **user** message instead of prepended as system messages — every sent message is then
+        user/assistant/tool and the context still rides along each turn. The thread restores the prior
+        turns (messages + tool results); an empty thread (a session created before the checkpointer
+        existed) is seeded with its earlier turns so they aren't lost.
         """
         if self._checkpointer is None:
             return [*leading, *history] if leading else history
 
+        new_user = _fold_context_into_user(leading, last_user)
         snapshot = await self.agent.aget_state(config)
         thread_has_history = bool(snapshot.values.get("messages")) if snapshot and snapshot.values else False
         if thread_has_history:
-            return [*leading, {"role": "user", "content": last_user}]
-        return [*leading, *history] if leading else history  # seed the thread on its first turn
+            return [new_user]
+        prior = history[:-1] if history else []  # seed: earlier turns (user/assistant only), then the new turn
+        return [*prior, new_user]
 
     async def astream_query_events(
         self,

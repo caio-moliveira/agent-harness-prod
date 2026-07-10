@@ -37,22 +37,29 @@ async def _compose(checkpointer, snapshot) -> list[dict]:
     return await DataAgent._compose_payload(fake_self, {}, _LEADING, _HISTORY, _LAST_USER)
 
 
+_FOLDED = f'{_LEADING[0]["content"]}\n\n---\n\n{_LAST_USER}'
+
+
 class TestComposePayload:
-    """The payload adapts to whether the session has a checkpointer, without losing history."""
+    """The payload adapts to the checkpointer; with one, no system message is ever appended mid-thread."""
 
     async def test_stateless_sends_leading_plus_full_window(self):
-        """No checkpointer → unchanged behavior: leading + the whole rebuilt window."""
+        """No checkpointer → unchanged behavior: leading (system) + the whole rebuilt window."""
         assert await _compose(None, None) == [*_LEADING, *_HISTORY]
 
-    async def test_populated_thread_sends_only_new_turn(self):
-        """A thread with prior turns → leading + just the new user message (no re-sent history)."""
+    async def test_populated_thread_folds_context_into_the_new_user_turn(self):
+        """A thread with prior turns → a single user message carrying the folded context (no system)."""
         result = await _compose(object(), _snapshot([{"role": "user", "content": "primeira pergunta"}]))
-        assert result == [*_LEADING, {"role": "user", "content": _LAST_USER}]
+        assert result == [{"role": "user", "content": _FOLDED}]
+        assert all(m["role"] != "system" for m in result)  # nothing that could sit mid-thread
 
-    async def test_empty_thread_is_seeded_with_full_window(self):
-        """An empty thread (pre-checkpointer session) → seed once with the full window."""
-        assert await _compose(object(), _snapshot([])) == [*_LEADING, *_HISTORY]
+    async def test_empty_thread_is_seeded_with_prior_turns_then_folded_new_turn(self):
+        """An empty thread (pre-checkpointer session) → prior turns (user/assistant) + the folded new turn."""
+        result = await _compose(object(), _snapshot([]))
+        assert result == [*_HISTORY[:-1], {"role": "user", "content": _FOLDED}]
+        assert all(m["role"] != "system" for m in result)
 
     async def test_missing_snapshot_is_treated_as_empty(self):
         """A None snapshot (fresh thread) is seeded, never crashes."""
-        assert await _compose(object(), None) == [*_LEADING, *_HISTORY]
+        result = await _compose(object(), None)
+        assert result == [*_HISTORY[:-1], {"role": "user", "content": _FOLDED}]
