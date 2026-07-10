@@ -16,6 +16,10 @@ from src.app.core.common.config import settings
 
 _tavily = None
 
+# Cap queries per web_search call so one call can't fan out to many Tavily requests. Combined with
+# the researcher's small tool-call budget (open_deep_research/config.py), this bounds total searches.
+_MAX_QUERIES_PER_CALL = 2
+
 
 class SearchAPI(Enum):
     """Enumeration of available search API providers."""
@@ -32,7 +36,7 @@ def _get_tavily():
     if _tavily is None:
         from langchain_tavily import TavilySearch
 
-        kwargs = {"max_results": 5}
+        kwargs = {"max_results": 3}
         if settings.TAVILY_API_KEY:
             kwargs["tavily_api_key"] = settings.TAVILY_API_KEY
         _tavily = TavilySearch(**kwargs)
@@ -61,6 +65,9 @@ WEB_SEARCH_DESCRIPTION = (
 @tool(description=WEB_SEARCH_DESCRIPTION)
 async def web_search(queries: List[str]) -> str:
     """Run web searches (Tavily) for each query in parallel and return formatted results + sources."""
+    if len(queries) > _MAX_QUERIES_PER_CALL:
+        logging.info("web_search_queries_capped", extra={"asked": len(queries), "kept": _MAX_QUERIES_PER_CALL})
+        queries = queries[:_MAX_QUERIES_PER_CALL]
     tavily = _get_tavily()
     tasks = [tavily.ainvoke({"query": q}) for q in queries]
     try:

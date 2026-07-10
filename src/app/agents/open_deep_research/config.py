@@ -18,10 +18,14 @@ DEEP_RESEARCH_AGENT_NAME = "Deep Research"
 ALLOW_CLARIFICATION = True
 MAX_STRUCTURED_OUTPUT_RETRIES = 3
 
-# Research limits
-MAX_CONCURRENT_RESEARCH_UNITS = 5
-MAX_RESEARCHER_ITERATIONS = 3
-MAX_REACT_TOOL_CALLS = 10
+# Research limits — bounded on purpose to cap web-search cost/latency for a delegated task.
+# The hard ceiling on web searches per run is: units × iterations × react_calls × queries_per_search.
+# With 1 × 1 × 3 × 2 (queries capped in tools/search_tool.py) that is at most 6 searches — enough to
+# ground a recommendation without the fan-out blow-up (was 5 × 3 × 10). Keeping a single research unit
+# also means exactly one ResearchComplete signal (no parallel-researcher duplication).
+MAX_CONCURRENT_RESEARCH_UNITS = 1
+MAX_RESEARCHER_ITERATIONS = 1
+MAX_REACT_TOOL_CALLS = 3
 
 # Search
 SEARCH_API = SearchAPI.TAVILY

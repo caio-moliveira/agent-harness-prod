@@ -4,12 +4,10 @@ from langchain_core.messages import (
     AIMessage,
     MessageLikeRepresentation,
 )
-from langchain_core.tools import tool
 
 from src.app.agents.open_deep_research.config import (
     SEARCH_API,
 )
-from src.app.agents.open_deep_research.state import ResearchComplete
 from src.app.agents.tools.search_tool import get_search_tool
 from src.app.agents.tools.think_tool import think_tool
 
@@ -20,7 +18,10 @@ def get_all_tools():
     Returns:
         List of all configured and available tools for research operations
     """
-    tools = [tool(ResearchComplete), think_tool]
+    # ``ResearchComplete`` is bound to the SUPERVISOR (its single completion signal); a researcher
+    # already terminates by stopping tool calls or hitting MAX_REACT_TOOL_CALLS, so binding it here
+    # only duplicated the signal (one per parallel researcher) and wasted a tool execution.
+    tools = [think_tool]
     search_tools = get_search_tool(SEARCH_API)
     tools.extend(search_tools)
     return tools
