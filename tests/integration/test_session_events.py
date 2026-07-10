@@ -79,6 +79,8 @@ class TestClassifyToolEvent:
         assert classify_tool_event("read_file") == "document_read"
         assert classify_tool_event("grep") == "document_read"
         assert classify_tool_event("glob") == "document_read"
+        assert classify_tool_event("write_file") == "file_written"
+        assert classify_tool_event("edit_file") == "file_written"
 
     def test_unauditable_tool_returns_none(self):
         from src.app.core.session.event_recorder import classify_tool_event

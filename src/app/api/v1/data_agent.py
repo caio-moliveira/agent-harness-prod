@@ -406,6 +406,31 @@ async def _new_hitl_events(session: Session, known_ids: set[int]) -> list[dict]:
     return [_hitl_event(a) for a in pending if a.session_id == session.id and a.id not in known_ids]
 
 
+# SSE headers: keep the stream unbuffered end-to-end. `X-Accel-Buffering: no` stops nginx from
+# holding the whole response (which would make the UI show nothing, then everything at once);
+# `Cache-Control: no-cache` stops intermediary caching.
+_SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"}
+_HEARTBEAT_SECONDS = 15.0
+
+
+async def _with_heartbeat(frames, interval: float = _HEARTBEAT_SECONDS):
+    """Relay SSE frames, injecting a comment ping during silent gaps so the socket stays warm.
+
+    A long silent tool call (no intermediate events) could otherwise let a proxy/OS idle-timeout drop
+    the connection — which the client can't recover. The ``: ping`` comment is ignored by SSE parsers.
+    """
+    it = frames.__aiter__()
+    while True:
+        try:
+            frame = await asyncio.wait_for(it.__anext__(), timeout=interval)
+        except asyncio.TimeoutError:
+            yield ": ping\n\n"
+            continue
+        except StopAsyncIteration:
+            return
+        yield frame
+
+
 @router.post("/{session_id}/query/stream")
 @limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
 async def query_stream(
@@ -452,7 +477,9 @@ async def query_stream(
             logger.exception("data_stream_failed", session_id=session.id)
             yield f"data: {json.dumps({'type': 'error', 'content': 'Erro ao processar a consulta.'})}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return StreamingResponse(
+        _with_heartbeat(event_generator()), media_type="text/event-stream", headers=_SSE_HEADERS
+    )
 
 
 @router.get("/{session_id}/messages", response_model=ChatHistoryResponse)

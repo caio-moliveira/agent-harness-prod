@@ -19,6 +19,8 @@ _TOOL_EVENT_MAP = {
     "read_file": SessionEventType.DOCUMENT_READ,
     "grep": SessionEventType.DOCUMENT_READ,
     "glob": SessionEventType.DOCUMENT_READ,
+    "write_file": SessionEventType.FILE_WRITTEN,
+    "edit_file": SessionEventType.FILE_WRITTEN,
 }
 
 # task() subagent_type -> (event type, scope). Recorded at the delegation boundary (the parent's
