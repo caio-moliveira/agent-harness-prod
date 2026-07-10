@@ -6,6 +6,7 @@ resources in the registry, rather than as a singleton bound to a fixed database.
 
 import json
 import os
+import re
 from typing import Any, AsyncGenerator, Optional
 
 from deepagents import create_deep_agent
@@ -37,11 +38,59 @@ from src.app.core.middleware import (
 from src.app.agents.data_agent.document_tools import make_document_tools
 from src.app.core.session.event_recorder import bg_record_delegation_event, bg_record_tool_event
 from src.app.core.session.event_repository import SessionEventRepository
+from src.app.core.session.message_repository import ChatMessageStepRepository
 
 # One stateless repository instance for recording episodic events off the streaming path.
 _event_repo = SessionEventRepository()
 # Experience memory (#23), read into the session-start briefing as the "work already done" index.
 _memory_repo = AgentMemoryRepository()
+# Persisted tool steps, read into the intra-session "already read" ledger (P1 — stop the re-read spiral).
+_step_repo = ChatMessageStepRepository()
+
+# Read/compute tools whose past calls form the intra-session read-set: if the agent already ran one
+# this conversation, the result is in the history — re-running it just re-reads and bloats context.
+_READ_LEDGER_TOOLS = frozenset(
+    {
+        "read_file",
+        "read_document",
+        "read_page_image",
+        "get_node_content",
+        "get_document_structure",
+        "search_documents",
+        "consultar_dados",
+        "listar_dados",
+    }
+)
+# Cap the ledger so a very long session can't itself bloat the prefix it exists to shrink.
+_LEDGER_MAX = 40
+# Pull the meaningful target (file path / doc id) out of a step's serialized tool input.
+_LEDGER_TARGET = re.compile(r"(?:file_path|doc_id|document_id|path|node_id)['\"]?\s*[:=]\s*['\"]([^'\"]+)['\"]")
+
+
+def _ledger_label(name: str, raw: Optional[str]) -> str:
+    """A compact one-line label for a read/compute step — its target file/doc, or an input preview."""
+    text = (raw or "").replace("\n", " ").strip()
+    match = _LEDGER_TARGET.search(text)
+    if match:
+        return f"{name}: {match.group(1)}"
+    return f"{name}: {text[:70]}" if text else name
+
+
+def _read_ledger(steps: list) -> str:
+    """A deduped 'already read/computed this conversation' index from persisted tool steps.
+
+    Only read-ish tools count (see ``_READ_LEDGER_TOOLS``) — writes/artifacts are not re-read.
+    Deduped by label and capped at ``_LEDGER_MAX`` so the index stays a few hundred tokens even
+    across a long session, keeping the agent aware of its read-set without re-sending file bodies.
+    """
+    seen: dict[str, None] = {}
+    for step in steps:
+        if step.name not in _READ_LEDGER_TOOLS:
+            continue
+        seen.setdefault(_ledger_label(step.name, step.input), None)
+        if len(seen) >= _LEDGER_MAX:
+            break
+    return "\n".join(f"- {label}" for label in seen)
 
 # Bundled skills (SKILL.md files) shipped with the agent, always available via progressive
 # disclosure regardless of whether the session has a granted folder. Mounted read-only at
@@ -209,6 +258,22 @@ class DataAgent:
                         ),
                     }
                 )
+        # Intra-session read-set (P1): what THIS conversation already read/computed. The results are in
+        # the history above, so re-reading the same file or re-running the same query only re-inflates the
+        # context — the failure mode in the degraded traces. Kept compact (labels only, capped).
+        past_steps = await _step_repo.get_for_session(session_id)
+        ledger = _read_ledger(past_steps)
+        if ledger:
+            leading.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Você JÁ leu/consultou o seguinte NESTA conversa (os resultados estão no histórico "
+                        "acima) — NÃO releia o mesmo arquivo nem repita a mesma consulta; reuse o que já "
+                        "apurou ou cite direto. Só releia se precisar de algo que ainda não viu:\n" + ledger
+                    ),
+                }
+            )
         payload_messages = [*leading, *history] if leading else history
 
         answer = ""
