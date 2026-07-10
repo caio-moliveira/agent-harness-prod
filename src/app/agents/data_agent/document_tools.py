@@ -20,7 +20,6 @@ import json
 import os
 import re
 import tempfile
-from itertools import groupby
 from typing import Annotated, List, Optional
 
 import pymupdf
@@ -30,7 +29,6 @@ from langchain_core.tools import BaseTool, InjectedToolCallId, tool
 
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
-from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
 from src.app.core.ingestion.normalize import normalize_text
 from src.app.core.ingestion.source_model import IngestedFileStatus
 from src.app.core.ingestion.source_repository import IngestedFileRepository
@@ -80,19 +78,6 @@ def _detect_folio(text: str) -> Optional[int]:
         if m:
             return int(m.group(1))
     return None
-
-
-def _reassemble_pages(chunks) -> List[dict]:
-    """Rebuild ordered pages from a document's chunks (split-page pieces re-joined by section)."""
-    pages: List[dict] = []
-    for c in chunks:
-        needs_ocr = bool((c.meta or {}).get("needs_ocr", False))
-        if pages and pages[-1]["label"] == c.section:
-            if c.content:
-                pages[-1]["text"] = (pages[-1]["text"] + "\n" + c.content).strip()
-        else:
-            pages.append({"label": c.section, "text": c.content or "", "needs_ocr": needs_ocr})
-    return pages
 
 
 def _page_header(pdf_index: int, total: int, text: str, needs_ocr: bool) -> str:
@@ -194,7 +179,6 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
     if user_id is None:
         return []
     manifest = IngestedFileRepository()
-    chunks_repo = DocumentChunkRepository()
 
     async def _resolve_doc(ref: str):
         """Resolve a model-supplied document reference tolerantly.
@@ -285,8 +269,10 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
         if record is None:
             return err
         doc_id = record.doc_id  # canonicalize so page-tracking + the "continue" hint use the real id
-        chunks = await chunks_repo.get_chunks_by_source(user_id, agent_id, record.source_path)
-        pages = _reassemble_pages(chunks)
+        sections = _load_sections(record.content)
+        if sections is None:
+            return f"'{record.title}' não tem conteúdo indexado. Peça para reindexar a pasta em Fontes."
+        pages = _section_pages(sections, os.path.splitext(record.source_path)[1].lower())
         total = len(pages)
         if total == 0:
             return f"'{record.title}' não tem conteúdo indexado (vazio, ou escaneado sem OCR)."
@@ -345,18 +331,17 @@ def make_document_tools(user_id: Optional[int], agent_id: Optional[int], session
         if not norm_query:
             return "Consulta vazia. Informe um termo exato (número, artigo, data, valor ou nome próprio)."
         docs = await manifest.list_all(user_id, agent_id)
-        if not docs:
+        active = [d for d in docs if d.status != IngestedFileStatus.DELETED]
+        if not active:
             return "Nenhum documento indexado para este agente ainda."
-        by_source = {d.source_path: d for d in docs}
-        all_chunks = await chunks_repo.get_chunks(user_id, agent_id)  # ordered by (source_path, chunk_index)
 
         hits: List[tuple] = []
         truncated = False
-        for source_path, group in groupby(all_chunks, key=lambda c: c.source_path):
-            doc = by_source.get(source_path)
-            if doc is None:
+        for doc in active:
+            sections = _load_sections(doc.content)
+            if sections is None:
                 continue
-            for idx, page in enumerate(_reassemble_pages(list(group)), start=1):
+            for idx, page in enumerate(_section_pages(sections, os.path.splitext(doc.source_path)[1].lower()), start=1):
                 pos = normalize_text(page["text"]).find(norm_query)
                 if pos == -1:
                     continue

@@ -11,8 +11,6 @@ from httpx import AsyncClient
 
 from src.app.agents.data_agent.document_tools import make_document_tools
 from src.app.core.common.config import settings
-from src.app.core.ingestion.chunk_model import DocumentChunk
-from src.app.core.ingestion.chunk_repository import DocumentChunkRepository
 from src.app.core.ingestion.normalize import normalize_text
 from src.app.core.ingestion.source_model import derive_doc_id
 from src.app.core.ingestion.source_repository import IngestedFileRepository
@@ -24,24 +22,16 @@ USER, AGENT = 1, 7
 
 
 async def _seed_document(source_path: str, content_hash: str, pages: list[str]) -> str:
-    """Insert a manifest row + one chunk per page; return the derived doc_id."""
-    await IngestedFileRepository().upsert(
-        USER, AGENT, source_path, content_hash, len(pages), page_count=len(pages), text_layer="native"
+    """Insert a manifest row with the located text (content) for the given pages; return the doc_id."""
+    import json
+
+    content = json.dumps(
+        [{"location": f"página {i}", "text": text, "needs_ocr": False} for i, text in enumerate(pages, start=1)],
+        ensure_ascii=False,
     )
-    chunks = [
-        DocumentChunk(
-            user_id=USER,
-            agent_id=AGENT,
-            source_path=source_path,
-            doc_type="pdf",
-            section=f"página {i}",
-            chunk_index=i - 1,
-            content=text,
-            meta={"needs_ocr": False},
-        )
-        for i, text in enumerate(pages, start=1)
-    ]
-    await DocumentChunkRepository().add_chunks(chunks)
+    await IngestedFileRepository().upsert(
+        USER, AGENT, source_path, content_hash, len(pages), page_count=len(pages), text_layer="native", content=content
+    )
     return derive_doc_id(content_hash)
 
 
