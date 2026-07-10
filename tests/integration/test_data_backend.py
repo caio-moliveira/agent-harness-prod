@@ -361,3 +361,22 @@ class TestGrantFolderEndpoint:
 
             gone = await client.post("/api/v1/data-agent/disconnect", headers=headers)
             assert gone.status_code == 200
+
+
+class TestFileDownloadResolution:
+    """The files/download path resolver confines to the granted folder and rejects traversal."""
+
+    def test_confines_and_rejects_traversal(self, tmp_path, monkeypatch):
+        import os
+
+        from src.app.api.v1.data_agent import _resolve_in_folder
+        from src.app.core.common.config import settings
+
+        (tmp_path / "plano.md").write_text("x", encoding="utf-8")
+        monkeypatch.setattr(settings, "SANDBOX_ALLOWED_ROOTS", [str(tmp_path)])
+
+        ok = _resolve_in_folder(str(tmp_path), "/workspace/plano.md")
+        assert ok == os.path.normpath(str(tmp_path / "plano.md"))
+
+        assert _resolve_in_folder(str(tmp_path), "../secret.txt") is None  # traversal
+        assert _resolve_in_folder(str(tmp_path), "/workspace/../../etc/passwd") is None

@@ -9,6 +9,7 @@ import AgentActivity from "./AgentActivity";
 import TodoList from "./TodoList";
 import ThinkingPanel from "./ThinkingPanel";
 import ArtifactApproval from "./ArtifactApproval";
+import DeliverableLinks from "./DeliverableLinks";
 import ConversationsSidebar from "./ConversationsSidebar";
 import ActivityTimeline from "./ActivityTimeline";
 import {
@@ -429,11 +430,16 @@ export default function ChatScreen() {
                         authorName={agentName ?? "Agente"}
                       />
                     )}
+                    {!turn.streaming && (
+                      <DeliverableLinks steps={turn.steps} sessionToken={sessionToken} sessionId={sessionId} />
+                    )}
                     {turn.approval && userToken && (
                       <div className="pl-[42px]">
                         <ArtifactApproval
                           approval={turn.approval}
                           userToken={userToken}
+                          sessionToken={sessionToken}
+                          sessionId={sessionId}
                           onDecided={(status) => setApprovalStatus(turn.approval!.id, status)}
                           onApprovedResume={() => void handleSend("Plano aprovado, pode prosseguir com a execução.")}
                         />

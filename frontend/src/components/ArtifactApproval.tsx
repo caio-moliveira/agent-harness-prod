@@ -4,33 +4,63 @@ import type { TurnApproval } from "../lib/types";
 
 /**
  * Compact, inline approval anchored under the assistant turn that requested it. Approving generates
- * the artifact server-side (which also records a short "artifact generated" note in the chat) and
- * collapses to a one-line confirmation — no big card, no download button, and it stays in place as
- * the conversation continues.
+ * the artifact server-side and collapses to a one-line confirmation that stays in place — and, for a
+ * generated artifact, offers a **Baixar** action (the "go to result"), so the deliverable is
+ * reachable right where it was produced. Plans have no download (they resume the agent instead).
  */
 export default function ArtifactApproval({
   approval,
   userToken,
+  sessionToken,
+  sessionId,
   onDecided,
   onApprovedResume,
 }: {
   approval: TurnApproval;
   userToken: string;
+  sessionToken: string | null;
+  sessionId: string | null;
   onDecided: (status: "approved" | "rejected") => void;
   /** Called after a plan is approved, so the caller can resume the agent (auto-send "proceed"). */
   onApprovedResume?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
   const isPlan = approval.action_type === "approve_plan";
   const fmt = approval.format?.toUpperCase();
   const label = `“${approval.title}”${fmt ? ` (${fmt})` : ""}`;
 
+  async function download() {
+    if (!sessionToken || !sessionId) return;
+    setDownloading(true);
+    setError(null);
+    try {
+      const { blob, filename } = await api.downloadArtifact(sessionToken, sessionId, approval.id);
+      api.saveBlob(blob, filename);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao baixar.");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   if (approval.status === "approved") {
+    if (isPlan) {
+      return <p className="mt-1 text-xs text-emerald-400">{`✅ Plano ${label} aprovado.`}</p>;
+    }
     return (
-      <p className="mt-1 text-xs text-emerald-400">
-        {isPlan ? `✅ Plano ${label} aprovado.` : `📄 Artefato ${label} gerado.`}
-      </p>
+      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-emerald-400">
+        <span>{`📄 Artefato ${label} gerado.`}</span>
+        <button
+          onClick={() => void download()}
+          disabled={downloading || !sessionToken}
+          className="rounded-md border border-emerald-700 px-2.5 py-1 font-medium text-emerald-200 hover:bg-emerald-900/40 disabled:opacity-50"
+        >
+          {downloading ? "Baixando…" : "Baixar"}
+        </button>
+        {error && <span className="text-red-300">{error}</span>}
+      </div>
     );
   }
   if (approval.status === "rejected") {

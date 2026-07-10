@@ -365,6 +365,32 @@ export async function downloadArtifact(
   return { blob: await res.blob(), filename };
 }
 
+/** Download a file the agent wrote into the granted folder (confined server-side to that folder). */
+export async function downloadWorkspaceFile(
+  sessionToken: string,
+  sessionId: string,
+  path: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(
+    `${BASE}/data-agent/${sessionId}/files/download?path=${encodeURIComponent(path)}`,
+    { headers: { Authorization: `Bearer ${sessionToken}` } },
+  );
+  await ensureOk(res);
+  return { blob: await res.blob(), filename: path.split("/").pop() || "arquivo" };
+}
+
+/** Trigger a browser "save file" for a downloaded blob. */
+export function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 /** A session's episodic audit log (persisted actions) — used to rehydrate the activity timeline. */
 export async function listSessionEvents(userToken: string, sessionId: string): Promise<SessionEvent[]> {
   const res = await fetch(`${BASE}/sessions/${sessionId}/events`, {

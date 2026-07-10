@@ -531,6 +531,52 @@ async def download_artifact(
     return FileResponse(path, media_type=media_type, filename=os.path.basename(path))
 
 
+def _resolve_in_folder(folder: str, requested: str) -> Optional[str]:
+    """Resolve a `/workspace`-relative path to a host path confined to the granted folder, or None.
+
+    Rejects traversal (``..``) and anything resolving outside the folder or the sandbox allow-list.
+    """
+    rel = requested.lstrip("/")
+    if rel.startswith("workspace/"):
+        rel = rel[len("workspace/") :]
+    folder_norm = os.path.normpath(folder)
+    target = os.path.normpath(os.path.join(folder_norm, rel))
+    try:
+        confined = os.path.commonpath([target, folder_norm]) == folder_norm
+    except ValueError:  # different drives on Windows
+        return None
+    if not confined or not is_within_allowed_roots(target, settings.SANDBOX_ALLOWED_ROOTS):
+        return None
+    return target
+
+
+@router.get("/{session_id}/files/download")
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
+async def download_file(
+    request: Request,
+    session_id: str,
+    path: str,
+    session: Session = Depends(get_current_session),
+) -> FileResponse:
+    """Download a file from this session's granted folder (e.g. a deliverable the agent wrote).
+
+    Owner-scoped and confined to the granted folder + the sandbox allow-list — the ``path`` is a
+    ``/workspace``-relative path; traversal is rejected.
+    """
+    _require_session(session_id, session)
+    res = await registry.get(session.id)
+    folder = res.folder if res else None
+    if not folder:
+        raise HTTPException(status_code=404, detail="Nenhuma pasta conectada nesta sessão.")
+    target = _resolve_in_folder(folder, path)
+    if target is None:
+        logger.warning("file_download_denied", session_id=session.id, requested=path)
+        raise HTTPException(status_code=403, detail="Caminho fora da pasta concedida.")
+    if not await asyncio.to_thread(os.path.isfile, target):
+        raise HTTPException(status_code=404, detail="Arquivo não encontrado.")
+    return FileResponse(target, filename=os.path.basename(target))
+
+
 @router.get("/status", response_model=SourceStatusResponse)
 @limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
 async def source_status(
