@@ -358,6 +358,12 @@ class DataAgent:
         payload_messages = await self._compose_payload(config, leading, history, last_user)
 
         answer = ""
+        # Depth of subagent delegation. A task() call runs a subagent whose own model tokens and
+        # internal tool calls are its private work — streaming them would dump the subagent's raw
+        # report into the parent's answer (mixing languages, ballooning the reply) and clutter the
+        # timeline with its inner tools. While inside a delegation (depth > 0) we surface nothing but
+        # the delegation's own boundary: its "Pesquisando na web…" card and, on return, its result.
+        delegation_depth = 0
         async for event in self.agent.astream_events({"messages": payload_messages}, config=config, version="v2"):
             kind = event.get("event")
             if kind == "on_tool_start":
@@ -368,61 +374,75 @@ class DataAgent:
                 # banco…" / "Pesquisando na web…") so the timeline reads clearly and never looks
                 # frozen during a long delegated run. subagent_type is None for non-task tools.
                 display_name, subagent_type = _display_for_tool(tool_name, raw_input)
-                # A followable, one-line trace of what the agent is doing this turn.
-                logger.info(
-                    "agent_tool_start",
-                    tool=tool_name,
-                    subagent=subagent_type,
-                    session_id=session_id,
-                    agent_id=self.agent_id,
-                    tool_input=tool_input,
-                )
-                # Audit trail (#10): record a delegation at its boundary (robust — does not rely on
-                # the subagent's nested events propagating); otherwise record document reads / SQL.
-                if subagent_type is not None:
-                    bg_record_delegation_event(
-                        _event_repo,
-                        user_id=user_id,
-                        agent_id=self.agent_id,
+                # Only surface + audit top-level tools; a tool that fires while inside a delegation is
+                # the subagent's own internal step and stays hidden from the parent timeline.
+                if delegation_depth == 0:
+                    # A followable, one-line trace of what the agent is doing this turn.
+                    logger.info(
+                        "agent_tool_start",
+                        tool=tool_name,
+                        subagent=subagent_type,
                         session_id=session_id,
-                        subagent_type=subagent_type,
-                        task=tool_input,
-                    )
-                else:
-                    bg_record_tool_event(
-                        _event_repo,
-                        user_id=user_id,
                         agent_id=self.agent_id,
-                        session_id=session_id,
-                        tool_name=tool_name,
                         tool_input=tool_input,
-                        scope="database" if tool_name == "run_sql" else "folder",
                     )
-                yield {
-                    "type": "tool_start",
-                    "name": display_name,
-                    "input": tool_input,
-                }
-                # Surface the plan as a live checklist (not just a raw JSON step) when the agent
-                # calls write_todos.
-                if tool_name == "write_todos":
-                    todos = _parse_todos(event.get("data", {}).get("input"))
-                    if todos:
-                        yield {"type": "todos", "items": todos}
+                    # Audit trail (#10): record a delegation at its boundary (robust — does not rely on
+                    # the subagent's nested events propagating); otherwise record document reads / SQL.
+                    if subagent_type is not None:
+                        bg_record_delegation_event(
+                            _event_repo,
+                            user_id=user_id,
+                            agent_id=self.agent_id,
+                            session_id=session_id,
+                            subagent_type=subagent_type,
+                            task=tool_input,
+                        )
+                    else:
+                        bg_record_tool_event(
+                            _event_repo,
+                            user_id=user_id,
+                            agent_id=self.agent_id,
+                            session_id=session_id,
+                            tool_name=tool_name,
+                            tool_input=tool_input,
+                            scope="database" if tool_name == "run_sql" else "folder",
+                        )
+                    yield {
+                        "type": "tool_start",
+                        "name": display_name,
+                        "input": tool_input,
+                    }
+                    # Surface the plan as a live checklist (not just a raw JSON step) when the agent
+                    # calls write_todos.
+                    if tool_name == "write_todos":
+                        todos = _parse_todos(raw_input)
+                        if todos:
+                            yield {"type": "todos", "items": todos}
+                if tool_name == "task":
+                    delegation_depth += 1
             elif kind == "on_tool_end":
-                output = event.get("data", {}).get("output")
-                if hasattr(output, "content"):
-                    output = output.content
-                short_output = _short(output)
-                end_display_name, _ = _display_for_tool(event.get("name", ""), event.get("data", {}).get("input"))
-                logger.info(
-                    "agent_tool_end",
-                    tool=event.get("name", ""),
-                    session_id=session_id,
-                    output=short_output,
-                )
-                yield {"type": "tool_end", "name": end_display_name, "output": short_output}
+                name = event.get("name", "")
+                if name == "task" and delegation_depth > 0:
+                    delegation_depth -= 1
+                # Surface the end only for a top-level tool (or the just-closed top-level delegation).
+                if delegation_depth == 0:
+                    output = event.get("data", {}).get("output")
+                    if hasattr(output, "content"):
+                        output = output.content
+                    short_output = _short(output)
+                    end_display_name, _ = _display_for_tool(name, event.get("data", {}).get("input"))
+                    logger.info(
+                        "agent_tool_end",
+                        tool=name,
+                        session_id=session_id,
+                        output=short_output,
+                    )
+                    yield {"type": "tool_end", "name": end_display_name, "output": short_output}
             elif kind == "on_chat_model_stream":
+                # A subagent's tokens are its private reasoning/report — never stream them as the
+                # parent's answer; the parent gets the subagent's distilled result via the tool output.
+                if delegation_depth > 0:
+                    continue
                 chunk = event.get("data", {}).get("chunk")
                 content = getattr(chunk, "content", None) if chunk is not None else None
                 # Anthropic streams text deltas as a plain string and reasoning as a list of
