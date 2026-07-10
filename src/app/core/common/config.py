@@ -233,8 +233,6 @@ class Settings:
 
         # Rate limit endpoints defaults
         default_endpoints = {
-            "chat": ["30 per minute"],
-            "chat_stream": ["20 per minute"],
             "deep_research": ["10 per minute"],
             "deep_research_stream": ["10 per minute"],
             "text_to_sql": ["15 per minute"],
@@ -245,7 +243,6 @@ class Settings:
             "session_events": ["60 per minute"],
             "success_metrics": ["60 per minute"],
             "hitl": ["60 per minute"],
-            "messages": ["50 per minute"],
             "session_delete": ["30 per minute"],
             "register": ["10 per hour"],
             "login": ["20 per minute"],

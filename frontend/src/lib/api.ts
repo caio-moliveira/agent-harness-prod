@@ -12,7 +12,6 @@ import type {
   SessionEvent,
   SessionResponse,
   SourceStatus,
-  StreamChunk,
   StreamEvent,
   TokenResponse,
   UserResponse,
@@ -304,22 +303,6 @@ export async function deleteSession(sessionId: string, sessionToken: string): Pr
   await ensureOk(res);
 }
 
-export async function getMessages(sessionToken: string): Promise<Message[]> {
-  const res = await fetch(`${BASE}/chatbot/messages`, {
-    headers: { Authorization: `Bearer ${sessionToken}` },
-  });
-  const data: ChatResponse = await (await ensureOk(res)).json();
-  return data.messages ?? [];
-}
-
-export async function clearMessages(sessionToken: string): Promise<void> {
-  const res = await fetch(`${BASE}/chatbot/messages`, {
-    method: "DELETE",
-    headers: { Authorization: `Bearer ${sessionToken}` },
-  });
-  await ensureOk(res);
-}
-
 // --- Data Agent: connect a database / grant a folder / query the sources ---
 
 export async function connectDb(sessionToken: string, body: ConnectDbRequest): Promise<ConnectDbResponse> {
@@ -466,50 +449,3 @@ export async function* streamDataQuery(
   }
 }
 
-/**
- * Stream an assistant reply token by token from the SSE endpoint.
- * Only the NEW user message is sent — the server keeps prior turns via the
- * LangGraph checkpointer keyed by the session.
- */
-export async function* streamChat(
-  sessionToken: string,
-  newMessages: Message[],
-): AsyncGenerator<string, void, unknown> {
-  const res = await fetch(`${BASE}/chatbot/chat/stream`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${sessionToken}`,
-    },
-    body: JSON.stringify({ messages: newMessages }),
-  });
-  await ensureOk(res);
-
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error("Streaming não suportado pelo navegador");
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    const events = buffer.split("\n\n");
-    buffer = events.pop() ?? "";
-    for (const event of events) {
-      const line = event.trim();
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (!payload) continue;
-      let chunk: StreamChunk;
-      try {
-        chunk = JSON.parse(payload);
-      } catch {
-        continue;
-      }
-      if (chunk.content) yield chunk.content;
-      if (chunk.done) return;
-    }
-  }
-}

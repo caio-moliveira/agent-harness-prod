@@ -75,27 +75,6 @@ TEST_EMAIL = "testuser@example.com"
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_chatbot_agent():
-    agent = AsyncMock()
-    agent.name = "Agent Example"
-    agent.agent_invoke = AsyncMock(
-        return_value=[Message(role="assistant", content="Hello! How can I help you?")]
-    )
-
-    async def _fake_stream(*_args, **_kwargs):
-        for chunk in ["Hello", " from", " stream"]:
-            yield chunk
-
-    agent.agent_invoke_stream = _fake_stream
-    agent.get_chat_history = AsyncMock(
-        return_value=[
-            Message(role="user", content="Hi"),
-            Message(role="assistant", content="Hello!"),
-        ]
-    )
-    return agent
-
-
 def _make_mock_deep_research_agent():
     agent = AsyncMock()
     agent.name = "Deep Research"
@@ -157,11 +136,6 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
         patch("src.app.api.v1.auth.user_repository", test_user_repo),
         patch("src.app.api.v1.auth.session_repository", test_session_repo),
         patch(
-            "src.app.api.v1.chatbot.get_agent_example",
-            new_callable=AsyncMock,
-            return_value=_make_mock_chatbot_agent(),
-        ),
-        patch(
             "src.app.api.v1.deep_research.get_deep_research_agent",
             new_callable=AsyncMock,
             return_value=_make_mock_deep_research_agent(),
@@ -171,7 +145,6 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
             new_callable=AsyncMock,
             return_value=_make_mock_text_sql_agent(),
         ),
-        patch("src.app.api.v1.chatbot.clear_checkpoints", new_callable=AsyncMock),
     ):
         transport = ASGITransport(app=_app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as ac:

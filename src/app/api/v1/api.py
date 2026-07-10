@@ -18,7 +18,6 @@ from src.app.api.security.limiter import (
 )
 from src.app.api.v1.agents import router as agents_router
 from src.app.api.v1.auth import router as auth_router
-from src.app.api.v1.chatbot import router as chatbot_router
 from src.app.api.v1.data_agent import router as data_agent_router
 from src.app.api.v1.deep_research import router as deep_research_router
 from src.app.api.v1.hitl import router as hitl_router
@@ -39,7 +38,6 @@ api_router.include_router(sessions_router, prefix="/sessions", tags=["sessions"]
 api_router.include_router(hitl_router, prefix="/hitl", tags=["hitl"])
 api_router.include_router(metrics_router, prefix="/metrics", tags=["metrics"])
 api_router.include_router(skills_router, prefix="/skills", tags=["skills"])
-api_router.include_router(chatbot_router, prefix="/chatbot", tags=["chatbot"])
 api_router.include_router(deep_research_router, prefix="/deep-research", tags=["deep-research"])
 api_router.include_router(text_to_sql_router, prefix="/text-to-sql", tags=["text-to-sql"])
 api_router.include_router(data_agent_router, prefix="/data-agent", tags=["data-agent"])
