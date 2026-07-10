@@ -234,8 +234,8 @@ Everything the Data Agent leans on is reusable for any agent you build:
 - **Evaluation** — metric-based scoring of outputs from Langfuse traces (relevancy, helpfulness,
   conciseness, hallucination, toxicity), defined as markdown prompt files.
 
-**Reference agents** (for learning the harness): `chatbot` (simplest), `text_to_sql` (skills +
-tools), `open_deep_research` (multi-subgraph). The **`data_agent`** is the flagship.
+**Reference agents** (for learning the harness): `text_to_sql` (skills + tools), `open_deep_research`
+(multi-subgraph). The **`data_agent`** is the flagship (and what the UI talks to).
 
 ---
 
@@ -248,7 +248,7 @@ src/
 │   ├── init.py                # repositories / services bootstrap
 │   ├── agents/
 │   │   ├── data_agent/        # ← the flagship: sources, tools, artifacts
-│   │   ├── chatbot/ · text_to_sql/ · open_deep_research/   # reference agents
+│   │   ├── text_to_sql/ · open_deep_research/   # reference agents
 │   │   └── tools/             # shared tools
 │   ├── api/v1/                # routes: data_agent, hitl, sessions, agents, skills, auth…
 │   └── core/
@@ -353,8 +353,8 @@ The harness is not Data-Agent-specific. A new agent is a directory under `src/ap
 with `__init__.py` (a `load_system_prompt()` helper), `agent_<name>.py` (compiles a LangGraph
 graph), `system.md` (prompt; supports `{long_term_memory}` and `{current_date_and_time}`), and an
 optional `tools/`. Add a DTO + route under `src/app/api/v1/`, register it in `api.py`, and add a
-rate-limit entry in `config.py`. Use `src/app/agents/chatbot/` as the canonical reference, or the
-`/new-agent` scaffold.
+rate-limit entry in `config.py`. Use `src/app/agents/text_to_sql/` as a simple reference (or
+`data_agent/` for the full deep-agent pattern), or the `/new-agent` scaffold.
 
 Non-negotiable conventions (enforced): every route is rate-limited, every LLM call is Langfuse-traced,
 all DB/IO is async, logging is structured `structlog` (no f-strings), retries use `tenacity`, and
