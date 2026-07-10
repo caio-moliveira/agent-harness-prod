@@ -17,6 +17,11 @@ from src.app.core.common.logging import logger
 _connection_pool: Optional[AsyncConnectionPool] = None
 
 async def get_checkpointer():
+    """Return an ``AsyncPostgresSaver`` bound to the connection pool, or None when unavailable.
+
+    Postgres-only: returns None if the pool can't be reached in production, and raises otherwise so
+    the caller can decide how to degrade (see ``get_data_agent_checkpointer``).
+    """
     # Get connection pool (may be None in production if DB unavailable)
     connection_pool = await get_connection_pool()
     if connection_pool:
@@ -48,11 +53,11 @@ async def clear_checkpoints(session_id: str) -> None:
             for table in settings.CHECKPOINT_TABLES:
                 try:
                     await conn.execute(f"DELETE FROM {table} WHERE thread_id = %s", (session_id,))
-                    logger.info(f"Cleared {table} for session {session_id}")
-                except Exception as e:
-                    logger.error(f"Error clearing {table}", error=str(e))
+                    logger.info("checkpoint_table_cleared", table=table, session_id=session_id)
+                except Exception:
+                    logger.exception("checkpoint_table_clear_failed", table=table, session_id=session_id)
                     raise
 
-    except Exception as e:
-        logger.error("Failed to clear chat history", error=str(e))
+    except Exception:
+        logger.exception("clear_checkpoints_failed", session_id=session_id)
         raise

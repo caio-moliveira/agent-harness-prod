@@ -88,7 +88,13 @@ async def get_data_agent_checkpointer() -> Optional[Any]:
     try:
         return await get_checkpointer()
     except Exception:
-        logger.warning("data_agent_checkpointer_unavailable", exc_info=True)
+        # In production a checkpointer failure is unexpected (a real schema/permissions/pool fault) —
+        # log it loudly. In dev/staging it is usually just "no Postgres running locally", so a warning
+        # is enough. Either way, degrade to the stateless path rather than fail agent construction.
+        if settings.ENVIRONMENT == Environment.PRODUCTION:
+            logger.exception("data_agent_checkpointer_unavailable")
+        else:
+            logger.warning("data_agent_checkpointer_unavailable", exc_info=True)
         return None
 
 
