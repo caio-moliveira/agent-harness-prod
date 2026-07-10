@@ -15,6 +15,7 @@ from langchain_community.utilities import SQLDatabase
 
 from src.app.agents.data_agent.artifact_tools import make_artifact_tools
 from src.app.agents.data_agent.compute_tools import make_compute_tools
+from src.app.agents.data_agent.context_middleware import ToolResultCapMiddleware
 from src.app.agents.data_agent.plan_tools import make_plan_tools
 from src.app.agents.data_agent.subagents import make_deep_research_subagent_spec, make_user_sql_subagent
 from src.app.agents.data_agent.tools import make_memory_tools
@@ -731,6 +732,9 @@ def _create_data_deep_agent(
         "system_prompt": prompt,
         "subagents": subagents,
         "middleware": [
+            # Cap a single oversized tool result to a preview before it reaches the model (the full
+            # result stays in state) — prevents a one-turn context blowup ahead of the summarizer.
+            ToolResultCapMiddleware(),
             PIIMiddleware("email"),
             ModelCallLimitMiddleware(run_limit=settings.ANTHROPIC_MODEL_CALL_LIMIT, exit_behavior="end"),
         ],
