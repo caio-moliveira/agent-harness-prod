@@ -92,7 +92,7 @@ def create_sql_deep_agent():
         ],  # Specialized workflows (query-writing, schema-exploration)
         middleware=[
             PIIMiddleware("email"),
-            ModelCallLimitMiddleware(run_limit=settings.ANTHROPIC_MODEL_CALL_LIMIT, exit_behavior="end"),
+            ModelCallLimitMiddleware(run_limit=settings.MODEL_CALL_LIMIT, exit_behavior="end"),
         ],
         tools=sql_tools,  # SQL database tools
         subagents=[],  # No subagents needed

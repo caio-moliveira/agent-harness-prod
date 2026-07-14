@@ -311,15 +311,21 @@ source of truth). Key variables:
 | Category | Variable | Default |
 |---|---|---|
 | App | `APP_ENV` | `development` |
-| LLM | `LLM_PROVIDER` · `ANTHROPIC_API_KEY` · `OPENAI_API_KEY` | `anthropic` (Claude Sonnet 5) · — · — |
-| Memory | `LONG_TERM_MEMORY_MODEL` · `LONG_TERM_MEMORY_EMBEDDER_MODEL` | `gpt-5-nano` · `text-embedding-3-small` |
+| LLM | `MODEL` (`provider:model`) · `MODEL_MAX_TOKENS` · `MODEL_CALL_LIMIT` · provider key | `anthropic:claude-sonnet-5` · `8192` · `40` |
+| Azure | `AZURE_OPENAI_ENDPOINT` · `AZURE_OPENAI_API_KEY` · `AZURE_OPENAI_API_VERSION` | — |
+| Memory | `EMBEDDINGS_MODEL` · `LONG_TERM_MEMORY_ENABLED` · `UTILITY_MODEL` | auto · `true` · reuse `MODEL` |
 | Sources | `SANDBOX_ENABLED` · `SANDBOX_ALLOWED_ROOTS` · `SESSION_SOURCE_TTL` | `true` · — · `3600` |
 | Auth | `JWT_SECRET_KEY` · `JWT_ACCESS_TOKEN_EXPIRE_DAYS` | — · `30` |
 | Database | `POSTGRES_HOST` · `POSTGRES_PORT` · `POSTGRES_DB` | `localhost` · `5432` · — |
 | Observability | `LANGFUSE_PUBLIC_KEY` · `LANGFUSE_SECRET_KEY` · `LANGFUSE_HOST` | — · — · `cloud.langfuse.com` |
 | MCP | `MCP_ENABLED` · `MCP_HOSTNAMES_CSV` | `true` · — |
 
-See `.env.example` for the complete list.
+**One knob.** Set `MODEL="provider:model"` and fill only that provider's key (Azure also needs its
+endpoint + version). LangChain's `init_chat_model` infers the provider from the prefix; startup builds
+`MODEL` once and fails fast if the key is missing. Chat, the cheap `UTILITY_MODEL`, and deep research
+all use it; long-term memory needs an embeddings provider (`EMBEDDINGS_MODEL` — OpenAI or Azure, since
+Anthropic has none), so an Anthropic-only deploy auto-disables memory with a warning. See `.env.example`
+for the complete surface.
 
 ---
 

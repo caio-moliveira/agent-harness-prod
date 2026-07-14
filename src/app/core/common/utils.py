@@ -24,7 +24,9 @@ def get_today_str() -> str:
 def get_api_key_for_model(model_name: str):
     """Get API key for a specific model from environment or config."""
     model_name = model_name.lower()
-    if model_name.startswith("openai:"):
+    if model_name.startswith("azure_openai:") or model_name.startswith("azure:"):
+        return os.getenv("AZURE_OPENAI_API_KEY")
+    elif model_name.startswith("openai:"):
         return os.getenv("OPENAI_API_KEY")
     elif model_name.startswith("anthropic:"):
         return os.getenv("ANTHROPIC_API_KEY")

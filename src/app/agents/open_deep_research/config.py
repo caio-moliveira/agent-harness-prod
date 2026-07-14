@@ -7,6 +7,7 @@ using a supervisor-researcher architecture with LangGraph subgraphs.
 from langchain.chat_models import init_chat_model
 
 from src.app.agents.tools.search_tool import SearchAPI
+from src.app.core.common.config import settings
 from src.app.core.common.utils import get_api_key_for_model
 
 # ──────────────────────────────────────
@@ -30,38 +31,38 @@ MAX_REACT_TOOL_CALLS = 3
 # Search
 SEARCH_API = SearchAPI.TAVILY
 
-# Models
-RESEARCH_MODEL = "openai:gpt-4.1"
+# Models — the single configured chat model (``settings.MODEL``, a "provider:model" string consumed by
+# init_chat_model). For Azure the base id is the deployment name and endpoint/version are threaded
+# through the config dicts below (env-var names differ from what init_chat_model auto-reads).
+def _model_config(model: str, max_tokens: int) -> dict:
+    """Build the ``.with_config`` payload, adding Azure endpoint/version when the model is on Azure."""
+    config: dict = {"model": model, "max_tokens": max_tokens, "api_key": get_api_key_for_model(model)}
+    if model.startswith(("azure_openai:", "azure:")):
+        config["azure_endpoint"] = settings.AZURE_OPENAI_ENDPOINT
+        config["api_version"] = settings.AZURE_OPENAI_API_VERSION
+    return config
+
+
+RESEARCH_MODEL = settings.MODEL
 RESEARCH_MODEL_MAX_TOKENS = 10000
 
-COMPRESSION_MODEL = "openai:gpt-4.1"
+COMPRESSION_MODEL = settings.MODEL
 COMPRESSION_MODEL_MAX_TOKENS = 8192
 
-FINAL_REPORT_MODEL = "openai:gpt-4.1"
+FINAL_REPORT_MODEL = settings.MODEL
 FINAL_REPORT_MODEL_MAX_TOKENS = 10000
 
 
 MAX_CONTENT_LENGTH = 50000
 
-# Shared configurable model used across all subgraphs
+# Shared configurable model used across all subgraphs. Azure needs endpoint/version to be
+# configurable too (init_chat_model's auto env-read uses different var names than our settings).
 configurable_model = init_chat_model(
-    configurable_fields=("model", "max_tokens", "api_key"),
+    configurable_fields=("model", "max_tokens", "api_key", "azure_endpoint", "api_version"),
 )
 
-writer_model_config = {
-    "model": FINAL_REPORT_MODEL,
-    "max_tokens": FINAL_REPORT_MODEL_MAX_TOKENS,
-    "api_key": get_api_key_for_model(FINAL_REPORT_MODEL),
-}
+writer_model_config = _model_config(FINAL_REPORT_MODEL, FINAL_REPORT_MODEL_MAX_TOKENS)
 
-research_model_config = {
-    "model": RESEARCH_MODEL,
-    "max_tokens": RESEARCH_MODEL_MAX_TOKENS,
-    "api_key": get_api_key_for_model(RESEARCH_MODEL),
-}
+research_model_config = _model_config(RESEARCH_MODEL, RESEARCH_MODEL_MAX_TOKENS)
 
-compress_model_config = {
-    "model": COMPRESSION_MODEL,
-    "max_tokens": COMPRESSION_MODEL_MAX_TOKENS,
-    "api_key": get_api_key_for_model(COMPRESSION_MODEL),
-}
+compress_model_config = _model_config(COMPRESSION_MODEL, COMPRESSION_MODEL_MAX_TOKENS)

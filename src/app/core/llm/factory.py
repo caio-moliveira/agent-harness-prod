@@ -1,116 +1,95 @@
-"""Chat-model factory: one place that builds the agents' LLMs from configuration.
+"""Chat-model factory: one thin place that builds the agents' LLMs from a ``provider:model`` string.
 
-The provider is chosen by ``settings.LLM_PROVIDER``. Anthropic (Claude Sonnet 5) is the default so
-prompt caching is available; ``openai`` keeps the previous behavior. This module also owns the
-provider-specific quirks so the agents never have to know them:
+Everything routes through LangChain's :func:`init_chat_model`, which infers the provider from the
+``MODEL`` prefix (``anthropic:``/``openai:``/``azure_openai:``) and reads the provider's API key from
+the environment. The factory only owns the few cross-provider quirks so the agents never have to:
 
-- Sonnet 5 uses **adaptive thinking** and rejects ``temperature`` / ``top_p`` / ``budget_tokens``
-  (they 400). The factory never forwards sampling params to Anthropic.
-- Prompt caching is a **prefix match**: stable content must precede volatile content, with a
-  ``cache_control`` breakpoint on the last stable block. Deep agents get this via
-  :func:`caching_middleware`; a raw ``create_agent`` graph builds a cached system block via
-  :func:`build_system_message`.
+- **Anthropic** requires an explicit ``max_tokens`` (and rejects ``temperature`` — Sonnet 400s on it),
+  so the factory always forwards ``MODEL_MAX_TOKENS`` and never sends ``temperature`` to Anthropic.
+- **Azure** needs ``azure_endpoint`` + ``api_version`` in addition to the key (our env-var names differ
+  from what ``init_chat_model`` auto-reads), so the factory threads them from ``AZURE_OPENAI_*``.
 
-Long-term memory (mem0) and the evals framework keep their own OpenAI models — this factory only
-builds the agents' chat models.
+Prompt caching for Anthropic is bundled automatically by ``create_deep_agent``
+(``AnthropicPromptCachingMiddleware``), so there is no caching helper here. Long-term memory (mem0)
+and the evals framework build their own models — this factory only builds the agents' chat models.
 """
 
-from typing import Optional
-
-from langchain.agents.middleware import AgentMiddleware
-from langchain_anthropic import ChatAnthropic
-from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
+from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import SystemMessage
-from langchain_openai import ChatOpenAI
 
 from src.app.core.common.config import settings
-from src.app.core.common.logging import logger
 
-_ANTHROPIC = "anthropic"
+_ANTHROPIC_PREFIX = "anthropic"
+_AZURE_PREFIXES = ("azure_openai", "azure")
+
+# Provider prefix (the part before ":" in MODEL) → the settings attr holding its API key. The single
+# source of truth for "which key does this model need", used by both the builders and startup validation.
+_PROVIDER_KEY_ATTR = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "azure_openai": "AZURE_OPENAI_API_KEY",
+    "azure": "AZURE_OPENAI_API_KEY",
+}
 
 
-def _is_anthropic() -> bool:
-    """Return True when the configured provider is Anthropic."""
-    return settings.LLM_PROVIDER == _ANTHROPIC
+class LLMConfigError(RuntimeError):
+    """Raised when ``MODEL`` is unbuildable — unknown provider or a missing provider API key."""
 
 
-def active_model_name() -> str:
-    """Return the model id the factory would build — for metrics, labels and traces."""
-    return settings.ANTHROPIC_MODEL if _is_anthropic() else settings.DEFAULT_LLM_MODEL
+def provider_of(spec: str) -> str:
+    """The provider prefix of a ``provider:model`` spec (``""`` when there is no prefix)."""
+    return spec.split(":", 1)[0].strip().lower() if ":" in spec else ""
+
+
+def api_key_for(spec: str) -> str:
+    """The configured API key for a spec's provider, read from ``settings`` (``""`` when unset)."""
+    attr = _PROVIDER_KEY_ATTR.get(provider_of(spec))
+    return getattr(settings, attr, "") if attr else ""
+
+
+def _build_kwargs(spec: str, max_tokens: int | None, temperature: float | None) -> dict:
+    """Build the ``init_chat_model`` kwargs for a ``provider:model`` spec, applying provider quirks."""
+    # Pass the key from settings; None (not "") lets init_chat_model fall back to its own env lookup.
+    kwargs: dict = {"api_key": api_key_for(spec) or None}
+    # Anthropic requires an explicit output cap (and init_chat_model would otherwise default it low,
+    # truncating deliverables). Always forward one; harmless on OpenAI/Azure.
+    kwargs["max_tokens"] = max_tokens or settings.MODEL_MAX_TOKENS
+    # Sonnet rejects non-default sampling params — only forward temperature to non-Anthropic providers.
+    if temperature is not None and not spec.startswith(_ANTHROPIC_PREFIX):
+        kwargs["temperature"] = temperature
+    # Azure needs endpoint + version; our env-var names differ from what init_chat_model auto-reads.
+    if spec.startswith(_AZURE_PREFIXES):
+        kwargs["azure_endpoint"] = settings.AZURE_OPENAI_ENDPOINT
+        kwargs["api_version"] = settings.AZURE_OPENAI_API_VERSION
+    return kwargs
 
 
 def create_chat_model(
-    model: Optional[str] = None,
-    max_tokens: Optional[int] = None,
-    temperature: Optional[float] = None,
-    thinking: Optional[str] = None,
+    model: str | None = None,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
 ) -> BaseChatModel:
-    """Build the agents' chat model for the configured provider.
+    """Build the agents' chat model from ``settings.MODEL`` (or an explicit ``provider:model`` override).
 
-    ``temperature`` is honored for OpenAI only; on Anthropic (Sonnet 5) it is dropped because the
-    model rejects non-default sampling parameters. ``max_tokens`` defaults per provider. ``thinking``
-    ("adaptive"/"disabled") overrides ``settings.ANTHROPIC_THINKING`` for this model — e.g. a
-    tool-heavy agent forces "disabled" while a light agent opts into "adaptive".
+    ``temperature`` is honored on OpenAI/Azure only (dropped on Anthropic, which rejects it);
+    ``max_tokens`` defaults to ``settings.MODEL_MAX_TOKENS``.
     """
-    if _is_anthropic():
-        if temperature is not None:
-            logger.debug("anthropic_temperature_ignored", model=model or settings.ANTHROPIC_MODEL)
-        anthropic_kwargs: dict = {
-            "model": model or settings.ANTHROPIC_MODEL,
-            "max_tokens": max_tokens or settings.ANTHROPIC_MAX_TOKENS,
-            "max_retries": settings.MAX_LLM_CALL_RETRIES,
-        }
-        # Explicitly control thinking. Adaptive uses display="summarized" so reasoning carries text
-        # (streamable to the UI, and echoable in the tool loop); the default empty-text "omitted"
-        # display breaks the loop with a 400. "disabled" turns thinking off entirely.
-        mode = (thinking or settings.ANTHROPIC_THINKING).lower()
-        if mode == "adaptive":
-            anthropic_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
-        else:
-            anthropic_kwargs["thinking"] = {"type": "disabled"}
-        # Only pass api_key when configured; otherwise ChatAnthropic reads ANTHROPIC_API_KEY from the
-        # environment (passing None fails validation).
-        if settings.ANTHROPIC_API_KEY:
-            anthropic_kwargs["api_key"] = settings.ANTHROPIC_API_KEY
-        return ChatAnthropic(**anthropic_kwargs)
-
-    kwargs: dict = {"model": model or settings.DEFAULT_LLM_MODEL, "api_key": settings.OPENAI_API_KEY}
-    if temperature is not None:
-        kwargs["temperature"] = temperature
-    if max_tokens is not None:
-        kwargs["max_tokens"] = max_tokens
-    return ChatOpenAI(**kwargs)
+    spec = model or settings.MODEL
+    return init_chat_model(spec, **_build_kwargs(spec, max_tokens, temperature))
 
 
-def caching_middleware() -> list[AgentMiddleware]:
-    """Prompt-caching middleware for a hand-built ``create_agent``, or ``[]`` when not applicable.
+def create_utility_chat_model(
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+) -> BaseChatModel:
+    """Build the cheap model for low-stakes sub-flows (descriptions, safety check, research, mem0).
 
-    ``create_deep_agent`` already bundles this middleware, so the deep agents don't need it; this
-    helper is for any agent assembled directly with ``create_agent``. Only Anthropic supports the
-    ``cache_control`` breakpoints it inserts; OpenAI caches matching prefixes automatically.
+    Uses ``settings.UTILITY_MODEL`` when set, else falls back to ``MODEL``.
     """
-    if not (_is_anthropic() and settings.PROMPT_CACHING_ENABLED):
-        return []
-    ttl = "1h" if settings.PROMPT_CACHE_TTL == "1h" else "5m"
-    return [AnthropicPromptCachingMiddleware(ttl=ttl)]
+    spec = settings.UTILITY_MODEL or settings.MODEL
+    return init_chat_model(spec, **_build_kwargs(spec, max_tokens, temperature))
 
 
-def build_system_message(stable: str, volatile: str = "") -> SystemMessage:
-    """Build a system message that keeps its cacheable prefix byte-stable.
-
-    On Anthropic with caching on, ``stable`` becomes a cached text block (``cache_control``
-    breakpoint) and ``volatile`` (date, long-term memory, per-turn context) follows it uncached — so
-    the cache prefix never changes between turns. Otherwise a plain concatenated message is returned.
-    """
-    if _is_anthropic() and settings.PROMPT_CACHING_ENABLED:
-        cache_control: dict = {"type": "ephemeral"}
-        if settings.PROMPT_CACHE_TTL == "1h":
-            cache_control["ttl"] = "1h"
-        blocks: list[dict] = [{"type": "text", "text": stable, "cache_control": cache_control}]
-        if volatile:
-            blocks.append({"type": "text", "text": volatile})
-        return SystemMessage(content=blocks)
-
-    content = f"{stable}\n\n{volatile}" if volatile else stable
-    return SystemMessage(content=content)
+def active_model_name() -> str:
+    """Return the configured ``provider:model`` string — for metrics, labels and traces."""
+    return settings.MODEL

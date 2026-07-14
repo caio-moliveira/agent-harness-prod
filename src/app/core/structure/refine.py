@@ -48,7 +48,7 @@ def _structured_model() -> BaseChatModel:
     """Lazily build the structured-output model (so importing this module needs no API key)."""
     global _model
     if _model is None:
-        _model = create_chat_model(thinking="disabled").with_structured_output(RefineResult)
+        _model = create_chat_model().with_structured_output(RefineResult)
     return _model
 
 

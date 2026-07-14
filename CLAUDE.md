@@ -70,8 +70,25 @@ make docker-compose-up ENV=development    # full stack (API + db + Prometheus + 
 Swagger: `http://localhost:8000/docs` · Grafana: `http://localhost:3000` (admin/admin) · Prometheus: `http://localhost:9090`
 
 Config lives in `.env.<environment>` (development/staging/production). Copy `.env.example` to
-`.env.development` and fill `OPENAI_API_KEY`, `JWT_SECRET_KEY`, `LANGFUSE_*`. All settings are
-read in `src/app/core/common/config.py` — that file is the single source of truth for config.
+`.env.development` and fill `JWT_SECRET_KEY`, `LANGFUSE_*`, and the LLM `MODEL` + its key (see below).
+All settings are read in `src/app/core/common/config.py` — that file is the single source of truth for
+config.
+
+### Choosing an LLM model
+
+Set **one** env var: `MODEL="provider:model"` — e.g. `anthropic:claude-sonnet-5`, `openai:gpt-4o`,
+or `azure_openai:<deployment>`. LangChain's `init_chat_model` infers the provider from the prefix, so
+you only set that provider's API key (Azure also needs `AZURE_OPENAI_ENDPOINT` + `_API_VERSION`).
+Startup builds `MODEL` once and fails fast with a clear message if the key is missing. `MODEL_MAX_TOKENS`
+and `MODEL_CALL_LIMIT` tune the output cap and the per-turn safety cap. `UTILITY_MODEL` (blank = reuse
+`MODEL`) is the cheap model for low-stakes sub-flows (file descriptions, safety check, research
+internals, mem0's memory-extraction LLM). **Embeddings are separate** (`EMBEDDINGS_MODEL`) because
+Anthropic has no embedding model: chat/utility/deep-research work on any provider, but long-term memory
+needs OpenAI or Azure embeddings — blank auto-resolves from a present key, else memory auto-disables
+with a warning (`long_term_memory_disabled_no_embeddings`). Everything is built by
+`src/app/core/llm/factory.py` (`create_chat_model` / `create_utility_chat_model`); never hardcode a
+provider/model or call `ChatOpenAI`/`ChatAnthropic`/`init_chat_model` directly in an agent — go through
+the factory. See `.env.example` for the full surface.
 
 ### Frontend (`frontend/`)
 

@@ -222,7 +222,7 @@ class DataAgent:
         # exceeds the shared default recursion limit and would crash mid-task with
         # GraphRecursionError. Raise it above the model-call cap so ModelCallLimitMiddleware (which
         # ends gracefully) is what stops a runaway, not a hard crash.
-        config["recursion_limit"] = 2 * settings.ANTHROPIC_MODEL_CALL_LIMIT + 20
+        config["recursion_limit"] = 2 * settings.MODEL_CALL_LIMIT + 20
         return config
 
     async def agent_invoke(
@@ -463,7 +463,7 @@ class DataAgent:
         # If the parent used its whole per-run model-call budget, the middleware likely ended the turn
         # mid-task with a synthetic (unstreamed) limit message — surface an actionable hint so the stop
         # isn't silent. Safe wording: it doesn't assert the turn was incomplete, only offers to resume.
-        if parent_model_calls >= settings.ANTHROPIC_MODEL_CALL_LIMIT:
+        if parent_model_calls >= settings.MODEL_CALL_LIMIT:
             hint = (
                 "\n\n---\n\n_Cheguei ao limite de passos deste turno. Se ainda faltou algo (ex.: gerar o "
                 'arquivo), envie **"continuar"** que eu retomo daqui — mantenho todo o contexto já '
@@ -798,7 +798,7 @@ def _create_data_deep_agent(
             # result stays in state) — prevents a one-turn context blowup ahead of the summarizer.
             ToolResultCapMiddleware(),
             PIIMiddleware("email"),
-            ModelCallLimitMiddleware(run_limit=settings.ANTHROPIC_MODEL_CALL_LIMIT, exit_behavior="end"),
+            ModelCallLimitMiddleware(run_limit=settings.MODEL_CALL_LIMIT, exit_behavior="end"),
         ],
     }
     # Bundled skills mounted at SKILLS_MOUNT are always available; a caller-provided skills_dir is

@@ -5,11 +5,11 @@ model. The description lets the session-start briefing tell the agent *what each
 decide whether to open it — without reading the whole corpus every session.
 """
 
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models.chat_models import BaseChatModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
+from src.app.core.llm.factory import create_utility_chat_model
 
 # Cap the input: a one-liner needs only the head of the document, and it keeps the call cheap.
 _MAX_INPUT_CHARS = 4000
@@ -21,13 +21,21 @@ _SYSTEM_PROMPT = (
     "para alguém decidir se precisa abri-lo. Sem preâmbulo, sem 'este arquivo', sem aspas."
 )
 
-_describer = ChatOpenAI(model=settings.LONG_TERM_MEMORY_MODEL, api_key=settings.OPENAI_API_KEY)
+_describer: BaseChatModel | None = None
+
+
+def _get_describer() -> BaseChatModel:
+    """Lazy-init the cheap description model for the configured provider (built once)."""
+    global _describer
+    if _describer is None:
+        _describer = create_utility_chat_model()
+    return _describer
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
 async def _summarize(title: str, text: str) -> str:
     """One-line description via the cheap model, retrying transient failures."""
-    response = await _describer.ainvoke(
+    response = await _get_describer().ainvoke(
         [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": f"Nome: {title}\n\nTrecho:\n{text}"},

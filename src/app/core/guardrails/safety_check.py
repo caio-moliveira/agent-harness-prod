@@ -5,10 +5,8 @@ This provides semantic understanding beyond what deterministic rule-based
 checks can catch, following the LangChain guardrails "after agent" pattern.
 """
 
-from langchain.chat_models import init_chat_model
-
-from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
+from src.app.core.llm.factory import create_utility_chat_model
 
 SAFETY_EVALUATION_PROMPT = """You are a safety evaluator. Analyze the following AI assistant response \
 and determine if it is safe and appropriate.
@@ -36,15 +34,10 @@ _safety_model = None
 
 
 def _get_safety_model():
-    """Lazy-initialize the safety evaluation model using a fast, low-cost model."""
+    """Lazy-initialize the safety evaluation model using the cheap utility model of the configured provider."""
     global _safety_model
     if _safety_model is None:
-        _safety_model = init_chat_model(
-            model=f"openai:{settings.LONG_TERM_MEMORY_MODEL}",
-            api_key=settings.OPENAI_API_KEY,
-            max_tokens=10,
-            temperature=0,
-        )
+        _safety_model = create_utility_chat_model(max_tokens=10, temperature=0)
     return _safety_model
 
 

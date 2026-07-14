@@ -90,7 +90,7 @@ class TestDelegationStreaming:
 
     async def test_hitting_the_model_call_cap_streams_a_continue_hint(self, monkeypatch):
         """When the parent uses its whole per-run budget, a silent stop becomes an actionable hint."""
-        evs = [{"event": "on_chat_model_start", "data": {}} for _ in range(settings.ANTHROPIC_MODEL_CALL_LIMIT)]
+        evs = [{"event": "on_chat_model_start", "data": {}} for _ in range(settings.MODEL_CALL_LIMIT)]
         evs.append({"event": "on_chat_model_stream", "data": {"chunk": _chunk("vou gerar o docx")}})
         events = await _run(monkeypatch, evs)
         tokens = "".join(e["content"] for e in events if e["type"] == "token")
@@ -100,7 +100,7 @@ class TestDelegationStreaming:
     async def test_subagent_model_calls_do_not_count_toward_the_cap(self, monkeypatch):
         """Model calls made inside a delegation don't trip the parent's cap → no false hint."""
         evs = [{"event": "on_tool_start", "name": "task", "data": {"input": {"subagent_type": "deep_research"}}}]
-        evs += [{"event": "on_chat_model_start", "data": {}} for _ in range(settings.ANTHROPIC_MODEL_CALL_LIMIT)]
+        evs += [{"event": "on_chat_model_start", "data": {}} for _ in range(settings.MODEL_CALL_LIMIT)]
         evs.append({"event": "on_tool_end", "name": "task", "data": {"input": {"subagent_type": "deep_research"}, "output": "r"}})
         events = await _run(monkeypatch, evs)
         assert "continuar" not in "".join(e.get("content", "") for e in events if e["type"] == "token").lower()

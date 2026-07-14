@@ -35,6 +35,7 @@ from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.db.database import database_factory
 from src.app.core.sandbox.registry import reaper_loop
+from src.app.core.llm.validation import validate_llm_config
 from src.app.init import langfuse_init, mcp_dependencies_init, mcp_dependencies_cleanup
 
 # Load environment variables
@@ -51,6 +52,8 @@ async def lifespan(app: FastAPI):
         version=settings.VERSION,
         api_prefix=settings.API_V1_STR,
     )
+    # Fail fast if the selected LLM provider is misconfigured (only that provider is checked).
+    validate_llm_config()
     # Ensure tables for all models registered by the fully-imported app exist.
     # Idempotent; robust against model-import ordering (e.g. the Agent table).
     SQLModel.metadata.create_all(database_factory.engine)

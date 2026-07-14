@@ -143,43 +143,47 @@ class Settings:
         self.LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
         self.LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
 
-        # LangGraph Configuration
-        self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-        self.DEFAULT_LLM_MODEL = os.getenv("DEFAULT_LLM_MODEL", "gpt-5-mini")
-        self.DEFAULT_LLM_TEMPERATURE = float(os.getenv("DEFAULT_LLM_TEMPERATURE", "0.2"))
         self.MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2000"))
         self.MAX_LLM_CALL_RETRIES = int(os.getenv("MAX_LLM_CALL_RETRIES", "3"))
 
-        # Chat-model provider. The agents' chat models are built by src/app/core/llm/factory.py from
-        # these settings; long-term memory (mem0) and evals keep their own OpenAI models. Anthropic
-        # (Claude Sonnet 5) is the default so prompt caching is available out of the box; set
-        # LLM_PROVIDER=openai to keep the previous OpenAI behavior.
-        self.LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic").lower()
-        self.ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-        self.ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
-        # Anthropic requires an explicit output cap. Streaming is used on the hot paths, so a
-        # generous default leaves room for large deliverables without HTTP timeouts.
-        self.ANTHROPIC_MAX_TOKENS = int(os.getenv("ANTHROPIC_MAX_TOKENS", "8192"))
-        # Thinking mode for Anthropic: "disabled" (default) or "adaptive". Adaptive (display=
-        # summarized) streams the reasoning to the UI, but on a tool-heavy agent it makes the model
-        # do the whole analysis *inside* thinking and re-send a huge thinking block + signature on
-        # every tool-loop step — a runaway token cost (and re-planning loops). Off by default; set to
-        # "adaptive" to opt back in (best on light, conversational agents, not the Data Agent).
-        self.ANTHROPIC_THINKING = os.getenv("ANTHROPIC_THINKING", "disabled").lower()
+        # ── LLM: one knob ──────────────────────────────────────────────────────────────────────────
+        # MODEL is a "provider:model" string resolved by LangChain's init_chat_model (see
+        # src/app/core/llm/factory.py); the provider is inferred from the prefix and only that
+        # provider's API key is needed. Examples: "anthropic:claude-sonnet-5" (needs ANTHROPIC_API_KEY),
+        # "openai:gpt-4o" (OPENAI_API_KEY), "azure_openai:<deployment>" (AZURE_OPENAI_* below).
+        self.MODEL = os.getenv("MODEL", "anthropic:claude-sonnet-5")
+        # Output cap. Anthropic requires an explicit one (and init_chat_model would otherwise default it
+        # low, truncating deliverables); harmless on OpenAI/Azure. Always forwarded by the factory.
+        self.MODEL_MAX_TOKENS = int(os.getenv("MODEL_MAX_TOKENS", "8192"))
         # Hard cap on model calls per turn (safety net against a runaway agent loop). Applied to the
         # deep agents via ModelCallLimitMiddleware; the agent ends gracefully at the cap. A legit
         # multi-deliverable turn can use ~25-30 calls, so 40 leaves headroom while still bounding a
         # runaway. The deep agent's recursion_limit is set above this so the graceful cap wins.
-        self.ANTHROPIC_MODEL_CALL_LIMIT = int(os.getenv("ANTHROPIC_MODEL_CALL_LIMIT", "40"))
-        # Prompt caching (prefix match). Deep agents cache via AnthropicPromptCachingMiddleware; a
-        # raw create_agent graph caches a stable system block. Only meaningful when LLM_PROVIDER=anthropic.
-        self.PROMPT_CACHING_ENABLED = os.getenv("PROMPT_CACHING_ENABLED", "true").lower() in ("true", "1", "yes")
-        self.PROMPT_CACHE_TTL = os.getenv("PROMPT_CACHE_TTL", "5m")  # "5m" or "1h"
+        self.MODEL_CALL_LIMIT = int(os.getenv("MODEL_CALL_LIMIT", "40"))
+        # Utility (cheap) model for low-stakes sub-flows (file descriptions, safety check, deep-research
+        # internals, and mem0's memory-extraction LLM). Same "provider:model" format; blank = reuse MODEL.
+        self.UTILITY_MODEL = os.getenv("UTILITY_MODEL", "")
 
-        # Long term memory Configuration
-        self.LONG_TERM_MEMORY_MODEL = os.getenv("LONG_TERM_MEMORY_MODEL", "gpt-5-nano")
-        self.LONG_TERM_MEMORY_EMBEDDER_MODEL = os.getenv("LONG_TERM_MEMORY_EMBEDDER_MODEL", "text-embedding-3-small")
+        # Provider API keys — set only the one MODEL uses; LangChain also reads these from the env.
+        self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+        self.ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+        # Azure OpenAI — needed only when MODEL/UTILITY/EMBEDDINGS use the azure_openai provider. The
+        # deployment name is the part after the ":" in the model string; endpoint + version live here.
+        self.AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+        self.AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+        self.AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "")
+
+        # ── Long-term memory (mem0) + embeddings ────────────────────────────────────────────────────
+        # Embeddings are a SEPARATE provider because Anthropic has no embedding model. EMBEDDINGS_MODEL
+        # is a "provider:model" string (e.g. "openai:text-embedding-3-small"); blank auto-resolves to
+        # whichever of openai/azure has a key, else "none" (memory turns off with a startup warning).
+        # The mem0 extraction LLM reuses UTILITY_MODEL (→ MODEL). Set LONG_TERM_MEMORY_ENABLED=false to
+        # turn memory off explicitly.
+        self.EMBEDDINGS_MODEL = os.getenv("EMBEDDINGS_MODEL", "")
         self.LONG_TERM_MEMORY_COLLECTION_NAME = os.getenv("LONG_TERM_MEMORY_COLLECTION_NAME", "longterm_memory")
+        self.LONG_TERM_MEMORY_ENABLED = os.getenv("LONG_TERM_MEMORY_ENABLED", "true").lower() in ("true", "1", "yes")
+        # For an Azure embeddings model: the deployment name (endpoint/key/version reuse AZURE_OPENAI_*).
+        self.AZURE_OPENAI_EMBEDDING_DEPLOYMENT = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT", "")
         # JWT Configuration
         self.JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
         self.JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
