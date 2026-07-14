@@ -15,6 +15,8 @@ from langchain_community.utilities import SQLDatabase
 
 from src.app.agents.data_agent.artifact_tools import make_artifact_tools
 from src.app.agents.data_agent.compute_tools import make_compute_tools
+from src.app.agents.data_agent.completion_middleware import _DELIVERABLE_TOOLS as _DELIVERABLE_TOOL_NAMES
+from src.app.agents.data_agent.completion_middleware import DeliverableCompletionMiddleware
 from src.app.agents.data_agent.context_middleware import ToolResultCapMiddleware
 from src.app.agents.data_agent.plan_tools import make_plan_tools
 from src.app.agents.data_agent.subagents import make_deep_research_subagent_spec, make_user_sql_subagent
@@ -369,14 +371,30 @@ class DataAgent:
         # synthetic, not a model call) — so the turn would stop silently mid-task. We detect that and
         # stream a clear "continue" hint instead. Subagent calls run in their own graph and don't count.
         parent_model_calls = 0
+        # Whether this turn ran any top-level tool and whether it ever called a deliverable-producing
+        # tool. Used after the loop to detect the "worked, but ended with no file and no answer" turn
+        # (the silent mid-plan stop) and surface a recoverable hint instead of an empty bubble.
+        saw_planning = False
+        deliverable_called = False
         async for event in self.agent.astream_events({"messages": payload_messages}, config=config, version="v2"):
             kind = event.get("event")
             if kind == "on_chat_model_start" and delegation_depth == 0:
                 parent_model_calls += 1
             if kind == "on_tool_start":
                 tool_name = event.get("name", "")
+                if delegation_depth == 0:
+                    if tool_name == "write_todos":
+                        saw_planning = True
+                    if tool_name in _DELIVERABLE_TOOL_NAMES:
+                        deliverable_called = True
                 raw_input = event.get("data", {}).get("input")
                 tool_input = _short(raw_input)
+                # For write_todos, stream/persist the plan as clean JSON (not the raw dict repr) so a
+                # reopened conversation can rebuild the checklist instead of showing a JSON blob. The
+                # live UI additionally gets a structured `todos` event below.
+                todos = _parse_todos(raw_input) if tool_name == "write_todos" else None
+                if todos is not None:
+                    tool_input = json.dumps(todos, ensure_ascii=False)
                 # A task() call delegates to a subagent — surface a human label ("Consultando o
                 # banco…" / "Pesquisando na web…") so the timeline reads clearly and never looks
                 # frozen during a long delegated run. subagent_type is None for non-task tools.
@@ -421,10 +439,8 @@ class DataAgent:
                     }
                     # Surface the plan as a live checklist (not just a raw JSON step) when the agent
                     # calls write_todos.
-                    if tool_name == "write_todos":
-                        todos = _parse_todos(raw_input)
-                        if todos:
-                            yield {"type": "todos", "items": todos}
+                    if todos:
+                        yield {"type": "todos", "items": todos}
                 if tool_name == "task":
                     delegation_depth += 1
             elif kind == "on_tool_end":
@@ -460,14 +476,36 @@ class DataAgent:
                         answer += text
                     yield {"type": kind_, "content": text}
 
-        # If the parent used its whole per-run model-call budget, the middleware likely ended the turn
-        # mid-task with a synthetic (unstreamed) limit message — surface an actionable hint so the stop
-        # isn't silent. Safe wording: it doesn't assert the turn was incomplete, only offers to resume.
-        if parent_model_calls >= settings.MODEL_CALL_LIMIT:
+        # A turn that ran tools but ended with no answer text and no deliverable is the silent mid-plan
+        # stop the user sees as "frozen on the last task": the final model call (that would generate the
+        # file) never completed — cap hit, a truncated tool call, or the stream being cut. Log a summary
+        # so the exact cause is attributable next time, and surface a recoverable hint either way.
+        hit_call_cap = parent_model_calls >= settings.MODEL_CALL_LIMIT
+        # A *planned* turn (write_todos ran) that ended with no deliverable and no answer text is the
+        # silent mid-plan stop — distinct from a plain delegation that simply returned nothing.
+        turn_incomplete = saw_planning and not deliverable_called and not answer.strip()
+        logger.info(
+            "data_turn_summary",
+            session_id=session_id,
+            agent_id=self.agent_id,
+            model_calls=parent_model_calls,
+            answer_chars=len(answer),
+            deliverable_called=deliverable_called,
+            hit_call_cap=hit_call_cap,
+            incomplete=turn_incomplete,
+        )
+        if hit_call_cap:
             hint = (
                 "\n\n---\n\n_Cheguei ao limite de passos deste turno. Se ainda faltou algo (ex.: gerar o "
                 'arquivo), envie **"continuar"** que eu retomo daqui — mantenho todo o contexto já '
                 "apurado, sem refazer a análise._"
+            )
+            answer += hint
+            yield {"type": "token", "content": hint}
+        elif turn_incomplete:
+            hint = (
+                "_Reuni os dados mas não cheguei a gerar o arquivo neste turno. Envie **\"continuar\"** "
+                "que eu finalizo o entregável a partir do que já apurei — sem refazer a análise._"
             )
             answer += hint
             yield {"type": "token", "content": hint}
@@ -798,6 +836,10 @@ def _create_data_deep_agent(
             # result stays in state) — prevents a one-turn context blowup ahead of the summarizer.
             ToolResultCapMiddleware(),
             PIIMiddleware("email"),
+            # Keep weaker instruction-followers from ending the turn mid-plan: if the model stops with
+            # the deliverable ungenerated and the plan still incomplete, jump back to the model with a
+            # firm "finish it" nudge (bounded). Model-agnostic; the call cap below is the backstop.
+            DeliverableCompletionMiddleware(),
             ModelCallLimitMiddleware(run_limit=settings.MODEL_CALL_LIMIT, exit_behavior="end"),
         ],
     }

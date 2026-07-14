@@ -25,6 +25,13 @@ entregável simples, siga direto.
 
 ## Gere o arquivo com a ferramenta certa
 
+> **OBRIGATÓRIO:** assim que os dados estiverem reunidos, **CHAME `gerar_artefato` (ou
+> `gerar_planilha`) NO MESMO TURNO.** O entregável é o **ARQUIVO** — nunca escreva o corpo do
+> relatório como mensagem no chat, e **não encerre o turno nem marque o passo de geração como
+> concluído/em andamento** enquanto a ferramenta não tiver rodado. Depois de coletar os números, sua
+> próxima ação é chamar a ferramenta de geração — não pare para "concluir" em texto. A mensagem de
+> chat deve ter no máximo UMA linha avisando que o arquivo foi gerado (ou ficou aguardando aprovação).
+
 - **Relatório / apresentação** → `gerar_artefato(titulo, formato, secoes, ...)` com `formato`
   `"docx"` ou `"pptx"`. Monte `secoes` com títulos e itens; inclua `fonte` em cada item.
 - **Planilha** → `gerar_planilha(titulo, planilhas)`; cada aba tem `colunas` e `linhas` — inclusive
@@ -32,8 +39,13 @@ entregável simples, siga direto.
 - **NUNCA** crie `.docx`/`.pptx`/`.xlsx` com `write_file` (o arquivo sairia corrompido). `write_file`
   é só para texto (`.md`, `.txt`, `.csv`).
 
-Estes entregáveis passam por confirmação do usuário antes de serem gerados — avise que o arquivo
-ficou aguardando aprovação.
+> **Não espere autorização para CHAMAR a ferramenta.** Chame `gerar_artefato`/`gerar_planilha`
+> **diretamente** assim que tiver os dados — você NÃO precisa de permissão prévia para isso. A
+> confirmação do usuário acontece **automaticamente DEPOIS** que você chama a ferramenta (o sistema
+> deixa o arquivo pendente de aprovação). Se o plano já foi aprovado com `propor_plano`, essa
+> aprovação já cobre a geração — prossiga e chame a ferramenta. **Nunca** redija o relatório em
+> Markdown/texto no chat "aguardando autorização": isso deixa a tarefa inacabada. Depois de chamar,
+> avise em uma linha que o arquivo ficou aguardando aprovação.
 
 ## Qualidade
 
