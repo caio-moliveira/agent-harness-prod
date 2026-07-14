@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
-import type { AssistantTurn, Segment, SourceStatus, ToolStep, Turn } from "../lib/types";
+import type { AssistantTurn, Segment, SourceStatus, TodoItem, ToolStep, Turn } from "../lib/types";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import SourcesPanel from "./SourcesPanel";
@@ -52,6 +52,24 @@ function settleTodos(a: AssistantTurn): AssistantTurn {
     ...a,
     todos: a.todos.map((t) => (t.status === "in_progress" ? { ...t, status: "stopped" } : t)),
   };
+}
+
+/** Rebuild the plan checklist from persisted steps: the last `write_todos` step carries the plan as
+ *  JSON, so a reopened conversation shows the same <TodoList> instead of a raw JSON tool card. Older
+ *  sessions stored a non-JSON dict repr — those just skip (the raw card is hidden regardless). */
+function todosFromSteps(steps: ToolStep[]): TodoItem[] | undefined {
+  const last = [...steps].reverse().find((s) => s.name === "write_todos");
+  if (!last?.input) return undefined;
+  try {
+    const parsed = JSON.parse(last.input);
+    const items = Array.isArray(parsed) ? parsed : parsed?.todos;
+    if (!Array.isArray(items)) return undefined;
+    return items
+      .filter((t) => t && typeof t.content === "string")
+      .map((t) => ({ content: t.content, status: typeof t.status === "string" ? t.status : "pending" }));
+  } catch {
+    return undefined;
+  }
 }
 
 /** Append a tool step to the chronological segments, batching consecutive tools into one group. */
@@ -205,7 +223,8 @@ export default function ChatScreen() {
           const segments: Segment[] = [];
           if (steps.length > 0) segments.push({ kind: "tools", steps });
           if (m.content) segments.push({ kind: "text", text: m.content });
-          return { role: "assistant", content: m.content, streaming: false, steps, segments };
+          const todos = todosFromSteps(steps);
+          return { role: "assistant", content: m.content, streaming: false, steps, segments, todos };
         });
         stepIdRef.current = nextStepId;
         // Re-anchor a still-pending artifact approval to the last assistant turn so it can be

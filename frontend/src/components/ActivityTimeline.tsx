@@ -6,7 +6,10 @@ import { IconClose, IconLayers } from "./icons";
 function TimelineRow({ step }: { step: ToolStep }) {
   const [open, setOpen] = useState(false);
   const { icon, label } = labelFor(step.name);
-  const body = [step.input, step.output].filter(Boolean).join("\n\n");
+  // The plan (`write_todos`) is a checklist, not a payload — keep its "Planejando" row but hide the
+  // todos JSON so the timeline doesn't show a raw blob (the plan renders visually as <TodoList>).
+  const isPlan = step.name === "write_todos";
+  const body = isPlan ? "" : [step.input, step.output].filter(Boolean).join("\n\n");
 
   return (
     <li className="relative pl-6">
@@ -23,7 +26,9 @@ function TimelineRow({ step }: { step: ToolStep }) {
               <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-600 border-t-indigo-400" />
             )}
           </span>
-          {step.input && <span className="block truncate text-[10px] text-slate-500">{step.input}</span>}
+          {step.input && !isPlan && (
+            <span className="block truncate text-[10px] text-slate-500">{step.input}</span>
+          )}
         </span>
         {body && <span className="text-[10px] text-slate-600">{open ? "▾" : "▸"}</span>}
       </button>

@@ -52,10 +52,13 @@ function StepCard({ step }: { step: ToolStep }) {
 }
 
 export default function AgentActivity({ steps }: { steps: ToolStep[] }) {
-  if (steps.length === 0) return null;
+  // The plan (`write_todos`) is rendered as a visual checklist by <TodoList>, so hide its raw tool
+  // card here — otherwise the user would see the todos JSON blob duplicated as a step.
+  const visible = steps.filter((s) => s.name !== "write_todos");
+  if (visible.length === 0) return null;
   return (
     <div className="mb-2 space-y-1.5">
-      {steps.map((step) => (
+      {visible.map((step) => (
         <StepCard key={step.id} step={step} />
       ))}
     </div>
