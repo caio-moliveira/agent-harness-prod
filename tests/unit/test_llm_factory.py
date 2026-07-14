@@ -89,3 +89,17 @@ def test_active_model_name_is_the_model_string(monkeypatch):
     """active_model_name returns the configured provider:model string for traces."""
     _set_model(monkeypatch, "azure_openai:gpt-5.6-terra")
     assert factory.active_model_name() == "azure_openai:gpt-5.6-terra"
+
+
+def test_reasoning_models_force_reasoning_effort_none(all_keys):
+    """gpt-5.x / o-series on OpenAI/Azure get reasoning_effort='none' so function tools work."""
+    for spec in ("openai:gpt-5.6-terra", "azure_openai:gpt-5.6-terra", "openai:o3-mini"):
+        assert factory._is_openai_reasoning_model(spec)
+        assert factory._build_kwargs(spec, None, None)["reasoning_effort"] == "none"
+
+
+def test_non_reasoning_models_omit_reasoning_effort(all_keys):
+    """Non-reasoning models (gpt-4o, Anthropic) never get reasoning_effort (it would 400/deny)."""
+    for spec in ("openai:gpt-4o", "anthropic:claude-sonnet-5"):
+        assert not factory._is_openai_reasoning_model(spec)
+        assert "reasoning_effort" not in factory._build_kwargs(spec, None, None)

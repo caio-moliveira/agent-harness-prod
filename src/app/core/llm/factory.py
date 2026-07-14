@@ -47,6 +47,22 @@ def api_key_for(spec: str) -> str:
     return getattr(settings, attr, "") if attr else ""
 
 
+def _model_id(spec: str) -> str:
+    """The bare model id / Azure deployment name (the part after ``provider:``)."""
+    return spec.split(":", 1)[1].strip() if ":" in spec else spec.strip()
+
+
+# OpenAI/Azure reasoning-model families (gpt-5.x, o1/o3/o4). Detected by name/deployment prefix.
+_REASONING_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+def _is_openai_reasoning_model(spec: str) -> bool:
+    """True for an OpenAI/Azure reasoning model (gpt-5.x / o-series) — needs special tool handling."""
+    if spec.startswith(_ANTHROPIC_PREFIX):
+        return False
+    return _model_id(spec).lower().startswith(_REASONING_PREFIXES)
+
+
 def _build_kwargs(spec: str, max_tokens: int | None, temperature: float | None) -> dict:
     """Build the ``init_chat_model`` kwargs for a ``provider:model`` spec, applying provider quirks."""
     # Pass the key from settings; None (not "") lets init_chat_model fall back to its own env lookup.
@@ -57,6 +73,12 @@ def _build_kwargs(spec: str, max_tokens: int | None, temperature: float | None) 
     # Sonnet rejects non-default sampling params — only forward temperature to non-Anthropic providers.
     if temperature is not None and not spec.startswith(_ANTHROPIC_PREFIX):
         kwargs["temperature"] = temperature
+    # OpenAI/Azure reasoning models (gpt-5.x, o-series) reject function tools on /v1/chat/completions
+    # unless reasoning is off ("Function tools with reasoning_effort are not supported ... set
+    # reasoning_effort to 'none'"). The deep agent ALWAYS binds tools, so force it off — this is also
+    # the right call for a tool-heavy agent (reasoning-in-the-loop bloats tokens and re-planning).
+    if _is_openai_reasoning_model(spec):
+        kwargs["reasoning_effort"] = "none"
     # Azure needs endpoint + version; our env-var names differ from what init_chat_model auto-reads.
     if spec.startswith(_AZURE_PREFIXES):
         kwargs["azure_endpoint"] = settings.AZURE_OPENAI_ENDPOINT
