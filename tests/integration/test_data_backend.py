@@ -366,6 +366,31 @@ class TestGrantFolderEndpoint:
             assert gone.status_code == 200
 
 
+class TestUploadFolderEndpoint:
+    @pytest.mark.asyncio
+    async def test_upload_folder_sets_source(self, client: AsyncClient, tmp_path):
+        from src.app.core.common import config as config_module
+
+        token = await _register_and_session_token(client)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        files = [
+            ("files", ("dados.csv", b"a,b\n1,2\n", "text/csv")),
+            ("files", ("sub/nota.txt", b"hello", "text/plain")),
+        ]
+        with patch.object(config_module.settings, "SANDBOX_UPLOAD_ROOT", str(tmp_path / "uploads")):
+            uploaded = await client.post("/api/v1/data-agent/upload-folder", files=files, headers=headers)
+            assert uploaded.status_code == 200, uploaded.text
+            assert uploaded.json()["granted"] is True
+
+            status = await client.get("/api/v1/data-agent/status", headers=headers)
+            assert status.status_code == 200
+            assert status.json()["folder"] is not None
+
+            gone = await client.post("/api/v1/data-agent/disconnect", headers=headers)
+            assert gone.status_code == 200
+
+
 class TestFileDownloadResolution:
     """The files/download path resolver confines to the granted folder and rejects traversal."""
 

@@ -223,6 +223,13 @@ class Settings:
         # default). A granted folder must live under one of these roots.
         self.SANDBOX_ALLOWED_ROOTS = parse_list_from_env("SANDBOX_ALLOWED_ROOTS", [])
 
+        # Server-managed storage for folders the browser uploads (session- or agent-scoped).
+        # Destinations under this root are always derived from the authenticated user, never
+        # from client input, so they bypass SANDBOX_ALLOWED_ROOTS entirely (see sandbox/upload.py).
+        self.SANDBOX_UPLOAD_ROOT = os.getenv("SANDBOX_UPLOAD_ROOT", "./sandbox_uploads")
+        self.SANDBOX_UPLOAD_MAX_BYTES = int(os.getenv("SANDBOX_UPLOAD_MAX_BYTES", str(200 * 1024 * 1024)))
+        self.SANDBOX_UPLOAD_MAX_FILES = int(os.getenv("SANDBOX_UPLOAD_MAX_FILES", "500"))
+
         # Cap on how many prior versions a writable folder keeps per file (oldest evicted first).
         # See src/app/core/sandbox/versioning.py.
         self.SANDBOX_MAX_VERSIONS_PER_FILE = int(os.getenv("SANDBOX_MAX_VERSIONS_PER_FILE", "100"))

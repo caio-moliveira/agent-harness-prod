@@ -1,5 +1,7 @@
+import type { PickedFile } from "./folderUpload";
 import type {
   Agent,
+  ArtifactPreview,
   Skill,
   RegistrySkill,
   DatabaseSummary,
@@ -179,6 +181,13 @@ export async function rejectAction(userToken: string, actionId: number): Promise
   return (await ensureOk(res)).json();
 }
 
+export async function previewArtifact(userToken: string, actionId: number): Promise<ArtifactPreview> {
+  const res = await fetch(`${BASE}/hitl/${actionId}/preview`, {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
 export interface BindDatabaseInput {
   driver: string;
   host: string;
@@ -319,6 +328,20 @@ export async function grantFolder(sessionToken: string, path: string): Promise<G
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
     body: JSON.stringify({ path }),
+  });
+  return (await ensureOk(res)).json();
+}
+
+/** Uploads a folder picked in the browser (no host path needed) as the session's source. */
+export async function uploadFolder(sessionToken: string, files: PickedFile[]): Promise<GrantFolderResponse> {
+  const fd = new FormData();
+  for (const { file, relativePath } of files) {
+    fd.append("files", file, relativePath);
+  }
+  const res = await fetch(`${BASE}/data-agent/upload-folder`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${sessionToken}` },
+    body: fd,
   });
   return (await ensureOk(res)).json();
 }
