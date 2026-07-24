@@ -55,6 +55,7 @@ from src.app.core.security import decrypt
 from src.app.core.sandbox import registry
 from src.app.core.sandbox.backend import build_folder_backend
 from src.app.core.sandbox.paths import is_within_allowed_roots, validate_grantable_folder
+from src.app.core.sandbox.versioning import is_internal_path
 from src.app.core.sandbox.registry import SessionResources
 from src.app.core.sandbox.upload import save_uploaded_folder
 from src.app.core.session.message_model import ChatMessageRole
@@ -653,17 +654,31 @@ async def list_session_files(
     Owner- and session-scoped like the sibling download route. Resolves through the same
     confined backend the agent's own read/glob tools use (``build_folder_backend``), so the
     picker's confinement guarantee is identical to the agent's — never a parallel reimplementation.
-    A session with no granted folder returns an empty list rather than erroring.
+
+    A bound agent's folder is normally only bound into the in-memory registry lazily, on the
+    session's first query (``_build_agent_for_session``) — without this, the picker would show
+    nothing until the user had already sent a first message. So this route binds it eagerly too
+    (same ``_ensure_agent_folder`` helper, a no-op once already bound), rather than requiring a
+    turn to have happened first. A session with no folder (bound or granted) returns an empty
+    list rather than erroring.
     """
     _require_session(session_id, session)
-    res = await registry.get(session.id)
-    folder = res.folder if res else None
-    if not folder:
+    res = await registry.ensure(session.id)
+    if res.folder is None and session.agent_id is not None:
+        agent = await agent_repository.get_owned_agent(session.agent_id, session.user_id)
+        configured_folder = (agent.config or {}).get("folder") if agent else None
+        if configured_folder:
+            await _ensure_agent_folder(res, session, configured_folder)
+    if not res.folder:
         return SessionFilesResponse(files=[])
-    backend = build_folder_backend(folder)
+    backend = build_folder_backend(res.folder)
     entries = await asyncio.to_thread(backend.ls_info, "/")
     return SessionFilesResponse(
-        files=[SessionFileItem(path=e["path"], is_dir=e.get("is_dir", False)) for e in entries]
+        files=[
+            SessionFileItem(path=e["path"], is_dir=e.get("is_dir", False))
+            for e in entries
+            if not is_internal_path(e["path"])
+        ]
     )
 
 

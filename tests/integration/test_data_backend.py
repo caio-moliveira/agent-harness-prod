@@ -535,6 +535,81 @@ class TestSessionFilesEndpoint:
             assert any(p.rstrip("/") == "/sub" for p in paths)
 
     @pytest.mark.asyncio
+    async def test_versions_bookkeeping_dir_never_leaks(self, client: AsyncClient, tmp_path):
+        """The internal .versions/ manifest dir (created by a prior writable grant elsewhere)
+        must never surface in the `@` picker — same leak class as the .versions/ regression
+        already covered for file_mutation."""
+        from src.app.core.common import config as config_module
+
+        session_id, token = await _register_and_session(client, "files-list-versions@example.com")
+        headers = {"Authorization": f"Bearer {token}"}
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "relatorio.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+        versions_dir = data / ".versions"
+        versions_dir.mkdir()
+        (versions_dir / "manifest.json").write_text("[]", encoding="utf-8")
+
+        with (
+            patch.object(config_module.settings, "SANDBOX_ENABLED", True),
+            patch.object(config_module.settings, "SANDBOX_ALLOWED_ROOTS", [str(tmp_path)]),
+        ):
+            granted = await client.post("/api/v1/data-agent/grant-folder", json={"path": str(data)}, headers=headers)
+            assert granted.status_code == 200, granted.text
+
+            resp = await client.get(f"/api/v1/data-agent/{session_id}/files", headers=headers)
+            assert resp.status_code == 200
+            paths = {f["path"] for f in resp.json()["files"]}
+            assert "/relatorio.csv" in paths
+            assert not any(".versions" in p for p in paths)
+
+    @pytest.mark.asyncio
+    async def test_lists_agent_bound_folder_before_any_query(self, client: AsyncClient, tmp_path):
+        """A session bound to an agent with a configured folder lists files immediately —
+        it must not require a first chat turn to bind the folder into the registry (the bug
+        reported live: the `@` picker showed nothing in a session that had never been queried
+        yet in this server process)."""
+        from src.app.core.common import config as config_module
+
+        reg = await client.post(
+            "/api/v1/auth/register", json={"email": "files-list-agent-bound@example.com", "password": "TestPass123!"}
+        )
+        assert reg.status_code == 200
+        user_token = reg.json()["token"]["access_token"]
+        user_headers = {"Authorization": f"Bearer {user_token}"}
+
+        agent = await client.post(
+            "/api/v1/agents", json={"name": "Agent", "system_prompt": "Be helpful."}, headers=user_headers
+        )
+        assert agent.status_code == 200, agent.text
+        agent_id = agent.json()["id"]
+
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "relatorio.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+
+        with (
+            patch.object(config_module.settings, "SANDBOX_ENABLED", True),
+            patch.object(config_module.settings, "SANDBOX_ALLOWED_ROOTS", [str(tmp_path)]),
+        ):
+            bound = await client.put(f"/api/v1/agents/{agent_id}/folder", json={"path": str(data)}, headers=user_headers)
+            assert bound.status_code == 200, bound.text
+
+            sess = await client.post("/api/v1/auth/session", params={"agent_id": agent_id}, headers=user_headers)
+            assert sess.status_code == 200, sess.text
+            session_id = sess.json()["session_id"]
+            session_token = sess.json()["token"]["access_token"]
+
+            # No /grant-folder, no /query — the very first thing this session does is list files.
+            resp = await client.get(
+                f"/api/v1/data-agent/{session_id}/files",
+                headers={"Authorization": f"Bearer {session_token}"},
+            )
+            assert resp.status_code == 200
+            paths = {f["path"] for f in resp.json()["files"]}
+            assert "/relatorio.csv" in paths
+
+    @pytest.mark.asyncio
     async def test_empty_when_no_folder_granted(self, client: AsyncClient):
         session_id, token = await _register_and_session(client, "files-list-empty@example.com")
         headers = {"Authorization": f"Bearer {token}"}

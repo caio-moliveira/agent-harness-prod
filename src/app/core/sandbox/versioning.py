@@ -48,7 +48,7 @@ def _manifest_path(root_dir: str) -> str:
     return os.path.join(root_dir, _VERSIONS_DIR, _MANIFEST_FILE)
 
 
-def _is_internal_path(path: str) -> bool:
+def is_internal_path(path: str) -> bool:
     """True if ``path`` falls under the internal ``.versions/`` bookkeeping directory.
 
     The manifest and snapshot blobs live inside ``root_dir`` (there's nowhere else to put them
@@ -186,7 +186,7 @@ class VersioningBackend(BackendProtocol):
     # --- everything else delegates unchanged, minus the internal .versions/ bookkeeping ---
     def ls_info(self, path: str) -> list[FileInfo]:
         """Delegate directory listing to the wrapped backend, hiding ``.versions/``."""
-        return [f for f in self._inner.ls_info(path) if not _is_internal_path(f["path"])]
+        return [f for f in self._inner.ls_info(path) if not is_internal_path(f["path"])]
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
         """Delegate file read to the wrapped backend."""
@@ -201,11 +201,11 @@ class VersioningBackend(BackendProtocol):
         result = self._inner.grep_raw(pattern, path=path, glob=glob)
         if isinstance(result, str):
             return result
-        return [m for m in result if not _is_internal_path(m["path"])]
+        return [m for m in result if not is_internal_path(m["path"])]
 
     def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
         """Delegate glob matching to the wrapped backend, hiding ``.versions/``."""
-        return [f for f in self._inner.glob_info(pattern, path=path) if not _is_internal_path(f["path"])]
+        return [f for f in self._inner.glob_info(pattern, path=path) if not is_internal_path(f["path"])]
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Delegate file download to the wrapped backend."""

@@ -39,6 +39,10 @@ export default function Composer({
   const [text, setText] = useState("");
   const [mention, setMention] = useState<Mention | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
+  // Whether the user has actively browsed the dropdown (arrow keys) for the CURRENT mention token.
+  // Until then, Enter still sends normally — typing a mention out by hand and pressing Enter must
+  // behave exactly like any other message, never get silently swallowed as a "confirm selection".
+  const [navigated, setNavigated] = useState(false);
   const [skillItems, setSkillItems] = useState<AgentSkillItem[] | null>(null);
   const [fileItems, setFileItems] = useState<SessionFileItem[] | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -106,7 +110,12 @@ export default function Composer({
 
   function recomputeMention(el: HTMLTextAreaElement) {
     const cursor = el.selectionStart ?? el.value.length;
-    setMention(findMention(el.value, cursor));
+    const found = findMention(el.value, cursor);
+    // A genuinely new token (or no token) resets the "did the user browse the list" signal.
+    if (!found || !mention || mention.start !== found.start || mention.trigger !== found.trigger) {
+      setNavigated(false);
+    }
+    setMention(found);
     setActiveIndex(0);
   }
 
@@ -116,6 +125,7 @@ export default function Composer({
     onSend(trimmed);
     setText("");
     setMention(null);
+    setNavigated(false);
   }
 
   function selectItem(item: MentionItem) {
@@ -126,6 +136,7 @@ export default function Composer({
     const insertion = `${mention.trigger}${item.label} `;
     setText(`${before}${insertion}${after}`);
     setMention(null);
+    setNavigated(false);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (!el) return;
@@ -148,15 +159,19 @@ export default function Composer({
     if (mention && filtered.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
+        setNavigated(true);
         setActiveIndex((i) => (i + 1) % filtered.length);
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
+        setNavigated(true);
         setActiveIndex((i) => (i - 1 + filtered.length) % filtered.length);
         return;
       }
-      if (e.key === "Enter") {
+      // Only intercept Enter once the user has actively browsed the dropdown — otherwise Enter
+      // must always send, exactly like a message that never had a picker open at all.
+      if (e.key === "Enter" && navigated) {
         e.preventDefault();
         selectItem(filtered[activeIndex]);
         return;
@@ -237,7 +252,7 @@ export default function Composer({
         </button>
       </div>
       <p className="mt-1.5 px-2 text-center text-[11px] text-slate-600">
-        Enter envia · Shift+Enter quebra linha
+        {mention ? "↑↓ navega · Enter seleciona · Esc fecha" : "Enter envia · Shift+Enter quebra linha"}
       </p>
     </div>
   );
