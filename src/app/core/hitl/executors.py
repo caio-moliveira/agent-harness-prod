@@ -14,6 +14,7 @@ from src.app.core.hitl.pending_model import PendingAction
 from src.app.core.hitl.service import register_executor
 from src.app.core.learning import bg_run_reflection
 from src.app.core.memory.agent_memory_service import AgentMemoryKind, bg_record_memory
+from src.app.core.sandbox.backend import build_folder_backend
 
 
 async def _export_artifact(action: PendingAction) -> dict:
@@ -74,7 +75,32 @@ async def _approve_plan(action: PendingAction) -> dict:
     return {"approved": True, "title": payload.get("title")}
 
 
+async def _apply_file_mutation(action: PendingAction) -> dict:
+    """Apply an edit that was gated for confirmation (#57) because it would overwrite an existing file.
+
+    In practice ``operation`` is always ``"edit"`` — the only mutation ConfirmationGateBackend
+    ever parks (see write_gate.py: ``write`` never overwrites in this framework, so there's
+    nothing to gate there). Goes through the same versioned writable backend used live
+    (``build_folder_backend`` with ``writable=True``, no user/session bound), so the applied
+    change is captured as a recoverable version exactly like any other edit — confirming just
+    lifts the pending gate.
+    """
+    payload = action.payload
+    backend = build_folder_backend(payload["root_dir"], writable=True)
+    if payload["operation"] == "write":
+        result = backend.write(payload["path"], payload["content"])
+    else:
+        result = backend.edit(
+            payload["path"], payload["old_string"], payload["new_string"], payload.get("replace_all", False)
+        )
+    if result.error:
+        raise RuntimeError(result.error)
+    logger.info("file_mutation_applied", action_id=action.id, operation=payload["operation"], path=payload["path"])
+    return {"path": result.path}
+
+
 def register_default_executors() -> None:
     """Register the built-in executors. Idempotent."""
     register_executor("export_artifact", _export_artifact)
     register_executor("approve_plan", _approve_plan)
+    register_executor("file_mutation", _apply_file_mutation)

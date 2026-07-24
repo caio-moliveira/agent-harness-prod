@@ -1,10 +1,16 @@
 """Versioned wrapper for a writable sandbox backend (#55): every overwrite is snapshotted first.
 
 Wraps a writable folder backend (``build_folder_backend(..., writable=True)``) so overwriting an
-EXISTING file preserves its previous content as a recoverable version before the write/edit is
-applied. A JSON manifest under ``.versions/`` tracks each file's version history, capped at a
+EXISTING file preserves its previous content as a recoverable version once the mutation actually
+succeeds. A JSON manifest under ``.versions/`` tracks each file's version history, capped at a
 configurable number of entries per path (oldest evicted first). Creating a brand-new file (no
-prior content to lose) is not gated — only an actual overwrite is.
+prior content to lose) is never versioned.
+
+In practice this only ever triggers via ``edit``: deepagents' ``FilesystemBackend.write``
+unconditionally refuses to write to a path that already exists ("Cannot write to X because it
+already exists. Read and then make an edit...") — ``write_file`` can only create new files,
+never overwrite. ``edit_file`` is the sole path that modifies existing content, so it's the only
+operation this wrapper ever actually snapshots.
 
 The manifest and snapshot blobs live under ``root_dir/.versions/`` (the same tree the wrapped
 backend reads from), so ``ls_info``/``glob_info``/``grep_raw`` explicitly filter that directory
@@ -113,13 +119,23 @@ class VersioningBackend(BackendProtocol):
         rel = virtual_path.lstrip("/\\")
         return os.path.abspath(os.path.join(self._root_dir, rel))
 
-    def _snapshot_if_exists(self, virtual_path: str, operation: str) -> None:
+    def _read_prior(self, virtual_path: str) -> Optional[bytes]:
+        """Return the file's current bytes, or ``None`` if it doesn't exist yet."""
         host = self._host_path(virtual_path)
         if not os.path.isfile(host):
-            return  # brand-new file — nothing to lose, no snapshot needed
+            return None
         with open(host, "rb") as f:
-            content = f.read()
+            return f.read()
 
+    def _commit_snapshot(self, virtual_path: str, operation: str, content: bytes) -> None:
+        """Persist ``content`` as a recoverable version of ``virtual_path``.
+
+        Evicts the oldest entry for that path if the per-file cap is now exceeded. Only ever
+        called after the delegated mutation has actually succeeded — a snapshot for an
+        operation that failed (e.g. ``write`` on a path that already exists — deepagents'
+        ``FilesystemBackend.write`` always refuses that, ``edit`` is the only way to modify
+        existing content) would record a version nothing ever produced.
+        """
         rel_path = virtual_path.lstrip("/\\")
         snapshot_id = uuid.uuid4().hex
         snapshot_file = f"{snapshot_id}.snapshot"
@@ -150,16 +166,22 @@ class VersioningBackend(BackendProtocol):
             entries = [e for e in entries if e["id"] not in evict_ids]
         _save_manifest(self._root_dir, entries)
 
-    # --- writes: snapshot the previous version (if any) before delegating ---
+    # --- writes: snapshot the previous version (if any) only once the delegate call succeeds ---
     def write(self, file_path: str, content: str) -> WriteResult:
-        """Snapshot any existing content at ``file_path``, then delegate the write."""
-        self._snapshot_if_exists(file_path, "write")
-        return self._inner.write(file_path, content)
+        """Delegate the write; snapshot only applies in practice via ``edit`` (see module docstring)."""
+        prior = self._read_prior(file_path)
+        result = self._inner.write(file_path, content)
+        if result.error is None and prior is not None:
+            self._commit_snapshot(file_path, "write", prior)
+        return result
 
     def edit(self, file_path: str, old_string: str, new_string: str, replace_all: bool = False) -> EditResult:
-        """Snapshot the current content at ``file_path``, then delegate the edit."""
-        self._snapshot_if_exists(file_path, "edit")
-        return self._inner.edit(file_path, old_string, new_string, replace_all=replace_all)
+        """Delegate the edit; snapshot the prior content only if the edit actually succeeded."""
+        prior = self._read_prior(file_path)
+        result = self._inner.edit(file_path, old_string, new_string, replace_all=replace_all)
+        if result.error is None and prior is not None:
+            self._commit_snapshot(file_path, "edit", prior)
+        return result
 
     # --- everything else delegates unchanged, minus the internal .versions/ bookkeeping ---
     def ls_info(self, path: str) -> list[FileInfo]:

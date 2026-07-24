@@ -15,6 +15,7 @@ from langchain_community.utilities import SQLDatabase
 
 from src.app.agents.data_agent.artifact_tools import make_artifact_tools
 from src.app.agents.data_agent.version_tools import make_version_tools
+from src.app.agents.data_agent.write_gate import ConfirmationGateBackend
 from src.app.agents.data_agent.compute_tools import make_compute_tools
 from src.app.agents.data_agent.completion_middleware import _DELIVERABLE_TOOLS as _DELIVERABLE_TOOL_NAMES
 from src.app.agents.data_agent.completion_middleware import DeliverableCompletionMiddleware
@@ -708,9 +709,12 @@ _WRITABLE_FOLDER_NOTE = (
     "A pasta em `/workspace` está em modo LEITURA E ESCRITA nesta sessão: você PODE criar e editar "
     "arquivos nela com `write_file` e `edit_file` (ex.: gerar um relatório em `/workspace/…`). "
     "Toda escrita fica confinada a `/workspace` — nunca escreva fora dela. O banco de dados "
-    "permanece somente leitura. Toda sobrescrita de um arquivo existente fica salva como versão "
-    "recuperável: use `listar_versoes` pra ver o histórico de um arquivo, ou "
-    "`desfazer_ultima_alteracao` pra restaurar a versão anterior."
+    "permanece somente leitura. Criar um arquivo novo funciona na hora; sobrescrever um arquivo "
+    "JÁ EXISTENTE fica pendente de confirmação do usuário (a chamada retorna "
+    "'pending_confirmation' — isso é esperado, não repita a chamada, ela será aplicada quando o "
+    "usuário confirmar). Toda sobrescrita confirmada fica salva como versão recuperável: use "
+    "`listar_versoes` pra ver o histórico de um arquivo, ou `desfazer_ultima_alteracao` pra "
+    "restaurar a versão anterior."
 )
 
 
@@ -855,7 +859,20 @@ def _create_data_deep_agent(
     kwargs["skills"] = [SKILLS_MOUNT] + ([skills_dir] if skills_dir is not None else [])
     # Route the built-in file tools: /workspace → the granted folder (when set), /skills → the
     # bundled read-only skills, everything else → the framework's ephemeral StateBackend scratch.
-    kwargs["backend"] = make_backend_factory(root_dir or "", writable=folder_writable, skills_dir=_BUNDLED_SKILLS_DIR)
+    # A writable folder's overwrites are gated behind explicit confirmation (#57) — only when we
+    # have a user/session to attribute the pending action to.
+    workspace_wrapper = None
+    if folder_writable and user_id is not None and session_id:
+
+        def workspace_wrapper(backend: Any, resolved_root_dir: str) -> Any:
+            return ConfirmationGateBackend(backend, resolved_root_dir, user_id, session_id)
+
+    kwargs["backend"] = make_backend_factory(
+        root_dir or "",
+        writable=folder_writable,
+        skills_dir=_BUNDLED_SKILLS_DIR,
+        workspace_wrapper=workspace_wrapper,
+    )
     # When a checkpointer is available (Postgres), the graph persists per-thread working memory so the
     # agent keeps prior turns' messages/tool results without them being re-sent each turn. None keeps
     # the deep agent stateless (tests/SQLite, or Postgres down).
