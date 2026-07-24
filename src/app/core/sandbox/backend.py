@@ -33,6 +33,7 @@ from deepagents.backends.protocol import (
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.ingestion.parsers import extract_document
+from src.app.core.sandbox.versioning import VersioningBackend
 
 # Config key that carries the session's authorized root directory to the backend factory.
 # Lives under ``config["configurable"]`` (not ``metadata``) so it is never surfaced as Langfuse
@@ -40,8 +41,7 @@ from src.app.core.ingestion.parsers import extract_document
 ROOT_DIR_CONFIG_KEY = "data_agent_root_dir"
 
 _READ_ONLY_ERROR = (
-    "permission_denied: the granted folder is mounted read-only. "
-    "Writing, editing, or uploading files is not allowed."
+    "permission_denied: the granted folder is mounted read-only. Writing, editing, or uploading files is not allowed."
 )
 
 
@@ -238,11 +238,13 @@ def build_folder_backend(root_dir: str, *, writable: bool = False) -> BackendPro
     traversal (``..``/``~``) and absolute escapes — so even a *writable* folder confines every
     write to ``root_dir`` and can never touch the host outside it. We never construct the backend
     without it. When ``writable`` is False (the secure default) the folder is additionally wrapped
-    read-only so ``write``/``edit``/``upload`` are denied. Either way it is wrapped
-    document-aware so ``read_file`` returns extracted text for PDF/Word/Excel.
+    read-only so ``write``/``edit``/``upload`` are denied. A writable folder is instead wrapped by
+    ``VersioningBackend`` so overwriting an existing file snapshots it first (recoverable via
+    ``sandbox/versioning.py``). Either way it is wrapped document-aware so ``read_file`` returns
+    extracted text for PDF/Word/Excel.
     """
     fs = FilesystemBackend(root_dir=root_dir, virtual_mode=True)
-    base = fs if writable else ReadOnlyBackend(fs)
+    base: BackendProtocol = VersioningBackend(fs, root_dir) if writable else ReadOnlyBackend(fs)
     return DocumentAwareBackend(base, root_dir)
 
 
@@ -251,9 +253,7 @@ def build_folder_backend(root_dir: str, *, writable: bool = False) -> BackendPro
 SKILLS_MOUNT = "/skills/"
 
 
-def make_backend_factory(
-    root_dir: str, *, writable: bool = False, skills_dir: Optional[str] = None
-) -> BackendFactory:
+def make_backend_factory(root_dir: str, *, writable: bool = False, skills_dir: Optional[str] = None) -> BackendFactory:
     """Return a per-session backend factory for a Data Agent bound to ``root_dir``.
 
     The returned callable resolves the authorized root directory from the invocation's

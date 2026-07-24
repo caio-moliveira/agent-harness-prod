@@ -30,6 +30,7 @@ from src.app.core.sandbox.backend import (
     build_folder_backend,
     make_backend_factory,
 )
+from src.app.core.sandbox.versioning import VersioningBackend
 
 
 class FakeRuntime:
@@ -270,9 +271,11 @@ class TestBackendInvariants:
 
     def test_writable_backend_wraps_bare_filesystem_in_virtual_mode(self, tmp_path):
         writable = build_folder_backend(str(tmp_path), writable=True)
-        # Writable => document-aware wrapper over the bare FilesystemBackend (not read-only wrapped).
+        # Writable => document-aware wrapper over a VersioningBackend (not read-only wrapped).
         assert isinstance(writable, DocumentAwareBackend)
-        fs = writable._inner
+        versioning = writable._inner
+        assert isinstance(versioning, VersioningBackend)
+        fs = versioning._inner
         assert isinstance(fs, FilesystemBackend)
         assert fs.virtual_mode is True
 

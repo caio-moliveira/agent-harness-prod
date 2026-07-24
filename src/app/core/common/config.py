@@ -223,6 +223,10 @@ class Settings:
         # default). A granted folder must live under one of these roots.
         self.SANDBOX_ALLOWED_ROOTS = parse_list_from_env("SANDBOX_ALLOWED_ROOTS", [])
 
+        # Cap on how many prior versions a writable folder keeps per file (oldest evicted first).
+        # See src/app/core/sandbox/versioning.py.
+        self.SANDBOX_MAX_VERSIONS_PER_FILE = int(os.getenv("SANDBOX_MAX_VERSIONS_PER_FILE", "100"))
+
         # Application-level secret for encrypting persisted credentials (e.g. a bound database
         # password). Empty = secure-by-default: passwords are NOT persisted at rest and must be
         # re-entered per session. Any non-empty string works (a Fernet key is derived from it).
