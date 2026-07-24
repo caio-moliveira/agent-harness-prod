@@ -699,6 +699,43 @@ class TestAgentSkills:
         assert resp.status_code == 404
 
 
+class TestAgentSkillsListing:
+    """GET /agents/{agent_id}/skills — backs the composer's `/` mention picker (#64)."""
+
+    async def test_bundled_plus_only_approved_attached(self, client: AsyncClient, user_token):
+        agent = await _create_agent(client, user_token)
+        draft_skill = await _create_skill(client, user_token, name="Draft One")
+        approved_skill = await _create_skill(client, user_token, name="Approved One")
+        for target in ("in_review", "approved"):
+            resp = await client.post(
+                f"/api/v1/skills/{approved_skill['id']}/status",
+                json={"status": target},
+                headers=_auth(user_token),
+            )
+            assert resp.status_code == 200, resp.text
+        await client.put(
+            f"/api/v1/agents/{agent['id']}/skills",
+            json={"skill_ids": [draft_skill["id"], approved_skill["id"]]},
+            headers=_auth(user_token),
+        )
+
+        resp = await client.get(f"/api/v1/agents/{agent['id']}/skills", headers=_auth(user_token))
+        assert resp.status_code == 200
+        by_name = {s["name"]: s["source"] for s in resp.json()["skills"]}
+        # bundled skills are always present, regardless of what is attached
+        assert by_name.get("analise-sql") == "bundled"
+        assert by_name.get("relatorios") == "bundled"
+        # only the approved attachment loads — the draft one never reaches the list (#17)
+        assert by_name.get("Approved One") == "attached"
+        assert "Draft One" not in by_name
+
+    async def test_requires_ownership(self, client: AsyncClient, user_token):
+        agent = await _create_agent(client, user_token)
+        attacker = await _register_and_token(client, "agent-skills-list-attacker@example.com")
+        resp = await client.get(f"/api/v1/agents/{agent['id']}/skills", headers=_auth(attacker))
+        assert resp.status_code == 403
+
+
 class TestSkillMaterialize:
     def test_writes_skill_md(self, tmp_path):
         from src.app.core.skill import materialize as mat
@@ -726,9 +763,9 @@ class TestSkillMaterialize:
 
 class TestSkillRegistry:
     def test_parse_skill_md(self):
-        from src.app.core.skill.registry import _parse_skill_md
+        from src.app.core.skill.registry import parse_skill_md
 
-        parsed = _parse_skill_md("---\nname: Cool Skill\ndescription: does things\n---\n\n# Body\nStep 1.")
+        parsed = parse_skill_md("---\nname: Cool Skill\ndescription: does things\n---\n\n# Body\nStep 1.")
         assert parsed["name"] == "Cool Skill"
         assert parsed["description"] == "does things"
         assert "Step 1." in parsed["body"]

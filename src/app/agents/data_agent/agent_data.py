@@ -150,7 +150,7 @@ def _read_ledger(steps: list) -> str:
 # Bundled skills (SKILL.md files) shipped with the agent, always available via progressive
 # disclosure regardless of whether the session has a granted folder. Mounted read-only at
 # SKILLS_MOUNT by the per-session backend.
-_BUNDLED_SKILLS_DIR = os.path.join(os.path.dirname(__file__), "skills")
+BUNDLED_SKILLS_DIR = os.path.join(os.path.dirname(__file__), "skills")
 
 
 def load_system_prompt() -> str:
@@ -880,7 +880,7 @@ def _create_data_deep_agent(
     kwargs["backend"] = make_backend_factory(
         root_dir or "",
         writable=folder_writable,
-        skills_dir=_BUNDLED_SKILLS_DIR,
+        skills_dir=BUNDLED_SKILLS_DIR,
         user_skills_dir=skills_dir,
         workspace_wrapper=workspace_wrapper,
     )

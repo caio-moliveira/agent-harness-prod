@@ -79,3 +79,16 @@ class SourceStatusResponse(BaseModel):
 
 class DisconnectResponse(BaseModel):
     message: str
+
+
+class SessionFileItem(BaseModel):
+    """One entry in the session's granted folder, for the composer's `@` mention picker."""
+
+    path: str = Field(description="Workspace-relative path, e.g. /vendas.csv")
+    is_dir: bool = False
+
+
+class SessionFilesResponse(BaseModel):
+    """The (shallow) listing of a session's granted folder. Empty when no folder is granted."""
+
+    files: List[SessionFileItem] = Field(default_factory=list)

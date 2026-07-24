@@ -13,9 +13,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 
 from src.app.api.security.limiter import limiter
 from src.app.api.v1.auth import get_current_user
+from src.app.agents.data_agent.agent_data import BUNDLED_SKILLS_DIR
 from src.app.core.agent.agent_dtos import (
     AgentCreate,
     AgentResponse,
+    AgentSkillItem,
+    AgentSkillsResponse,
     AgentUpdate,
     BindDatabaseRequest,
     BindDatabaseResponse,
@@ -34,7 +37,9 @@ from src.app.core.ingestion.trigger import schedule_folder_ingestion
 from src.app.core.sandbox.paths import validate_grantable_folder
 from src.app.core.sandbox.upload import save_uploaded_folder
 from src.app.core.security import encrypt, is_encryption_available
+from src.app.core.skill.registry import parse_skill_md
 from src.app.core.skill.skill_dtos import AttachSkillsRequest
+from src.app.core.skill.skill_status import filter_loadable
 from src.app.core.user.user_model import User
 from src.app.init import agent_repository, skill_repository
 
@@ -295,6 +300,42 @@ async def unbind_database(
         raise HTTPException(status_code=404, detail="Agent not found")
     logger.info("agent_database_unbound", agent_id=agent_id, user_id=user.id)
     return BindDatabaseResponse(id=agent_id, database=None, password_persisted=False)
+
+
+def _list_bundled_skills() -> list[AgentSkillItem]:
+    """Parse the bundled SKILL.md files shipped with the Data Agent (always available)."""
+    items: list[AgentSkillItem] = []
+    if not os.path.isdir(BUNDLED_SKILLS_DIR):
+        return items
+    for entry in sorted(os.listdir(BUNDLED_SKILLS_DIR)):
+        skill_md_path = os.path.join(BUNDLED_SKILLS_DIR, entry, "SKILL.md")
+        if not os.path.isfile(skill_md_path):
+            continue
+        with open(skill_md_path, "r", encoding="utf-8") as f:
+            parsed = parse_skill_md(f.read())
+        items.append(AgentSkillItem(name=parsed["name"] or entry, description=parsed["description"], source="bundled"))
+    return items
+
+
+@router.get("/{agent_id}/skills", response_model=AgentSkillsResponse)
+@limiter.limit(_RATE)
+async def list_agent_skills(
+    request: Request, agent_id: int, user: User = Depends(get_current_user)
+) -> AgentSkillsResponse:
+    """List the skills this agent can actually load right now: bundled + approved attached.
+
+    Backs the chat composer's `/` mention picker. Reuses the same approval filter the runtime
+    materializer uses (``filter_loadable``), so the picker's list can never drift from what the
+    agent actually loads into a session.
+    """
+    agent = await _owned_agent_or_error(agent_id, user)
+    items = _list_bundled_skills()
+    skill_ids = list((agent.config or {}).get("skills", []))
+    if skill_ids:
+        found = await skill_repository.get_skills_by_ids(skill_ids)
+        for skill in filter_loadable(found, user.id):
+            items.append(AgentSkillItem(name=skill.name, description=skill.description, source="attached"))
+    return AgentSkillsResponse(skills=items)
 
 
 @router.put("/{agent_id}/skills", response_model=AgentResponse)

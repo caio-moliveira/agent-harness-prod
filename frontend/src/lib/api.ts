@@ -1,6 +1,7 @@
 import type { PickedFile } from "./folderUpload";
 import type {
   Agent,
+  AgentSkillItem,
   ArtifactPreview,
   Skill,
   RegistrySkill,
@@ -12,6 +13,7 @@ import type {
   HistoryMessage,
   Message,
   SessionEvent,
+  SessionFileItem,
   SessionResponse,
   SourceStatus,
   StreamEvent,
@@ -303,6 +305,15 @@ export async function attachAgentSkills(
   return (await ensureOk(res)).json();
 }
 
+/** Skills this agent can actually load right now (bundled + approved attached) — for the composer's `/` picker. */
+export async function listAgentSkills(userToken: string, agentId: number): Promise<AgentSkillItem[]> {
+  const res = await fetchWithRetry(`${BASE}/agents/${agentId}/skills`, {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  const data: { skills?: AgentSkillItem[] } = await (await ensureOk(res)).json();
+  return data.skills ?? [];
+}
+
 // --- Skills: the user's reusable instruction documents ---
 
 export async function listSkills(userToken: string): Promise<Skill[]> {
@@ -328,6 +339,15 @@ export async function deleteSkill(userToken: string, skillId: number): Promise<v
     headers: { Authorization: `Bearer ${userToken}` },
   });
   await ensureOk(res);
+}
+
+export async function updateSkillStatus(userToken: string, skillId: number, status: string): Promise<Skill> {
+  const res = await fetch(`${BASE}/skills/${skillId}/status`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({ status }),
+  });
+  return (await ensureOk(res)).json();
 }
 
 export async function listRegistry(userToken: string): Promise<RegistrySkill[]> {
@@ -418,6 +438,15 @@ export async function getDataAgentMessages(sessionToken: string, sessionId: stri
   });
   const data: { messages?: HistoryMessage[] } = await (await ensureOk(res)).json();
   return data.messages ?? [];
+}
+
+/** The (shallow) listing of a session's granted folder — for the composer's `@` picker. Empty when no folder. */
+export async function listSessionFiles(sessionToken: string, sessionId: string): Promise<SessionFileItem[]> {
+  const res = await fetchWithRetry(`${BASE}/data-agent/${sessionId}/files`, {
+    headers: { Authorization: `Bearer ${sessionToken}` },
+  });
+  const data: { files?: SessionFileItem[] } = await (await ensureOk(res)).json();
+  return data.files ?? [];
 }
 
 /** Fetch a confirmed artifact as a blob (the endpoint requires the session bearer token). */

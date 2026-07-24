@@ -46,7 +46,7 @@ async def _get(url: str) -> httpx.Response:
         return resp
 
 
-def _parse_skill_md(text: str) -> dict:
+def parse_skill_md(text: str) -> dict:
     """Parse a SKILL.md into name/description/body without a YAML dependency."""
     name, description, body = "", "", text
     match = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", text, re.DOTALL)
@@ -92,7 +92,7 @@ async def fetch_registry_skill(slug: str) -> Optional[dict]:
             return None
         logger.warning("skill_registry_fetch_failed", slug=slug, status=e.response.status_code)
         raise
-    parsed = _parse_skill_md(resp.text)
+    parsed = parse_skill_md(resp.text)
     if not parsed["name"]:
         parsed["name"] = slug
     return parsed

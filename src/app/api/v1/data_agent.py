@@ -36,6 +36,8 @@ from src.app.api.v1.dtos.data_agent import (
     GrantFolderResponse,
     HistoryMessage,
     HistoryStep,
+    SessionFileItem,
+    SessionFilesResponse,
     SourceStatusResponse,
 )
 from src.app.core.common.config import settings
@@ -51,12 +53,14 @@ from src.app.core.ingestion.trigger import (
 from src.app.core.db.connect import build_db_url, connect_readonly
 from src.app.core.security import decrypt
 from src.app.core.sandbox import registry
+from src.app.core.sandbox.backend import build_folder_backend
 from src.app.core.sandbox.paths import is_within_allowed_roots, validate_grantable_folder
 from src.app.core.sandbox.registry import SessionResources
 from src.app.core.sandbox.upload import save_uploaded_folder
 from src.app.core.session.message_model import ChatMessageRole
 from src.app.core.session.session_model import Session
 from src.app.core.skill.materialize import materialize_skills
+from src.app.core.skill.skill_status import filter_loadable
 from src.app.init import (
     agent_repository,
     chat_message_repository,
@@ -341,7 +345,7 @@ async def _materialize_agent_skills(agent_id: int, owner_id: int, skill_ids) -> 
         return None
     skills = await skill_repository.get_skills_by_ids(list(skill_ids))
     # Only the owner's APPROVED skills load — draft/in_review never reach the agent (#17).
-    loadable = [s for s in skills if s.user_id == owner_id and s.status == "approved"]
+    loadable = filter_loadable(skills, owner_id)
     return materialize_skills(agent_id, loadable)
 
 
@@ -635,6 +639,32 @@ async def download_file(
     if not await asyncio.to_thread(os.path.isfile, target):
         raise HTTPException(status_code=404, detail="Arquivo não encontrado.")
     return FileResponse(target, filename=os.path.basename(target))
+
+
+@router.get("/{session_id}/files", response_model=SessionFilesResponse)
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent_read"][0])
+async def list_session_files(
+    request: Request,
+    session_id: str,
+    session: Session = Depends(get_current_session),
+) -> SessionFilesResponse:
+    """List the files in this session's granted folder, for the composer's `@` mention picker.
+
+    Owner- and session-scoped like the sibling download route. Resolves through the same
+    confined backend the agent's own read/glob tools use (``build_folder_backend``), so the
+    picker's confinement guarantee is identical to the agent's — never a parallel reimplementation.
+    A session with no granted folder returns an empty list rather than erroring.
+    """
+    _require_session(session_id, session)
+    res = await registry.get(session.id)
+    folder = res.folder if res else None
+    if not folder:
+        return SessionFilesResponse(files=[])
+    backend = build_folder_backend(folder)
+    entries = await asyncio.to_thread(backend.ls_info, "/")
+    return SessionFilesResponse(
+        files=[SessionFileItem(path=e["path"], is_dir=e.get("is_dir", False)) for e in entries]
+    )
 
 
 @router.get("/status", response_model=SourceStatusResponse)

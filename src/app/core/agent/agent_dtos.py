@@ -133,5 +133,19 @@ class BindDatabaseResponse(BaseModel):
     password_persisted: bool = False
 
 
+class AgentSkillItem(BaseModel):
+    """One skill an agent can actually load, for the composer's `/` mention picker."""
+
+    name: str
+    description: str
+    source: str = Field(description="'bundled' (always available) or 'attached' (the user's approved skill)")
+
+
+class AgentSkillsResponse(BaseModel):
+    """The full set of skills usable by an agent right now: bundled + approved attached."""
+
+    skills: list[AgentSkillItem] = Field(default_factory=list)
+
+
 # Resolve the forward reference to DatabaseSummary used by AgentResponse.
 AgentResponse.model_rebuild()

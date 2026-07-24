@@ -492,6 +492,69 @@ class TestUploadFolderEndpoint:
             assert gone.status_code == 200
 
 
+async def _register_and_session(client: AsyncClient, email: str) -> tuple[str, str]:
+    """Register a user and open a session, returning (session_id, session_token)."""
+    reg = await client.post("/api/v1/auth/register", json={"email": email, "password": "TestPass123!"})
+    assert reg.status_code == 200
+    user_token = reg.json()["token"]["access_token"]
+    sess = await client.post("/api/v1/auth/session", headers={"Authorization": f"Bearer {user_token}"})
+    assert sess.status_code == 200
+    body = sess.json()
+    return body["session_id"], body["token"]["access_token"]
+
+
+class TestSessionFilesEndpoint:
+    """GET /{session_id}/files — backs the composer's `@` mention picker (#64)."""
+
+    @pytest.mark.asyncio
+    async def test_lists_granted_folder_shallow(self, client: AsyncClient, tmp_path):
+        from src.app.core.common import config as config_module
+
+        session_id, token = await _register_and_session(client, "files-list-user@example.com")
+        headers = {"Authorization": f"Bearer {token}"}
+        data = tmp_path / "data"
+        data.mkdir()
+        (data / "vendas.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+        (data / "sub").mkdir()
+        (data / "sub" / "nested.txt").write_text("hidden one level down", encoding="utf-8")
+
+        with (
+            patch.object(config_module.settings, "SANDBOX_ENABLED", True),
+            patch.object(config_module.settings, "SANDBOX_ALLOWED_ROOTS", [str(tmp_path)]),
+        ):
+            granted = await client.post("/api/v1/data-agent/grant-folder", json={"path": str(data)}, headers=headers)
+            assert granted.status_code == 200, granted.text
+
+            resp = await client.get(f"/api/v1/data-agent/{session_id}/files", headers=headers)
+            assert resp.status_code == 200
+            paths = {f["path"] for f in resp.json()["files"]}
+            assert "/vendas.csv" in paths
+            # shallow listing: the file nested one level down is not itself surfaced...
+            assert not any("nested.txt" in p for p in paths)
+            # ...only its parent directory is, as a dir entry
+            assert any(p.rstrip("/") == "/sub" for p in paths)
+
+    @pytest.mark.asyncio
+    async def test_empty_when_no_folder_granted(self, client: AsyncClient):
+        session_id, token = await _register_and_session(client, "files-list-empty@example.com")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        resp = await client.get(f"/api/v1/data-agent/{session_id}/files", headers=headers)
+        assert resp.status_code == 200
+        assert resp.json()["files"] == []
+
+    @pytest.mark.asyncio
+    async def test_requires_session_ownership(self, client: AsyncClient):
+        session_id, _owner_token = await _register_and_session(client, "files-list-owner@example.com")
+        _, attacker_token = await _register_and_session(client, "files-list-attacker@example.com")
+
+        resp = await client.get(
+            f"/api/v1/data-agent/{session_id}/files",
+            headers={"Authorization": f"Bearer {attacker_token}"},
+        )
+        assert resp.status_code == 403
+
+
 class TestFileDownloadResolution:
     """The files/download path resolver confines to the granted folder and rejects traversal."""
 

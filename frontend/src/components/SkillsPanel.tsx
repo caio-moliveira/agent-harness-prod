@@ -3,6 +3,15 @@ import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
 import type { RegistrySkill, Skill } from "../lib/types";
 
+const STATUS_BADGES: Record<string, { label: string; className: string }> = {
+  draft: { label: "Rascunho", className: "bg-slate-800 text-slate-400" },
+  in_review: {
+    label: "Em revisão",
+    className: "bg-amber-950/60 text-amber-300 ring-1 ring-inset ring-amber-800/50",
+  },
+  approved: { label: "Aprovada", className: "bg-emerald-900 text-emerald-200" },
+};
+
 /** Slide-over panel to author and manage the user's skill library. */
 export default function SkillsPanel({ onClose }: { onClose: () => void }) {
   const { userToken } = useAuth();
@@ -12,6 +21,7 @@ export default function SkillsPanel({ onClose }: { onClose: () => void }) {
   const [body, setBody] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [approvingId, setApprovingId] = useState<number | null>(null);
   const [registry, setRegistry] = useState<RegistrySkill[] | null>(null);
 
   async function refresh() {
@@ -55,6 +65,25 @@ export default function SkillsPanel({ onClose }: { onClose: () => void }) {
     }
   }
 
+  async function handleApprove(skill: Skill) {
+    if (!userToken || skill.status === "approved" || approvingId !== null) return;
+    setApprovingId(skill.id);
+    try {
+      let updated = skill;
+      if (updated.status === "draft") {
+        updated = await api.updateSkillStatus(userToken, skill.id, "in_review");
+      }
+      if (updated.status === "in_review") {
+        updated = await api.updateSkillStatus(userToken, skill.id, "approved");
+      }
+      setSkills((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao aprovar skill");
+    } finally {
+      setApprovingId(null);
+    }
+  }
+
   async function loadRegistry() {
     if (!userToken) return;
     try {
@@ -93,20 +122,37 @@ export default function SkillsPanel({ onClose }: { onClose: () => void }) {
         {skills.length === 0 ? (
           <p className="text-sm text-slate-500">Nenhuma skill ainda. Crie uma abaixo.</p>
         ) : (
-          skills.map((s) => (
-            <div key={s.id} className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2">
-              <div className="flex items-center justify-between gap-2">
-                <p className="truncate text-sm font-medium">{s.name}</p>
-                <button
-                  onClick={() => void handleDelete(s)}
-                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-400 hover:bg-slate-800"
-                >
-                  Excluir
-                </button>
+          skills.map((s) => {
+            const badge = STATUS_BADGES[s.status] ?? STATUS_BADGES.draft;
+            return (
+              <div key={s.id} className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="truncate text-sm font-medium">{s.name}</p>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] ${badge.className}`}>{badge.label}</span>
+                    <button
+                      onClick={() => void handleDelete(s)}
+                      className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-400 hover:bg-slate-800"
+                    >
+                      Excluir
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <p className="truncate text-xs text-slate-500">{s.description || "sem descrição"}</p>
+                  {s.status !== "approved" && (
+                    <button
+                      onClick={() => void handleApprove(s)}
+                      disabled={approvingId === s.id}
+                      className="shrink-0 rounded border border-emerald-700 bg-emerald-950/40 px-2 py-1 text-xs text-emerald-200 hover:bg-emerald-900/50 disabled:opacity-50"
+                    >
+                      {approvingId === s.id ? "Aprovando…" : "Aprovar"}
+                    </button>
+                  )}
+                </div>
               </div>
-              <p className="truncate text-xs text-slate-500">{s.description || "sem descrição"}</p>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 

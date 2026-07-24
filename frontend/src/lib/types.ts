@@ -46,12 +46,24 @@ export interface Skill {
   description: string;
   body: string;
   source: string;
+  status: string;
 }
 
 export interface RegistrySkill {
   slug: string;
   name: string;
   description: string;
+}
+
+export interface AgentSkillItem {
+  name: string;
+  description: string;
+  source: "bundled" | "attached";
+}
+
+export interface SessionFileItem {
+  path: string;
+  is_dir: boolean;
 }
 
 export interface Agent {
