@@ -181,6 +181,12 @@
       "skillPath": "config/skills/langchain-typescript-quickstart/SKILL.md",
       "computedHash": "1c57a182bdd02d47b181229728a3b59986cf97d0db76861dc4387974ab46dcb7"
     },
+    "langfuse": {
+      "source": "langfuse/skills",
+      "sourceType": "github",
+      "skillPath": "skills/langfuse/SKILL.md",
+      "computedHash": "3de1e769de9ed059a35534b6a2d8da1dc2d1175cd4a9257c77592c7c7d41a64e"
+    },
     "langgraph-cli": {
       "source": "langchain-ai/langchain-skills",
       "sourceType": "github",

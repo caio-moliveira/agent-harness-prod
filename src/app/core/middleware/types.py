@@ -137,16 +137,25 @@ def build_invoke_config(
     user_id: Optional[int] = None,
     agent_name: str = "",
 ) -> dict:
-    """Build a LangGraph invoke config shared across all agents."""
+    """Build a LangGraph invoke config shared across all agents.
+
+    ``langfuse_session_id``/``langfuse_user_id`` are Langfuse's own recognized metadata keys (see
+    https://langfuse.com/docs/tracing-features/sessions) — the CallbackHandler reads these
+    specifically to group every trace from the same conversation into one Session in the Langfuse
+    UI. A plain ``session_id`` key would just sit there as inert metadata; every agent invokes
+    through this one function, so the fix applies everywhere at once, with no new spans or calls.
+    """
+    metadata = {
+        "environment": settings.ENVIRONMENT.value,
+        "debug": settings.DEBUG,
+        "langfuse_session_id": session_id,
+    }
+    if user_id is not None:
+        metadata["langfuse_user_id"] = str(user_id)
     return {
         "callbacks": [langfuse_callback_handler],
         "run_name": agent_name,
         "recursion_limit": settings.AGENT_RECURSION_LIMIT,
         "configurable": {"thread_id": session_id},
-        "metadata": {
-            "environment": settings.ENVIRONMENT.value,
-            "debug": settings.DEBUG,
-            "user_id": user_id,
-            "session_id": session_id,
-        },
+        "metadata": metadata,
     }
