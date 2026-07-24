@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { ToolStep } from "../lib/types";
 import { labelFor } from "../lib/toolLabels";
 import Markdown, { looksLikeMarkdown } from "./Markdown";
@@ -51,7 +51,7 @@ function StepCard({ step }: { step: ToolStep }) {
   );
 }
 
-export default function AgentActivity({ steps }: { steps: ToolStep[] }) {
+function AgentActivity({ steps }: { steps: ToolStep[] }) {
   // The plan (`write_todos`) is rendered as a visual checklist by <TodoList>, so hide its raw tool
   // card here — otherwise the user would see the todos JSON blob duplicated as a step.
   const visible = steps.filter((s) => s.name !== "write_todos");
@@ -64,3 +64,8 @@ export default function AgentActivity({ steps }: { steps: ToolStep[] }) {
     </div>
   );
 }
+
+// `steps` keeps a stable array reference for any turn that isn't the one currently streaming
+// (see updateLastAssistant/closeStepInSegments in ChatScreen), so a plain shallow compare is
+// enough to skip re-rendering every past turn's tool cards on each new token.
+export default memo(AgentActivity);

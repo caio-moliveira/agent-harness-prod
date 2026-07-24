@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
 import type { AssistantTurn, Segment, SourceStatus, TodoItem, ToolStep, Turn } from "../lib/types";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
-import SourcesPanel from "./SourcesPanel";
 import AgentActivity from "./AgentActivity";
 import TodoList from "./TodoList";
 import ThinkingPanel from "./ThinkingPanel";
@@ -21,6 +20,9 @@ import {
   IconLogout,
   IconSparkles,
 } from "./icons";
+
+// Opened rarely (an explicit "Fontes" click), so it doesn't need to be in the initial bundle.
+const SourcesPanel = lazy(() => import("./SourcesPanel"));
 
 function updateLastAssistant(turns: Turn[], fn: (a: AssistantTurn) => AssistantTurn): Turn[] {
   const copy = [...turns];
@@ -126,12 +128,20 @@ export default function ChatScreen() {
   const [sources, setSources] = useState<SourceStatus>({ db_connected: false });
   const scrollRef = useRef<HTMLDivElement>(null);
   const stepIdRef = useRef(0);
+  // The in-flight stream's controller. Aborted whenever the visible session changes (switch,
+  // clear, leave, unmount) so a stale generator never mutates a *different* session's `turns`.
+  const streamAbortRef = useRef<AbortController | null>(null);
   // Set when a session is created mid-send, so the [sessionToken] effect doesn't reload (and wipe)
   // the optimistic turns we just added for a brand-new, empty conversation.
   const skipLoadRef = useRef(false);
   // Whether to keep the view pinned to the bottom. Turns false as soon as the user scrolls up,
   // so streaming text never yanks their scrollbar back down; turns true when they return to bottom.
   const stickToBottom = useRef(true);
+
+  // Leaving the chat screen entirely (switch agent / logout) — abort whatever is still streaming.
+  useEffect(() => {
+    return () => streamAbortRef.current?.abort();
+  }, []);
 
   // Update the status of the approval anchored to whichever assistant turn owns this action id.
   function setApprovalStatus(actionId: number, status: "approved" | "rejected") {
@@ -198,6 +208,9 @@ export default function ChatScreen() {
       return;
     }
     let cancelled = false;
+    // The session we're about to show is switching out from under any turn currently streaming —
+    // abort it now, before it can call setTurns against this new session's history.
+    streamAbortRef.current?.abort();
     async function loadHistory() {
       if (!sessionToken || !sessionId) {
         setTurns([]);
@@ -294,6 +307,15 @@ export default function ChatScreen() {
 
     stickToBottom.current = true; // re-engage auto-scroll when the user sends
 
+    // Own this stream: a stale generator (one whose session was switched away from mid-flight)
+    // must never call setTurns against whatever session is on screen now — see the [sessionToken]
+    // effect and the unmount cleanup above, both of which abort via this same ref.
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
+    // Checks the controller's own signal (not ref identity) — abort() on session-switch never
+    // replaces the ref with a new controller, so an identity check would stay true forever.
+    const isCurrent = () => !controller.signal.aborted;
+
     setTurns((prev) => [
       ...prev,
       { role: "user", content: text },
@@ -303,7 +325,8 @@ export default function ChatScreen() {
 
     try {
       // Only the new message is sent — the agent keeps context via its long-term memory, not a replay.
-      for await (const ev of api.streamDataQuery(stoken, sid, text)) {
+      for await (const ev of api.streamDataQuery(stoken, sid, text, controller.signal)) {
+        if (!isCurrent()) break; // superseded — the backend still finishes and persists the turn
         if (ev.type === "tool_start") {
           const id = stepIdRef.current++;
           const step: ToolStep = { id, name: ev.name, input: ev.input, done: false };
@@ -362,12 +385,20 @@ export default function ChatScreen() {
         }
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Erro ao enviar";
-      setTurns((prev) =>
-        updateLastAssistant(prev, (a) => ({ ...settleTodos(a), streaming: false, error: message })),
-      );
+      // An abort from switching sessions isn't a real failure — and by now `turns` belongs to
+      // whatever session is on screen, which is no longer this one, so touching it would corrupt it.
+      const isAbort = err instanceof DOMException && err.name === "AbortError";
+      if (isCurrent() && !isAbort) {
+        const message = err instanceof Error ? err.message : "Erro ao enviar";
+        setTurns((prev) =>
+          updateLastAssistant(prev, (a) => ({ ...settleTodos(a), streaming: false, error: message })),
+        );
+      }
     } finally {
-      setSending(false);
+      if (isCurrent()) {
+        setSending(false);
+        streamAbortRef.current = null;
+      }
       // The first message auto-names the session server-side — refresh the sidebar to show the name.
       if (justCreated) setSidebarReload((k) => k + 1);
     }
@@ -469,7 +500,7 @@ export default function ChatScreen() {
             <div className="mx-auto mt-16 max-w-md text-center text-sm text-slate-500">Carregando conversa…</div>
           ) : turns.length === 0 ? (
             <div className="mx-auto mt-20 flex max-w-md flex-col items-center text-center">
-              <div className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-white shadow-xl shadow-indigo-950/50">
+              <div className="grid h-14 w-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-xl shadow-indigo-950/50">
                 <IconSparkles className="h-7 w-7" />
               </div>
               <p className="mt-4 text-lg font-semibold text-slate-200">Converse com o agente</p>
@@ -483,11 +514,11 @@ export default function ChatScreen() {
             <div className="mx-auto max-w-3xl space-y-5">
               {turns.map((turn, i) =>
                 turn.role === "user" ? (
-                  <div key={i} className="animate-rise">
+                  <div key={i} className="message-enter">
                     <MessageBubble message={{ role: "user", content: turn.content }} authorName="Você" />
                   </div>
                 ) : (
-                  <div key={i} className="animate-rise">
+                  <div key={i} className="message-enter">
                     <div className="pl-[42px]">
                       {turn.thinking && (
                         <ThinkingPanel
@@ -553,7 +584,11 @@ export default function ChatScreen() {
 
       {showTimeline && <ActivityTimeline steps={liveSteps} onClose={() => setShowTimeline(false)} />}
 
-      {showSources && <SourcesPanel onClose={handleCloseSources} />}
+      {showSources && (
+        <Suspense fallback={null}>
+          <SourcesPanel onClose={handleCloseSources} />
+        </Suspense>
+      )}
     </div>
   );
 }

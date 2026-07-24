@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 
 /**
  * Live "raciocínio" panel — the model's summarized reasoning (Anthropic adaptive thinking),
  * streamed token by token. Expanded while the model thinks, then auto-collapses once the answer
  * starts so it doesn't push the response down. Reasoning is live-only (not persisted in history).
  */
-export default function ThinkingPanel({
+function ThinkingPanel({
   text,
   streaming,
   hasAnswer,
@@ -41,3 +41,7 @@ export default function ThinkingPanel({
     </div>
   );
 }
+
+// All props are primitives (string/boolean), so the default shallow compare already skips a
+// re-render whenever the owning turn is unchanged — no custom comparator needed here.
+export default memo(ThinkingPanel);

@@ -1,41 +1,46 @@
 @import "tailwindcss";
 
 /*
- * Design tokens — inspired by the ux-inspiration reference: a deep navy canvas with a
- * vivid azure accent. The whole app already speaks in `slate-*` (neutral surfaces/text)
- * and `indigo-*` (the primary accent), so instead of touching every call site we remap
- * those two scales here. Changing a value below reskins the entire product coherently.
- * Semantic status colors (emerald=ok, red=error, amber=warn) are intentionally left alone.
+ * Design tokens — "neon HUD" theme: a near-black cyan-tinted canvas with a vivid cyan primary
+ * and a violet secondary accent for brand/agent identity. The whole app already speaks in
+ * `slate-*` (neutral surfaces/text) and `indigo-*` (the primary accent), so instead of touching
+ * every call site we remap those two scales here. Changing a value below reskins the entire
+ * product coherently. Semantic status colors (emerald=ok, red=error, amber=warn) are
+ * intentionally left alone.
+ *
+ * indigo-600 is a full-strength neon cyan (#00c2e0) used as a *solid* button fill — solid-fill
+ * buttons pair it with dark ink text (`text-[#000814]`), not white, since white-on-neon-cyan
+ * fails contrast. indigo-200/300/400 stay light/vivid for text and icons drawn on dark surfaces.
  */
 @theme {
-  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
-    Roboto, sans-serif;
+  --font-sans: "Rajdhani", "Exo 2", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
 
-  /* Navy surface + text ramp (remaps `slate`): cool, blue-tinted neutrals. */
-  --color-slate-50: #eff5fb;
-  --color-slate-100: #e4edf7; /* primary text — near-white, faint cool cast */
-  --color-slate-200: #c6d6ea;
-  --color-slate-300: #9fb4d0; /* strong labels */
-  --color-slate-400: #7189a8; /* muted text */
-  --color-slate-500: #526a8a; /* dim / placeholder */
-  --color-slate-600: #3a4f70;
-  --color-slate-700: #273b58; /* input & control borders */
-  --color-slate-800: #1a2b44; /* dividers, hover fills */
-  --color-slate-900: #132339; /* raised surfaces (bubbles, cards, panels) */
-  --color-slate-950: #0a1728; /* app canvas — deep navy */
+  /* Cyan-tinted near-black ramp (remaps `slate`): the HUD canvas + neutrals. */
+  --color-slate-50: #f2f9ff;
+  --color-slate-100: #e2f0ff; /* primary text — near-white, cyan cast */
+  --color-slate-200: #c9def0;
+  --color-slate-300: #a7c4e0; /* strong labels */
+  --color-slate-400: #7ba0c9; /* muted text */
+  --color-slate-500: #4a7ab5; /* dim / placeholder */
+  --color-slate-600: #2a3d5f;
+  --color-slate-700: #1c2c47; /* input & control borders */
+  --color-slate-800: #101a30; /* dividers, hover fills */
+  --color-slate-900: #080e1f; /* raised surfaces (bubbles, cards, panels) */
+  --color-slate-950: #03050f; /* app canvas — near-black */
 
-  /* Azure accent ramp (remaps `indigo`): the primary action / brand color. */
-  --color-indigo-50: #eef4ff;
-  --color-indigo-100: #dbe7fe;
-  --color-indigo-200: #bcd2fb; /* accent text on dark */
-  --color-indigo-300: #91b4f8;
-  --color-indigo-400: #6592f4;
-  --color-indigo-500: #4780f0; /* hover */
-  --color-indigo-600: #2f6fed; /* primary */
-  --color-indigo-700: #2159d6;
-  --color-indigo-800: #1e48ab;
-  --color-indigo-900: #1d3f87;
-  --color-indigo-950: #142850; /* subtle tinted fills for ghost/secondary buttons */
+  /* Neon cyan accent ramp (remaps `indigo`): the primary action / brand color. */
+  --color-indigo-50: #ecfeff;
+  --color-indigo-100: #cffafe;
+  --color-indigo-200: #a3ecff; /* accent text on dark */
+  --color-indigo-300: #67e0fa;
+  --color-indigo-400: #22d3ee; /* icon / spinner-arc pop */
+  --color-indigo-500: #33ebff; /* hover — brighter than the primary fill */
+  --color-indigo-600: #00c2e0; /* primary solid fill — pair with dark ink text, not white */
+  --color-indigo-700: #0e93ab;
+  --color-indigo-800: #0b6478;
+  --color-indigo-900: #0a4a58;
+  --color-indigo-950: #072c36; /* subtle tinted fills for ghost/secondary buttons */
 }
 
 html,
@@ -47,49 +52,187 @@ body,
 body {
   margin: 0;
   font-family: var(--font-sans);
-  /* Soft top-lit vignette so the canvas has depth rather than reading as flat black. */
+  /* Faint HUD grid over a soft top-lit vignette, so the canvas has depth instead of reading flat. */
   background:
-    radial-gradient(140% 120% at 50% -10%, #10233b 0%, #0a1728 52%, #081321 100%) fixed;
-  color: #e4edf7;
+    linear-gradient(rgba(0, 229, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 229, 255, 0.05) 1px, transparent 1px),
+    radial-gradient(140% 120% at 50% -10%, #0a1424 0%, #03050f 52%, #020309 100%) fixed;
+  background-size:
+    40px 40px,
+    40px 40px,
+    auto;
+  color: #e2f0ff;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
-/* Navy-tinted scrollbars so they belong to the surface instead of the OS chrome. */
+@media (prefers-reduced-motion: no-preference) {
+  body {
+    animation: grid-glow 4s ease-in-out infinite;
+  }
+}
+
+/* Cyan-tinted scrollbars so they belong to the surface instead of the OS chrome. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #27395a transparent;
+  scrollbar-color: #1c2c47 transparent;
 }
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 *::-webkit-scrollbar-thumb {
-  background-color: #27395a;
+  background-color: #1c2c47;
   border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background-color: #35507c;
+  background-color: #2a3d5f;
   background-clip: content-box;
 }
 
 ::selection {
-  background: rgba(47, 111, 237, 0.32);
+  background: rgba(0, 194, 224, 0.35);
 }
 
-/* Gentle rise for message bubbles / cards as they stream in. */
-@keyframes rise {
+@keyframes grid-glow {
+  0%,
+  100% {
+    background-size:
+      40px 40px,
+      40px 40px,
+      auto;
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.6);
+  }
+}
+
+/* A slow single scanline sweeping down the viewport — a signature HUD cue. Purely decorative and
+   ignored by clicks; disabled for reduced-motion since it never conveys state. */
+.scanline {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .scanline::after {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: linear-gradient(transparent, rgba(0, 229, 255, 0.08), transparent);
+    animation: scanline 8s linear infinite;
+  }
+}
+@keyframes scanline {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100vh);
+  }
+}
+
+/* Gentle slide-in for message bubbles / cards as they stream in. */
+@keyframes message-slide-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
     transform: translateY(0);
   }
 }
-.animate-rise {
-  animation: rise 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+.message-enter {
+  animation: message-slide-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Thinking / typing indicator dots — a staggered pulse instead of a plain bounce. */
+@keyframes thinking-dot {
+  0%,
+  80%,
+  100% {
+    transform: scale(0.6);
+    opacity: 0.3;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.thinking-dot:nth-child(1) {
+  animation: thinking-dot 1.4s ease-in-out infinite 0s;
+}
+.thinking-dot:nth-child(2) {
+  animation: thinking-dot 1.4s ease-in-out infinite 0.2s;
+}
+.thinking-dot:nth-child(3) {
+  animation: thinking-dot 1.4s ease-in-out infinite 0.4s;
+}
+
+/* Neon glow pulses — used sparingly, on a single "live" focal point at a time (never on every
+   button at once, which would just be visual noise). Reduced-motion gets a static glow. */
+@keyframes pulse-cyan {
+  0%,
+  100% {
+    box-shadow:
+      0 0 8px rgba(0, 194, 224, 0.4),
+      0 0 20px rgba(0, 194, 224, 0.1);
+  }
+  50% {
+    box-shadow:
+      0 0 16px rgba(0, 194, 224, 0.8),
+      0 0 40px rgba(0, 194, 224, 0.3);
+  }
+}
+@keyframes pulse-violet {
+  0%,
+  100% {
+    box-shadow:
+      0 0 8px rgba(168, 85, 247, 0.4),
+      0 0 20px rgba(168, 85, 247, 0.1);
+  }
+  50% {
+    box-shadow:
+      0 0 16px rgba(168, 85, 247, 0.8),
+      0 0 40px rgba(168, 85, 247, 0.3);
+  }
+}
+.neon-cyan {
+  box-shadow:
+    0 0 8px rgba(0, 194, 224, 0.4),
+    0 0 20px rgba(0, 194, 224, 0.1);
+}
+.neon-violet {
+  box-shadow:
+    0 0 8px rgba(168, 85, 247, 0.4),
+    0 0 20px rgba(168, 85, 247, 0.1);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .neon-cyan {
+    animation: pulse-cyan 3s ease-in-out infinite;
+  }
+  .neon-violet {
+    animation: pulse-violet 3s ease-in-out infinite 1.5s;
+  }
+}
+
+@keyframes glow-border {
+  0%,
+  100% {
+    border-color: rgba(0, 194, 224, 0.3);
+  }
+  50% {
+    border-color: rgba(0, 194, 224, 0.7);
+  }
+}
+.glow-border-anim {
+  animation: glow-border 2s ease-in-out infinite;
 }

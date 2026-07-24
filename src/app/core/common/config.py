@@ -251,7 +251,14 @@ class Settings:
             "deep_research": ["10 per minute"],
             "deep_research_stream": ["10 per minute"],
             "text_to_sql": ["15 per minute"],
-            "data_agent": ["15 per minute"],
+            # Split by cost, not by router: `_stream` actually invokes the LLM (the thing worth
+            # protecting against cost/abuse), `_read` is plain DB reads that fire on every
+            # conversation switch or status poll and shouldn't compete with generation for quota,
+            # `_download` is file I/O. Keyed per-user now (see security/limiter.py), so these are
+            # per-account budgets, not shared across everyone behind one IP.
+            "data_agent_stream": ["20 per minute"],
+            "data_agent_read": ["120 per minute"],
+            "data_agent_download": ["30 per minute"],
             "data_connect": ["10 per minute"],
             "agents": ["60 per minute"],
             "skills": ["60 per minute"],

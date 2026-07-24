@@ -21,9 +21,54 @@ import type {
 
 const BASE = "/api/v1";
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Seconds the server told us to wait (`Retry-After`, plain integer per our slowapi config),
+ *  capped so a large window never stalls the UI for an unreasonable time. */
+function retryAfterMs(res: Response, capMs = 5000): number {
+  const header = res.headers.get("Retry-After");
+  const seconds = header ? Number(header) : NaN;
+  return Number.isFinite(seconds) ? Math.min(Math.max(seconds, 0) * 1000, capMs) : capMs;
+}
+
+/**
+ * Fetch with retry — only for idempotent reads (GET). A transient blip (dropped Wi-Fi, a backend
+ * restart mid-deploy) shouldn't surface as a hard error the first time; a plain 4xx never retries
+ * (the request itself is wrong, retrying won't help) — 429 is the one exception, honoring the
+ * server's own `Retry-After` instead of guessing a backoff. Never use this for POST/PUT/DELETE —
+ * retrying a mutation blindly risks double-applying it.
+ */
+async function fetchWithRetry(url: string, init: RequestInit, retries = 2, backoffMs = 300): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, init);
+    } catch (err) {
+      if (attempt >= retries) throw err;
+      await sleep(backoffMs * 2 ** attempt);
+      continue;
+    }
+    if (attempt < retries && res.status === 429) {
+      await sleep(retryAfterMs(res));
+      continue;
+    }
+    if (res.status >= 500 && attempt < retries) {
+      await sleep(backoffMs * 2 ** attempt);
+      continue;
+    }
+    return res;
+  }
+}
+
 /** Turn a non-2xx response into a readable Error, unwrapping FastAPI error shapes. */
 async function ensureOk(res: Response): Promise<Response> {
   if (res.ok) return res;
+  if (res.status === 429) {
+    const seconds = Math.ceil(retryAfterMs(res) / 1000);
+    throw new Error(`Muitas requisições — aguarde ${seconds}s e tente novamente.`);
+  }
   let detail: string = res.statusText;
   try {
     const body = await res.json();
@@ -76,7 +121,7 @@ export async function createSession(userToken: string, agentId?: number): Promis
 // --- Agents: the user's persisted agent configurations ---
 
 export async function listAgents(userToken: string): Promise<Agent[]> {
-  const res = await fetch(`${BASE}/agents`, {
+  const res = await fetchWithRetry(`${BASE}/agents`, {
     headers: { Authorization: `Bearer ${userToken}` },
   });
   return (await ensureOk(res)).json();
@@ -176,7 +221,7 @@ export interface PendingAction {
 }
 
 export async function listPendingActions(userToken: string): Promise<PendingAction[]> {
-  const res = await fetch(`${BASE}/hitl/pending`, {
+  const res = await fetchWithRetry(`${BASE}/hitl/pending`, {
     headers: { Authorization: `Bearer ${userToken}` },
   });
   return (await ensureOk(res)).json();
@@ -202,7 +247,7 @@ export async function rejectAction(userToken: string, actionId: number): Promise
 }
 
 export async function previewArtifact(userToken: string, actionId: number): Promise<ArtifactPreview> {
-  const res = await fetch(`${BASE}/hitl/${actionId}/preview`, {
+  const res = await fetchWithRetry(`${BASE}/hitl/${actionId}/preview`, {
     headers: { Authorization: `Bearer ${userToken}` },
   });
   return (await ensureOk(res)).json();
@@ -261,7 +306,7 @@ export async function attachAgentSkills(
 // --- Skills: the user's reusable instruction documents ---
 
 export async function listSkills(userToken: string): Promise<Skill[]> {
-  const res = await fetch(`${BASE}/skills`, { headers: { Authorization: `Bearer ${userToken}` } });
+  const res = await fetchWithRetry(`${BASE}/skills`, { headers: { Authorization: `Bearer ${userToken}` } });
   return (await ensureOk(res)).json();
 }
 
@@ -286,7 +331,7 @@ export async function deleteSkill(userToken: string, skillId: number): Promise<v
 }
 
 export async function listRegistry(userToken: string): Promise<RegistrySkill[]> {
-  const res = await fetch(`${BASE}/skills/registry`, { headers: { Authorization: `Bearer ${userToken}` } });
+  const res = await fetchWithRetry(`${BASE}/skills/registry`, { headers: { Authorization: `Bearer ${userToken}` } });
   return (await ensureOk(res)).json();
 }
 
@@ -300,7 +345,7 @@ export async function fetchSkill(userToken: string, slug: string): Promise<Skill
 }
 
 export async function listSessions(userToken: string): Promise<SessionResponse[]> {
-  const res = await fetch(`${BASE}/auth/sessions`, {
+  const res = await fetchWithRetry(`${BASE}/auth/sessions`, {
     headers: { Authorization: `Bearer ${userToken}` },
   });
   return (await ensureOk(res)).json();
@@ -368,7 +413,7 @@ export async function uploadFolder(sessionToken: string, files: PickedFile[]): P
 
 /** A session's persisted conversation history (Data Agent), oldest first, with per-turn activity. */
 export async function getDataAgentMessages(sessionToken: string, sessionId: string): Promise<HistoryMessage[]> {
-  const res = await fetch(`${BASE}/data-agent/${sessionId}/messages`, {
+  const res = await fetchWithRetry(`${BASE}/data-agent/${sessionId}/messages`, {
     headers: { Authorization: `Bearer ${sessionToken}` },
   });
   const data: { messages?: HistoryMessage[] } = await (await ensureOk(res)).json();
@@ -419,14 +464,14 @@ export function saveBlob(blob: Blob, filename: string): void {
 
 /** A session's episodic audit log (persisted actions) — used to rehydrate the activity timeline. */
 export async function listSessionEvents(userToken: string, sessionId: string): Promise<SessionEvent[]> {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/events`, {
+  const res = await fetchWithRetry(`${BASE}/sessions/${sessionId}/events`, {
     headers: { Authorization: `Bearer ${userToken}` },
   });
   return (await ensureOk(res)).json();
 }
 
 export async function dataStatus(sessionToken: string): Promise<SourceStatus> {
-  const res = await fetch(`${BASE}/data-agent/status`, {
+  const res = await fetchWithRetry(`${BASE}/data-agent/status`, {
     headers: { Authorization: `Bearer ${sessionToken}` },
   });
   return (await ensureOk(res)).json();
@@ -459,11 +504,13 @@ export async function* streamDataQuery(
   sessionToken: string,
   sessionId: string,
   query: string,
+  signal?: AbortSignal,
 ): AsyncGenerator<StreamEvent, void, unknown> {
   const res = await fetch(`${BASE}/data-agent/${sessionId}/query/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
     body: JSON.stringify({ query }),
+    signal,
   });
   await ensureOk(res);
 

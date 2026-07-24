@@ -93,7 +93,7 @@ export default function ConversationsSidebar({
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-slate-800 bg-slate-900/40">
       {/* Brand mark */}
       <div className="flex items-center gap-2.5 px-4 pb-3 pt-4">
-        <div className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-white shadow-lg shadow-indigo-950/50">
+        <div className="grid h-8 w-8 place-items-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-950/50">
           <IconSparkles className="h-4 w-4" />
         </div>
         <div className="min-w-0 leading-tight">
@@ -105,9 +105,9 @@ export default function ConversationsSidebar({
       <div className="px-3 pb-2">
         <button
           onClick={onNew}
-          className="flex w-full items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-500"
+          className="flex w-full items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2.5 text-sm font-semibold text-[#000814] transition hover:bg-indigo-500 hover:shadow-[0_0_18px_rgba(0,194,224,0.55)]"
         >
-          <span className="grid h-5 w-5 place-items-center rounded-md bg-white/15">
+          <span className="grid h-5 w-5 place-items-center rounded-md bg-[#000814]/15">
             <IconPlus className="h-3.5 w-3.5" />
           </span>
           Nova conversa

@@ -31,7 +31,7 @@ export default function LoginScreen() {
     <div className="flex h-full items-center justify-center p-4">
       <div className="w-full max-w-sm rounded-2xl border border-slate-800 bg-slate-900/70 p-8 shadow-2xl shadow-slate-950/60 backdrop-blur">
         <div className="mb-5 flex items-center gap-3">
-          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-white shadow-lg shadow-indigo-950/50">
+          <div className="grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-950/50">
             <IconSparkles className="h-6 w-6" />
           </div>
           <div>
@@ -83,7 +83,7 @@ export default function LoginScreen() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
+            className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium text-[#000814] transition hover:bg-indigo-500 hover:shadow-[0_0_18px_rgba(0,194,224,0.55)] disabled:opacity-50 disabled:shadow-none"
           >
             {loading ? "Aguarde…" : mode === "login" ? "Entrar" : "Criar conta"}
           </button>

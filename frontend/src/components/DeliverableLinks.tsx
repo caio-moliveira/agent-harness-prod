@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import * as api from "../lib/api";
 import type { ToolStep } from "../lib/types";
 
@@ -17,7 +17,7 @@ function writePath(step: ToolStep): string | null {
  * (a plan/report `.md`, a `.csv`, …) is otherwise only findable on disk — this keeps the *result*
  * reachable in-app, right under the turn that produced it. Confined server-side to the granted folder.
  */
-export default function DeliverableLinks({
+function DeliverableLinks({
   steps,
   sessionToken,
   sessionId,
@@ -66,3 +66,6 @@ export default function DeliverableLinks({
     </div>
   );
 }
+
+// `steps` keeps a stable array reference for any turn other than the one currently streaming.
+export default memo(DeliverableLinks);

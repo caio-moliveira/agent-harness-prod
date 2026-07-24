@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
 import { filterFolderFiles, validateFolderSize } from "../lib/folderUpload";
 import type { Agent, Skill } from "../lib/types";
-import SkillsPanel from "./SkillsPanel";
+
+// Opened rarely (an explicit "Skills" click), so it doesn't need to be in the initial bundle.
+const SkillsPanel = lazy(() => import("./SkillsPanel"));
 
 export default function AgentsScreen() {
   const { email, userToken, selectAgent, logout } = useAuth();
@@ -526,12 +528,14 @@ export default function AgentsScreen() {
       </div>
 
       {showSkills && (
-        <SkillsPanel
-          onClose={() => {
-            setShowSkills(false);
-            void reloadLibrary();
-          }}
-        />
+        <Suspense fallback={null}>
+          <SkillsPanel
+            onClose={() => {
+              setShowSkills(false);
+              void reloadLibrary();
+            }}
+          />
+        </Suspense>
       )}
 
       <div className="mt-4 border-t border-slate-800 pt-4">
@@ -583,7 +587,7 @@ export default function AgentsScreen() {
               <button
                 type="submit"
                 disabled={busy || !name.trim()}
-                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-[#000814] transition hover:bg-indigo-500 hover:shadow-[0_0_18px_rgba(0,194,224,0.55)] disabled:opacity-50 disabled:shadow-none"
               >
                 Criar
               </button>

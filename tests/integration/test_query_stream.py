@@ -5,6 +5,7 @@ hanging on silence) and (b) persist its partial work — the user message + what
 — so a failed turn is neither invisible nor lost. This guards the P0 fix in ``query_stream``.
 """
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -79,3 +80,33 @@ class TestQueryStreamRobustness:
         assert '"type": "done"' in resp.text
         data = (await client.get(f"/api/v1/data-agent/{sid}/messages", headers=_auth(token))).json()["messages"]
         assert data[-1]["content"] == "tudo certo"
+
+
+class TestHeartbeatSurvivesSlowToolCalls:
+    """A gap longer than the heartbeat interval must not kill the turn producing it (regression).
+
+    ``asyncio.wait_for`` cancels the coroutine it's timing, so a naive heartbeat implementation would
+    tear down the agent turn itself the moment a tool call (e.g. deep research) ran silently longer
+    than the ping interval — the turn would vanish with no terminal event, and the client would be
+    stuck forever on the last thing it saw. This tests ``_with_heartbeat`` directly, the same seam
+    the real endpoint wraps its event generator with.
+    """
+
+    async def test_slow_frame_survives_past_several_heartbeat_intervals(self):
+        """A frame arriving after several ping intervals must still be relayed, not dropped."""
+        from src.app.api.v1.data_agent import _with_heartbeat
+
+        async def _slow_frames():
+            await asyncio.sleep(0.05)  # several multiples of the tiny interval below
+            yield "data: real-frame\n\n"
+
+        pings = 0
+        received = []
+        async for frame in _with_heartbeat(_slow_frames(), interval=0.01):
+            if frame == ": ping\n\n":
+                pings += 1
+                continue
+            received.append(frame)
+
+        assert pings >= 1  # at least one ping fired while the slow tool call was still running
+        assert received == ["data: real-frame\n\n"]  # and the real frame still arrived intact

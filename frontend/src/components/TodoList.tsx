@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { TodoItem } from "../lib/types";
 
 /** Status glyph for a plan item — mirrors the tool-step visual language (spinner / check). */
@@ -14,7 +15,7 @@ function StatusMark({ status }: { status: TodoItem["status"] }) {
  * The agent's live plan, from the `write_todos` tool — a checklist that updates as tasks move from
  * pending → in progress → done, instead of showing the raw JSON in a tool step.
  */
-export default function TodoList({ items }: { items: TodoItem[] }) {
+function TodoList({ items }: { items: TodoItem[] }) {
   if (items.length === 0) return null;
   const done = items.filter((t) => t.status === "completed").length;
 
@@ -46,3 +47,6 @@ export default function TodoList({ items }: { items: TodoItem[] }) {
     </div>
   );
 }
+
+// `items` keeps a stable array reference for any turn other than the one currently streaming.
+export default memo(TodoList);

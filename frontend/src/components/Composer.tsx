@@ -43,7 +43,7 @@ export default function Composer({
           onClick={submit}
           disabled={!canSend}
           title="Enviar (Enter)"
-          className="flex shrink-0 items-center gap-1.5 rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+          className="flex shrink-0 items-center gap-1.5 rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-[#000814] transition hover:bg-indigo-500 hover:shadow-[0_0_18px_rgba(0,194,224,0.55)] disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:shadow-none"
         >
           <IconSend className="h-4 w-4" />
           <span className="hidden sm:inline">Enviar</span>

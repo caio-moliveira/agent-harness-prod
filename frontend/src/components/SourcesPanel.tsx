@@ -179,7 +179,7 @@ export default function SourcesPanel({ onClose }: { onClose: () => void }) {
             <option value="postgresql">PostgreSQL</option>
             <option value="mysql+pymysql">MySQL</option>
           </select>
-          <button onClick={handleConnect} disabled={connecting || !database || !username} className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50">
+          <button onClick={handleConnect} disabled={connecting || !database || !username} className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium text-[#000814] transition hover:bg-indigo-500 hover:shadow-[0_0_18px_rgba(0,194,224,0.55)] disabled:opacity-50 disabled:shadow-none">
             {connecting ? "Conectando…" : "Conectar"}
           </button>
         </section>
@@ -199,7 +199,7 @@ export default function SourcesPanel({ onClose }: { onClose: () => void }) {
           <button
             onClick={() => folderInputRef.current?.click()}
             disabled={uploading}
-            className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
+            className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium text-[#000814] transition hover:bg-indigo-500 hover:shadow-[0_0_18px_rgba(0,194,224,0.55)] disabled:opacity-50 disabled:shadow-none"
           >
             {uploading ? "Enviando…" : "Selecionar pasta…"}
           </button>

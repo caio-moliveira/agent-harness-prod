@@ -157,7 +157,7 @@ async def upload_folder(
 
 
 @router.post("/query", response_model=DataQueryResponse)
-@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent_stream"][0])
 async def query_sources(
     request: Request,
     body: DataQueryRequest,
@@ -447,21 +447,34 @@ async def _with_heartbeat(frames, interval: float = _HEARTBEAT_SECONDS):
 
     A long silent tool call (no intermediate events) could otherwise let a proxy/OS idle-timeout drop
     the connection — which the client can't recover. The ``: ping`` comment is ignored by SSE parsers.
+
+    Must use ``asyncio.wait`` here, never ``wait_for``: ``wait_for`` cancels the awaited coroutine on
+    timeout, which would tear down ``frames`` — and the agent turn running inside it — the moment a
+    single tool call (e.g. deep research) runs longer than ``interval`` with no intermediate event.
+    That silently killed the turn and ended the stream with no terminal event, leaving the client
+    stuck forever on the last thing it saw. ``asyncio.wait`` only watches the pending next-frame task;
+    a ping timeout never touches it, so slow tool calls keep running across as many pings as it takes.
     """
     it = frames.__aiter__()
-    while True:
-        try:
-            frame = await asyncio.wait_for(it.__anext__(), timeout=interval)
-        except asyncio.TimeoutError:
-            yield ": ping\n\n"
-            continue
-        except StopAsyncIteration:
-            return
-        yield frame
+    pending = asyncio.ensure_future(it.__anext__())
+    try:
+        while True:
+            done, _ = await asyncio.wait({pending}, timeout=interval)
+            if not done:
+                yield ": ping\n\n"
+                continue
+            try:
+                frame = pending.result()
+            except StopAsyncIteration:
+                return
+            yield frame
+            pending = asyncio.ensure_future(it.__anext__())
+    finally:
+        pending.cancel()
 
 
 @router.post("/{session_id}/query/stream")
-@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent_stream"][0])
 async def query_stream(
     request: Request,
     session_id: str,
@@ -530,7 +543,7 @@ async def query_stream(
 
 
 @router.get("/{session_id}/messages", response_model=ChatHistoryResponse)
-@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent_read"][0])
 async def messages(
     request: Request,
     session_id: str,
@@ -551,7 +564,7 @@ async def messages(
 
 
 @router.get("/{session_id}/artifacts/{action_id}/download")
-@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent_download"][0])
 async def download_artifact(
     request: Request,
     session_id: str,
@@ -598,7 +611,7 @@ def _resolve_in_folder(folder: str, requested: str) -> Optional[str]:
 
 
 @router.get("/{session_id}/files/download")
-@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent_download"][0])
 async def download_file(
     request: Request,
     session_id: str,
@@ -625,7 +638,7 @@ async def download_file(
 
 
 @router.get("/status", response_model=SourceStatusResponse)
-@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent"][0])
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_agent_read"][0])
 async def source_status(
     request: Request,
     session: Session = Depends(get_current_session),
