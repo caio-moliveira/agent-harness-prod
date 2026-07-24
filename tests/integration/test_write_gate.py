@@ -125,3 +125,27 @@ class TestFileMutationConfirmationFlow:
 
         assert resp.status_code == 200, resp.text
         assert (tmp_path / "relatorio.md").read_text(encoding="utf-8") == "novo conteúdo"
+
+    async def test_non_owner_cannot_confirm_or_reject(self, client: AsyncClient, tmp_path):
+        from src.app.init import pending_action_repository
+
+        # First registered user on the fresh per-test DB becomes id 1 — matches _gate()'s default
+        # user_id, i.e. the pending action's real owner (mirrors test_hitl.py's own pattern).
+        await client.post("/api/v1/auth/register", json={"email": "gate-owner@example.com", "password": "TestPass123!"})
+        reg = await client.post(
+            "/api/v1/auth/register", json={"email": "gate-attacker@example.com", "password": "TestPass123!"}
+        )
+        attacker_token = reg.json()["token"]["access_token"]
+
+        (tmp_path / "relatorio.md").write_text("original", encoding="utf-8")
+        gate = _gate(str(tmp_path))
+        await gate.aedit("/relatorio.md", "original", "novo conteúdo")
+        pending = await pending_action_repository.list_pending(1)
+
+        headers = {"Authorization": f"Bearer {attacker_token}"}
+        confirm_resp = await client.post(f"/api/v1/hitl/{pending[0].id}/confirm", headers=headers)
+        reject_resp = await client.post(f"/api/v1/hitl/{pending[0].id}/reject", headers=headers)
+
+        assert confirm_resp.status_code == 403
+        assert reject_resp.status_code == 403
+        assert (tmp_path / "relatorio.md").read_text(encoding="utf-8") == "original"

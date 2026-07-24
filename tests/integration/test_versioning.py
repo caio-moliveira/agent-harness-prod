@@ -50,6 +50,36 @@ class FakeFilesystemBackend:
             f.write(updated)
         return EditResult(path=file_path)
 
+    def ls_info(self, path: str):
+        """Unfiltered listing (mirrors real FilesystemBackend: no dotfile exclusion)."""
+        base = self._host(path)
+        return [{"path": "/" + name, "is_dir": os.path.isdir(os.path.join(base, name))} for name in os.listdir(base)]
+
+    def glob_info(self, pattern: str, path: str = "/"):
+        """Unfiltered recursive glob (mirrors real FilesystemBackend: no dotfile exclusion)."""
+        from pathlib import Path
+
+        root = Path(self._host(path))
+        return [{"path": "/" + str(p.relative_to(root)).replace("\\", "/")} for p in root.rglob(pattern) if p.is_file()]
+
+    def grep_raw(self, pattern: str, path=None, glob=None):
+        """Unfiltered recursive text search (mirrors real FilesystemBackend: no dotfile exclusion)."""
+        from pathlib import Path
+
+        root = Path(self._host(path or "/"))
+        matches = []
+        for fp in root.rglob("*"):
+            if not fp.is_file():
+                continue
+            try:
+                text = fp.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, PermissionError, OSError):
+                continue
+            for i, line in enumerate(text.splitlines(), start=1):
+                if pattern in line:
+                    matches.append({"path": "/" + str(fp.relative_to(root)).replace("\\", "/"), "line": i, "text": line})
+        return matches
+
 
 class TestVersioningBackend:
     def test_first_write_is_not_versioned(self, tmp_path):
@@ -109,6 +139,28 @@ class TestVersioningBackend:
             with open(tmp_path / ".versions" / e["snapshot_file"], "r", encoding="utf-8") as f:
                 contents.add(f.read())
         assert contents == {"v2", "v3"}
+
+    def test_versions_dir_hidden_from_ls_glob_and_grep(self, tmp_path):
+        backend = VersioningBackend(FakeFilesystemBackend(str(tmp_path)), str(tmp_path))
+        backend.write("/relatorio.md", "rascunho com um segredo antigo")
+        backend.edit("/relatorio.md", "rascunho com um segredo antigo", "versão final, sem o segredo")
+
+        # Sanity check: the wrapped (fake) backend itself does NOT filter — proves the assertions
+        # below exercise VersioningBackend's own filtering, not an accident of the fake.
+        raw_ls = backend._inner.ls_info("/")
+        assert any(f["path"] == "/.versions" for f in raw_ls)
+
+        ls = backend.ls_info("/")
+        assert all(f["path"] != "/.versions" for f in ls)
+        assert any(f["path"] == "/relatorio.md" for f in ls)
+
+        globbed = backend.glob_info("**/*")
+        assert all(".versions" not in f["path"] for f in globbed)
+
+        # The old snapshot still contains "segredo antigo" on disk — grep must not surface it.
+        hits = backend.grep_raw("segredo antigo")
+        assert hits == []
+        assert backend.grep_raw("sem o segredo")[0]["path"] == "/relatorio.md"
 
 
 class TestVersionTools:
