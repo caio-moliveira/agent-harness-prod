@@ -14,6 +14,7 @@ plus the invariants that the ``execute`` tool is never exposed and ``virtual_mod
 An HTTP-level test confirms ``/grant-folder`` no longer spins up any container.
 """
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -23,8 +24,11 @@ from deepagents.backends import CompositeBackend, FilesystemBackend
 from deepagents.backends.protocol import SandboxBackendProtocol
 from deepagents.middleware.filesystem import FilesystemMiddleware, _supports_execution
 
+from src.app.agents.data_agent.workspace_memory import WorkspaceMemoryMiddleware
 from src.app.core.sandbox.backend import (
     ROOT_DIR_CONFIG_KEY,
+    SKILLS_MOUNT,
+    USER_SKILLS_MOUNT,
     DocumentAwareBackend,
     ReadOnlyBackend,
     build_folder_backend,
@@ -247,6 +251,103 @@ class TestCrossSessionIsolation:
         factory = make_backend_factory(str(tmp_path))
         backend = factory(FakeRuntime(root_dir=None))  # no override in config
         assert "AAA" in backend.read("/workspace/a.txt")
+
+
+# ---------------------------------------------------------------------------
+# Skills mounts: bundled (/skills/) vs. the caller's materialized, approved
+# library (/skills/user/) — regression coverage for a skill attached via the
+# approval workflow silently never reaching the agent (#materialize routing).
+# ---------------------------------------------------------------------------
+
+
+class TestSkillsMounts:
+    def _skill_dir(self, base: os.PathLike | str, slug: str, name: str) -> None:
+        skill_path = os.path.join(str(base), slug)
+        os.makedirs(skill_path, exist_ok=True)
+        with open(os.path.join(skill_path, "SKILL.md"), "w", encoding="utf-8") as f:
+            f.write(f"---\nname: {name}\ndescription: test skill\n---\n\nBody.\n")
+
+    def test_bundled_skill_readable_at_skills_mount(self, tmp_path):
+        bundled = tmp_path / "bundled"
+        self._skill_dir(bundled, "relatorios", "relatorios")
+        factory = make_backend_factory(str(tmp_path / "root"), skills_dir=str(bundled))
+        backend = factory(FakeRuntime(root_dir=str(tmp_path / "root")))
+        assert "relatorios" in backend.read(f"{SKILLS_MOUNT}relatorios/SKILL.md")
+
+    def test_user_skill_readable_at_user_skills_mount(self, tmp_path):
+        """A skill materialized from the approval workflow must resolve through the backend.
+
+        Passing that directory's raw host path directly into ``create_deep_agent(skills=[...])``
+        (instead of mounting it here) silently no-ops: SkillsMiddleware has no direct filesystem
+        access, so an unrouted path falls through to the ephemeral StateBackend, which finds
+        nothing. This is the regression a user hit ("criar-material" skill never usable).
+        """
+        materialized = tmp_path / "materialized" / "agent_1"
+        self._skill_dir(materialized, "criar-material", "criar-material")
+        factory = make_backend_factory(str(tmp_path / "root"), user_skills_dir=str(materialized))
+        backend = factory(FakeRuntime(root_dir=str(tmp_path / "root")))
+        assert "criar-material" in backend.read(f"{USER_SKILLS_MOUNT}criar-material/SKILL.md")
+
+    def test_bundled_and_user_skills_coexist_without_collision(self, tmp_path):
+        bundled = tmp_path / "bundled"
+        materialized = tmp_path / "materialized" / "agent_1"
+        self._skill_dir(bundled, "relatorios", "relatorios")
+        self._skill_dir(materialized, "criar-material", "criar-material")
+        factory = make_backend_factory(
+            str(tmp_path / "root"), skills_dir=str(bundled), user_skills_dir=str(materialized)
+        )
+        backend = factory(FakeRuntime(root_dir=str(tmp_path / "root")))
+        assert "relatorios" in backend.read(f"{SKILLS_MOUNT}relatorios/SKILL.md")
+        assert "criar-material" in backend.read(f"{USER_SKILLS_MOUNT}criar-material/SKILL.md")
+        # Wrong side of the mount never sees the other's skill.
+        assert "error" in backend.read(f"{SKILLS_MOUNT}criar-material/SKILL.md").lower()
+
+    def test_raw_host_path_in_skills_list_would_silently_fail(self, tmp_path):
+        """Documents *why* ``USER_SKILLS_MOUNT`` exists.
+
+        An unrouted absolute path resolves to the ephemeral StateBackend default, not the real
+        directory on disk — the exact bug this mount fixes.
+        """
+        materialized = tmp_path / "materialized" / "agent_1"
+        self._skill_dir(materialized, "criar-material", "criar-material")
+        factory = make_backend_factory(str(tmp_path / "root"))  # no user_skills_dir mounted
+        backend = factory(FakeRuntime(root_dir=str(tmp_path / "root")))
+        raw_path = str(materialized).replace("\\", "/")
+        result = backend.read(f"{raw_path}/criar-material/SKILL.md")
+        assert result.startswith("Error:")  # falls through to StateBackend, which never heard of it
+        assert "criar-material: test skill" not in result
+
+
+# ---------------------------------------------------------------------------
+# Workspace AGENTS.md memory: read through the existing /workspace/ route, no
+# new mount needed (RF-24/25/26) — missing file must degrade gracefully.
+# ---------------------------------------------------------------------------
+
+
+class TestWorkspaceMemory:
+    def test_agents_md_loads_through_existing_workspace_route(self, tmp_path):
+        (tmp_path / "AGENTS.md").write_text("Resumo da pasta: vendas por região.", encoding="utf-8")
+        backend = _backend_for(str(tmp_path))
+        mw = WorkspaceMemoryMiddleware(backend=None, sources=["/workspace/AGENTS.md"])
+        content = mw._load_memory_from_backend_sync(backend, "/workspace/AGENTS.md")
+        assert content is not None
+        assert "vendas por região" in content
+
+    def test_missing_agents_md_is_skipped_gracefully(self, tmp_path):
+        backend = _backend_for(str(tmp_path))  # no AGENTS.md written in this folder
+        mw = WorkspaceMemoryMiddleware(backend=None, sources=["/workspace/AGENTS.md"])
+        content = mw._load_memory_from_backend_sync(backend, "/workspace/AGENTS.md")
+        assert content is None
+
+    def test_formatted_memory_excludes_self_editing_guidance(self, tmp_path):
+        (tmp_path / "AGENTS.md").write_text("Use SQL para tudo.", encoding="utf-8")
+        backend = _backend_for(str(tmp_path))
+        mw = WorkspaceMemoryMiddleware(backend=None, sources=["/workspace/AGENTS.md"])
+        content = mw._load_memory_from_backend_sync(backend, "/workspace/AGENTS.md")
+        formatted = mw._format_agent_memory({"/workspace/AGENTS.md": content})
+        assert "Use SQL para tudo." in formatted
+        assert "edit_file" not in formatted
+        assert "memory_guidelines" not in formatted
 
 
 # ---------------------------------------------------------------------------

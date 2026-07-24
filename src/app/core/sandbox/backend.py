@@ -248,9 +248,15 @@ def build_folder_backend(root_dir: str, *, writable: bool = False) -> BackendPro
     return DocumentAwareBackend(base, root_dir)
 
 
-# Virtual mount for bundled read-only skills (SKILL.md files). deepagents' SkillsMiddleware reads
-# skills through the agent's backend, so host-path skills only load when routed here.
+# Virtual mounts for read-only skills (SKILL.md files). deepagents' SkillsMiddleware reads skills
+# through the agent's backend by prefix, not raw disk paths — a source path only resolves to real
+# content when a matching route is registered here. SKILLS_MOUNT serves the bundled, built-in
+# skills; USER_SKILLS_MOUNT serves the per-agent skills materialized from the user's approved
+# library (see ``core/skill/materialize.py``). Passing that materialized directory straight into
+# ``create_deep_agent(skills=[...])`` without a route here silently no-ops: the path falls through
+# to the ephemeral ``StateBackend`` default, which has never heard of it.
 SKILLS_MOUNT = "/skills/"
+USER_SKILLS_MOUNT = "/skills/user/"
 
 
 def make_backend_factory(
@@ -258,6 +264,7 @@ def make_backend_factory(
     *,
     writable: bool = False,
     skills_dir: Optional[str] = None,
+    user_skills_dir: Optional[str] = None,
     workspace_wrapper: Optional[Callable[[BackendProtocol, str], BackendProtocol]] = None,
 ) -> BackendFactory:
     """Return a per-session backend factory for a Data Agent bound to ``root_dir``.
@@ -265,11 +272,13 @@ def make_backend_factory(
     The returned callable resolves the authorized root directory from the invocation's
     ``config["configurable"]`` (falling back to the ``root_dir`` captured for this session's
     agent), then returns a ``CompositeBackend`` routing ``/workspace/`` → the granted folder
-    backend, ``/skills/`` → a read-only backend over ``skills_dir`` (when given), and every other
-    path → ephemeral ``StateBackend`` scratch. ``writable`` (a per-agent capability, off by default)
-    decides whether the folder allows writes; either way writes stay confined to ``root_dir`` via
-    ``virtual_mode``. The factory does no setup I/O (no external resource is created) — a pure config
-    read plus object construction, so first-response latency carries no ``docker run`` cost.
+    backend, ``/skills/`` → a read-only backend over ``skills_dir`` (bundled skills, when given),
+    ``/skills/user/`` → a read-only backend over ``user_skills_dir`` (the caller's approved,
+    materialized skills, when given), and every other path → ephemeral ``StateBackend`` scratch.
+    ``writable`` (a per-agent capability, off by default) decides whether the folder allows writes;
+    either way writes stay confined to ``root_dir`` via ``virtual_mode``. The factory does no setup
+    I/O (no external resource is created) — a pure config read plus object construction, so
+    first-response latency carries no ``docker run`` cost.
 
     ``workspace_wrapper``, when given, wraps the granted-folder backend (only when ``writable``)
     with an additional layer — e.g. a HITL confirmation gate — that needs context (user/session
@@ -289,6 +298,8 @@ def make_backend_factory(
             routes[prefix] = folder_backend
         if skills_dir:
             routes[SKILLS_MOUNT] = ReadOnlyBackend(FilesystemBackend(root_dir=skills_dir, virtual_mode=True))
+        if user_skills_dir:
+            routes[USER_SKILLS_MOUNT] = ReadOnlyBackend(FilesystemBackend(root_dir=user_skills_dir, virtual_mode=True))
         if not routes:
             # No folder and no skills for this session — ephemeral state only (framework default).
             return default

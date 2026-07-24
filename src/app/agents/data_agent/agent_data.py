@@ -23,6 +23,7 @@ from src.app.agents.data_agent.context_middleware import ToolResultCapMiddleware
 from src.app.agents.data_agent.plan_tools import make_plan_tools
 from src.app.agents.data_agent.subagents import make_deep_research_subagent_spec, make_user_sql_subagent
 from src.app.agents.data_agent.tools import make_memory_tools
+from src.app.agents.data_agent.workspace_memory import WorkspaceMemoryMiddleware
 from src.app.core.checkpoint.checkpointer import get_checkpointer
 from src.app.core.common.config import Environment, settings
 from src.app.core.common.graph_utils import process_messages
@@ -30,7 +31,12 @@ from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
 from src.app.core.learning import get_reflected_preferences
 from src.app.core.llm.factory import active_model_name, create_chat_model
-from src.app.core.sandbox.backend import ROOT_DIR_CONFIG_KEY, SKILLS_MOUNT, make_backend_factory
+from src.app.core.sandbox.backend import (
+    ROOT_DIR_CONFIG_KEY,
+    SKILLS_MOUNT,
+    USER_SKILLS_MOUNT,
+    make_backend_factory,
+)
 from src.app.core.memory.agent_memory_repository import AgentMemoryRepository
 from src.app.core.memory.memory import bg_update_memory, get_relevant_memory
 from src.app.core.middleware import (
@@ -854,13 +860,17 @@ def _create_data_deep_agent(
             ModelCallLimitMiddleware(run_limit=settings.MODEL_CALL_LIMIT, exit_behavior="end"),
         ],
     }
-    # Bundled skills mounted at SKILLS_MOUNT are always available; a caller-provided skills_dir is
-    # appended (higher priority) for per-agent customization (progressive disclosure).
-    kwargs["skills"] = [SKILLS_MOUNT] + ([skills_dir] if skills_dir is not None else [])
+    # Bundled skills mounted at SKILLS_MOUNT are always available; a caller-provided skills_dir
+    # (the user's approved, materialized skills) is appended via its own mount (higher priority)
+    # for per-agent customization (progressive disclosure). Both are virtual routes resolved by
+    # the backend below — SkillsMiddleware has no direct filesystem access, so the raw temp-dir
+    # path itself must never be handed to `skills=[...]` (it would silently resolve to nothing).
+    kwargs["skills"] = [SKILLS_MOUNT] + ([USER_SKILLS_MOUNT] if skills_dir is not None else [])
     # Route the built-in file tools: /workspace → the granted folder (when set), /skills → the
-    # bundled read-only skills, everything else → the framework's ephemeral StateBackend scratch.
-    # A writable folder's overwrites are gated behind explicit confirmation (#57) — only when we
-    # have a user/session to attribute the pending action to.
+    # bundled read-only skills, /skills/user → the caller's materialized skills (when set),
+    # everything else → the framework's ephemeral StateBackend scratch. A writable folder's
+    # overwrites are gated behind explicit confirmation (#57) — only when we have a user/session to
+    # attribute the pending action to.
     workspace_wrapper = None
     if folder_writable and user_id is not None and session_id:
 
@@ -871,8 +881,19 @@ def _create_data_deep_agent(
         root_dir or "",
         writable=folder_writable,
         skills_dir=_BUNDLED_SKILLS_DIR,
+        user_skills_dir=skills_dir,
         workspace_wrapper=workspace_wrapper,
     )
+    # Read-only AGENTS.md briefing for the granted folder (RF-24/25/26, agents.md convention):
+    # reuses the same backend/route as the file tools above, so no new mount is needed. Subclassed
+    # to drop deepagents' stock self-editing guidance — see workspace_memory.py for why.
+    if root_dir is not None:
+        kwargs["middleware"].append(
+            WorkspaceMemoryMiddleware(
+                backend=kwargs["backend"],
+                sources=[f"{settings.SANDBOX_MOUNT_PATH.rstrip('/')}/AGENTS.md"],
+            )
+        )
     # When a checkpointer is available (Postgres), the graph persists per-thread working memory so the
     # agent keeps prior turns' messages/tool results without them being re-sent each turn. None keeps
     # the deep agent stateless (tests/SQLite, or Postgres down).
