@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
+import { filterFolderFiles, validateFolderSize } from "../lib/folderUpload";
 import type { Agent, Skill } from "../lib/types";
 import SkillsPanel from "./SkillsPanel";
 
@@ -25,6 +26,8 @@ export default function AgentsScreen() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [folderInput, setFolderInput] = useState("");
   const [folderWritable, setFolderWritable] = useState(false);
+  const [uploadingFolder, setUploadingFolder] = useState(false);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   // Per-card database editing.
   const [dbEditingId, setDbEditingId] = useState<number | null>(null);
@@ -134,6 +137,35 @@ export default function AgentsScreen() {
       setEditingId(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Falha ao definir a pasta");
+    }
+  }
+
+  async function handleFolderPicked(e: React.ChangeEvent<HTMLInputElement>, agent: Agent) {
+    const fileList = e.target.files;
+    e.target.value = ""; // allow re-picking the same folder later
+    if (!userToken || !fileList || fileList.length === 0) return;
+
+    const filtered = filterFolderFiles(fileList);
+    const sizeError = validateFolderSize(filtered);
+    if (sizeError) {
+      setError(sizeError);
+      return;
+    }
+
+    setError(null);
+    setUploadingFolder(true);
+    try {
+      const res = await api.uploadAgentFolder(userToken, agent.id, filtered.files, folderWritable);
+      setAgents((prev) =>
+        prev.map((a) =>
+          a.id === agent.id ? { ...a, folder: res.folder, folder_writable: res.folder_writable } : a,
+        ),
+      );
+      setEditingId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao enviar a pasta");
+    } finally {
+      setUploadingFolder(false);
     }
   }
 
@@ -267,13 +299,15 @@ export default function AgentsScreen() {
               <div className="mt-2 flex items-center gap-2 text-xs">
                 <span className="text-slate-500">📁</span>
                 {editingId === agent.id ? (
-                  <>
+                  <div className="flex flex-1 flex-wrap items-center gap-2">
                     <input
-                      value={folderInput}
-                      onChange={(e) => setFolderInput(e.target.value)}
-                      placeholder="Caminho da pasta (deve estar em SANDBOX_ALLOWED_ROOTS)"
-                      className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-900 px-2 py-1 outline-none focus:border-indigo-600"
-                      autoFocus
+                      ref={folderInputRef}
+                      type="file"
+                      /* @ts-expect-error webkitdirectory has no TS typing but is supported by every major browser */
+                      webkitdirectory=""
+                      multiple
+                      onChange={(e) => void handleFolderPicked(e, agent)}
+                      className="hidden"
                     />
                     <label
                       className="flex shrink-0 items-center gap-1 text-slate-400"
@@ -288,10 +322,11 @@ export default function AgentsScreen() {
                       gravável
                     </label>
                     <button
-                      onClick={() => void saveFolder(agent)}
-                      className="rounded border border-indigo-700 bg-indigo-950/40 px-2 py-1 text-indigo-200 hover:bg-indigo-900/50"
+                      onClick={() => folderInputRef.current?.click()}
+                      disabled={uploadingFolder}
+                      className="rounded border border-indigo-700 bg-indigo-950/40 px-2 py-1 text-indigo-200 hover:bg-indigo-900/50 disabled:opacity-50"
                     >
-                      Salvar
+                      {uploadingFolder ? "Enviando…" : "Selecionar pasta…"}
                     </button>
                     <button
                       onClick={() => setEditingId(null)}
@@ -299,7 +334,26 @@ export default function AgentsScreen() {
                     >
                       Cancelar
                     </button>
-                  </>
+                    <details className="w-full">
+                      <summary className="cursor-pointer text-[11px] text-slate-500 hover:text-slate-300">
+                        Avançado: caminho no servidor
+                      </summary>
+                      <div className="mt-2 flex items-center gap-2">
+                        <input
+                          value={folderInput}
+                          onChange={(e) => setFolderInput(e.target.value)}
+                          placeholder="Caminho da pasta (deve estar em SANDBOX_ALLOWED_ROOTS)"
+                          className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-900 px-2 py-1 outline-none focus:border-indigo-600"
+                        />
+                        <button
+                          onClick={() => void saveFolder(agent)}
+                          className="rounded border border-indigo-700 bg-indigo-950/40 px-2 py-1 text-indigo-200 hover:bg-indigo-900/50"
+                        >
+                          Salvar
+                        </button>
+                      </div>
+                    </details>
+                  </div>
                 ) : (
                   <>
                     <span className="min-w-0 flex-1 truncate text-slate-400">

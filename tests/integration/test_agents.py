@@ -345,6 +345,61 @@ class TestAgentFolderBinding:
             assert resp.status_code == 403
 
 
+class TestAgentFolderUpload:
+    """Same effect as TestAgentFolderBinding, but via browser upload (#56) instead of a host path."""
+
+    def _files(self) -> list[tuple]:
+        return [("files", ("dados.csv", b"a,b\n1,2\n", "text/csv"))]
+
+    async def test_upload_folder_persists(self, client: AsyncClient, user_token, tmp_path):
+        from src.app.core.common import config as config_module
+
+        agent = await _create_agent(client, user_token)
+        with patch.object(config_module.settings, "SANDBOX_UPLOAD_ROOT", str(tmp_path / "uploads")):
+            resp = await client.put(
+                f"/api/v1/agents/{agent['id']}/folder/upload",
+                files=self._files(),
+                headers=_auth(user_token),
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["folder"] is not None
+            assert resp.json()["folder_writable"] is False
+
+        got = await client.get(f"/api/v1/agents/{agent['id']}", headers=_auth(user_token))
+        assert got.json()["folder"] is not None
+        assert got.json()["folder_writable"] is False
+
+    async def test_upload_folder_writable_flag_persists(self, client: AsyncClient, user_token, tmp_path):
+        from src.app.core.common import config as config_module
+
+        agent = await _create_agent(client, user_token)
+        with patch.object(config_module.settings, "SANDBOX_UPLOAD_ROOT", str(tmp_path / "uploads")):
+            resp = await client.put(
+                f"/api/v1/agents/{agent['id']}/folder/upload",
+                files=self._files(),
+                data={"writable": "true"},
+                headers=_auth(user_token),
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["folder_writable"] is True
+
+        got = await client.get(f"/api/v1/agents/{agent['id']}", headers=_auth(user_token))
+        assert got.json()["folder_writable"] is True
+
+    async def test_cannot_upload_folder_on_another_users_agent(self, client: AsyncClient, user_token, tmp_path):
+        from src.app.core.common import config as config_module
+
+        agent = await _create_agent(client, user_token)
+        attacker = await _register_and_token(client, "folder-upload-attacker@example.com")
+        with patch.object(config_module.settings, "SANDBOX_UPLOAD_ROOT", str(tmp_path / "uploads")):
+            resp = await client.put(
+                f"/api/v1/agents/{agent['id']}/folder/upload",
+                files=self._files(),
+                headers=_auth(attacker),
+            )
+            assert resp.status_code == 403
+
+
 # ---------------------------------------------------------------------------
 # Corrections (#20) — a correction drafts a gated skill refinement + records the signal
 # ---------------------------------------------------------------------------

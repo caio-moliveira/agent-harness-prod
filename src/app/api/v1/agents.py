@@ -6,9 +6,10 @@ configuration consumed by the shared Data Agent runtime — creating one never p
 code or a deployment.
 """
 
+import os
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 
 from src.app.api.security.limiter import limiter
 from src.app.api.v1.auth import get_current_user
@@ -31,6 +32,7 @@ from src.app.core.db.connect import build_db_url, connect_readonly
 from src.app.core.learning import propose_refinement
 from src.app.core.ingestion.trigger import schedule_folder_ingestion
 from src.app.core.sandbox.paths import validate_grantable_folder
+from src.app.core.sandbox.upload import save_uploaded_folder
 from src.app.core.security import encrypt, is_encryption_available
 from src.app.core.skill.skill_dtos import AttachSkillsRequest
 from src.app.core.user.user_model import User
@@ -95,9 +97,7 @@ async def _owned_agent_or_error(agent_id: int, user: User) -> Agent:
 
 @router.post("", response_model=AgentResponse)
 @limiter.limit(_RATE)
-async def create_agent(
-    request: Request, body: AgentCreate, user: User = Depends(get_current_user)
-) -> AgentResponse:
+async def create_agent(request: Request, body: AgentCreate, user: User = Depends(get_current_user)) -> AgentResponse:
     """Create a new agent owned by the authenticated user."""
     config = {"web_search": body.web_search, "sql": body.sql, "memory": body.memory}
     agent = await agent_repository.create_agent(user.id, body.name, body.system_prompt, config=config)
@@ -170,11 +170,36 @@ async def bind_folder(
     return BindFolderResponse(id=agent_id, folder=path, folder_writable=body.writable)
 
 
+@router.put("/{agent_id}/folder/upload", response_model=BindFolderResponse)
+@limiter.limit(_RATE)
+async def upload_agent_folder(
+    request: Request,
+    agent_id: int,
+    background: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    writable: bool = Form(False),
+    user: User = Depends(get_current_user),
+) -> BindFolderResponse:
+    """Bind a folder to an agent by browser upload — same effect as bind_folder, no host path needed.
+
+    The destination is a server-managed directory scoped to (user, agent), never a client-
+    supplied path, so it bypasses SANDBOX_ALLOWED_ROOTS entirely (see sandbox/upload.py).
+    """
+    await _owned_agent_or_error(agent_id, user)
+    dest_dir = os.path.join(settings.SANDBOX_UPLOAD_ROOT, "agents", str(user.id), str(agent_id))
+    path = await save_uploaded_folder(dest_dir, files)
+    updated = await agent_repository.set_config_value(agent_id, "folder", path)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    await agent_repository.set_config_value(agent_id, "folder_writable", writable)
+    schedule_folder_ingestion(background, user.id, agent_id, path)
+    logger.info("agent_folder_bound", agent_id=agent_id, user_id=user.id, folder=path, writable=writable, via="upload")
+    return BindFolderResponse(id=agent_id, folder=path, folder_writable=writable)
+
+
 @router.delete("/{agent_id}/folder", response_model=BindFolderResponse)
 @limiter.limit(_RATE)
-async def unbind_folder(
-    request: Request, agent_id: int, user: User = Depends(get_current_user)
-) -> BindFolderResponse:
+async def unbind_folder(request: Request, agent_id: int, user: User = Depends(get_current_user)) -> BindFolderResponse:
     """Remove an agent's bound folder."""
     await _owned_agent_or_error(agent_id, user)
     updated = await agent_repository.set_config_value(agent_id, "folder", None)
