@@ -137,6 +137,26 @@ export async function bindAgentFolder(
   return (await ensureOk(res)).json();
 }
 
+/** Binds a folder to an agent by browser upload (no host path needed). Persists across sessions. */
+export async function uploadAgentFolder(
+  userToken: string,
+  agentId: number,
+  files: PickedFile[],
+  writable = false,
+): Promise<BindFolderResult> {
+  const fd = new FormData();
+  for (const { file, relativePath } of files) {
+    fd.append("files", file, relativePath);
+  }
+  fd.append("writable", String(writable));
+  const res = await fetch(`${BASE}/agents/${agentId}/folder/upload`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: fd,
+  });
+  return (await ensureOk(res)).json();
+}
+
 export async function unbindAgentFolder(userToken: string, agentId: number): Promise<BindFolderResult> {
   const res = await fetch(`${BASE}/agents/${agentId}/folder`, {
     method: "DELETE",
