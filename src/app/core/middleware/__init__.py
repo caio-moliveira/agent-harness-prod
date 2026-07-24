@@ -9,8 +9,6 @@ Usage::
         LoggingMiddleware,
         MemoryMiddleware,
         GuardrailMiddleware,
-        SummarizationMiddleware,
-        TrimLongMessagesMiddleware,
     )
 
     pipeline = AgentPipeline(
@@ -25,6 +23,4 @@ from src.app.core.middleware.guardrail_middleware import GuardrailMiddleware
 from src.app.core.middleware.logging_middleware import LoggingMiddleware
 from src.app.core.middleware.memory_middleware import MemoryMiddleware
 from src.app.core.middleware.pipeline import AgentPipeline, MiddlewareManager
-from src.app.core.middleware.summarization_middleware import SummarizationMiddleware
-from src.app.core.middleware.trim_long_messages_middleware import TrimLongMessagesMiddleware
 from src.app.core.middleware.types import AgentContext, AgentMiddleware, InvokeResult, NextFn, build_invoke_config
