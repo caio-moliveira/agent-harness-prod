@@ -14,6 +14,7 @@ from langchain.agents.middleware import ModelCallLimitMiddleware, PIIMiddleware
 from langchain_community.utilities import SQLDatabase
 
 from src.app.agents.data_agent.artifact_tools import make_artifact_tools
+from src.app.agents.data_agent.version_tools import make_version_tools
 from src.app.agents.data_agent.compute_tools import make_compute_tools
 from src.app.agents.data_agent.completion_middleware import _DELIVERABLE_TOOLS as _DELIVERABLE_TOOL_NAMES
 from src.app.agents.data_agent.completion_middleware import DeliverableCompletionMiddleware
@@ -137,6 +138,7 @@ def _read_ledger(steps: list) -> str:
         if len(seen) >= _LEDGER_MAX:
             break
     return "\n".join(f"- {label}" for label in seen)
+
 
 # Bundled skills (SKILL.md files) shipped with the agent, always available via progressive
 # disclosure regardless of whether the session has a granted folder. Mounted read-only at
@@ -336,8 +338,7 @@ class DataAgent:
                         "role": "system",
                         "content": (
                             "Trabalho já realizado neste agente (NÃO refaça o que já foi entregue; "
-                            "use `ler_memoria(id)` para detalhes/caminhos antes de gerar algo de novo):\n"
-                            + index
+                            "use `ler_memoria(id)` para detalhes/caminhos antes de gerar algo de novo):\n" + index
                         ),
                     }
                 )
@@ -504,7 +505,7 @@ class DataAgent:
             yield {"type": "token", "content": hint}
         elif turn_incomplete:
             hint = (
-                "_Reuni os dados mas não cheguei a gerar o arquivo neste turno. Envie **\"continuar\"** "
+                '_Reuni os dados mas não cheguei a gerar o arquivo neste turno. Envie **"continuar"** '
                 "que eu finalizo o entregável a partir do que já apurei — sem refazer a análise._"
             )
             answer += hint
@@ -707,7 +708,9 @@ _WRITABLE_FOLDER_NOTE = (
     "A pasta em `/workspace` está em modo LEITURA E ESCRITA nesta sessão: você PODE criar e editar "
     "arquivos nela com `write_file` e `edit_file` (ex.: gerar um relatório em `/workspace/…`). "
     "Toda escrita fica confinada a `/workspace` — nunca escreva fora dela. O banco de dados "
-    "permanece somente leitura."
+    "permanece somente leitura. Toda sobrescrita de um arquivo existente fica salva como versão "
+    "recuperável: use `listar_versoes` pra ver o histórico de um arquivo, ou "
+    "`desfazer_ultima_alteracao` pra restaurar a versão anterior."
 )
 
 
@@ -794,6 +797,10 @@ def _create_data_deep_agent(
     # feeds the success metrics (#21) and reflection (#20). Bound to this session; the deliverable
     # lands in the granted folder when it is writable, else a temp dir.
     tools = tools + make_artifact_tools(user_id, agent_id, session_id, root_dir, folder_writable)
+    # Version history + undo (#55) for a writable folder: every overwrite is snapshotted by the
+    # VersioningBackend wrapping the folder backend (see sandbox/backend.py); these tools let the
+    # agent list that history and restore the most recent prior version of a file.
+    tools = tools + make_version_tools(root_dir, folder_writable)
     # Plan-approval (#19 gate): the agent can propose a plan and pause for the user's OK before large
     # or irreversible work.
     tools = tools + make_plan_tools(user_id, agent_id, session_id)
@@ -848,9 +855,7 @@ def _create_data_deep_agent(
     kwargs["skills"] = [SKILLS_MOUNT] + ([skills_dir] if skills_dir is not None else [])
     # Route the built-in file tools: /workspace → the granted folder (when set), /skills → the
     # bundled read-only skills, everything else → the framework's ephemeral StateBackend scratch.
-    kwargs["backend"] = make_backend_factory(
-        root_dir or "", writable=folder_writable, skills_dir=_BUNDLED_SKILLS_DIR
-    )
+    kwargs["backend"] = make_backend_factory(root_dir or "", writable=folder_writable, skills_dir=_BUNDLED_SKILLS_DIR)
     # When a checkpointer is available (Postgres), the graph persists per-thread working memory so the
     # agent keeps prior turns' messages/tool results without them being re-sent each turn. None keeps
     # the deep agent stateless (tests/SQLite, or Postgres down).
