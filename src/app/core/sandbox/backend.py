@@ -16,7 +16,7 @@ shared/global state, so one session can never resolve another session's folder. 
 
 import os
 from collections import OrderedDict
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
 from deepagents.backends.protocol import (
@@ -253,7 +253,13 @@ def build_folder_backend(root_dir: str, *, writable: bool = False) -> BackendPro
 SKILLS_MOUNT = "/skills/"
 
 
-def make_backend_factory(root_dir: str, *, writable: bool = False, skills_dir: Optional[str] = None) -> BackendFactory:
+def make_backend_factory(
+    root_dir: str,
+    *,
+    writable: bool = False,
+    skills_dir: Optional[str] = None,
+    workspace_wrapper: Optional[Callable[[BackendProtocol, str], BackendProtocol]] = None,
+) -> BackendFactory:
     """Return a per-session backend factory for a Data Agent bound to ``root_dir``.
 
     The returned callable resolves the authorized root directory from the invocation's
@@ -264,6 +270,11 @@ def make_backend_factory(root_dir: str, *, writable: bool = False, skills_dir: O
     decides whether the folder allows writes; either way writes stay confined to ``root_dir`` via
     ``virtual_mode``. The factory does no setup I/O (no external resource is created) — a pure config
     read plus object construction, so first-response latency carries no ``docker run`` cost.
+
+    ``workspace_wrapper``, when given, wraps the granted-folder backend (only when ``writable``)
+    with an additional layer — e.g. a HITL confirmation gate — that needs context (user/session
+    id) this module has no business knowing. Kept generic here so ``sandbox/`` stays a plain
+    backend-plumbing module, not coupled to any particular agent's confirmation flow.
     """
     prefix = _workspace_prefix()
 
@@ -272,7 +283,10 @@ def make_backend_factory(root_dir: str, *, writable: bool = False, skills_dir: O
         default = StateBackend(runtime)
         routes: dict[str, BackendProtocol] = {}
         if resolved:
-            routes[prefix] = build_folder_backend(resolved, writable=writable)
+            folder_backend = build_folder_backend(resolved, writable=writable)
+            if writable and workspace_wrapper is not None:
+                folder_backend = workspace_wrapper(folder_backend, resolved)
+            routes[prefix] = folder_backend
         if skills_dir:
             routes[SKILLS_MOUNT] = ReadOnlyBackend(FilesystemBackend(root_dir=skills_dir, virtual_mode=True))
         if not routes:
