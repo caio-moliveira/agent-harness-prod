@@ -6,6 +6,11 @@ applied. A JSON manifest under ``.versions/`` tracks each file's version history
 configurable number of entries per path (oldest evicted first). Creating a brand-new file (no
 prior content to lose) is not gated — only an actual overwrite is.
 
+The manifest and snapshot blobs live under ``root_dir/.versions/`` (the same tree the wrapped
+backend reads from), so ``ls_info``/``glob_info``/``grep_raw`` explicitly filter that directory
+out — otherwise it would show up as regular folder content, and grep could match stale text
+trapped in an old snapshot.
+
 Deletion is out of scope here: deepagents' ``BackendProtocol`` has no delete/remove operation at
 all today (the standard file tools are ls/read_file/write_file/edit_file/glob/grep), so there is
 nothing existing to version-gate for removal.
@@ -35,6 +40,16 @@ _MANIFEST_FILE = "manifest.json"
 
 def _manifest_path(root_dir: str) -> str:
     return os.path.join(root_dir, _VERSIONS_DIR, _MANIFEST_FILE)
+
+
+def _is_internal_path(path: str) -> bool:
+    """True if ``path`` falls under the internal ``.versions/`` bookkeeping directory.
+
+    The manifest and snapshot blobs live inside ``root_dir`` (there's nowhere else to put them
+    that both backends agree on), so without this check they'd show up in the agent's own
+    ``ls``/``glob``/``grep`` — including grep matching stale content inside old snapshots.
+    """
+    return _VERSIONS_DIR in path.replace("\\", "/").split("/")
 
 
 def load_manifest(root_dir: str) -> list[dict]:
@@ -146,22 +161,29 @@ class VersioningBackend(BackendProtocol):
         self._snapshot_if_exists(file_path, "edit")
         return self._inner.edit(file_path, old_string, new_string, replace_all=replace_all)
 
-    # --- everything else delegates unchanged ---
+    # --- everything else delegates unchanged, minus the internal .versions/ bookkeeping ---
     def ls_info(self, path: str) -> list[FileInfo]:
-        """Delegate directory listing to the wrapped backend."""
-        return self._inner.ls_info(path)
+        """Delegate directory listing to the wrapped backend, hiding ``.versions/``."""
+        return [f for f in self._inner.ls_info(path) if not _is_internal_path(f["path"])]
 
     def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> str:
         """Delegate file read to the wrapped backend."""
         return self._inner.read(file_path, offset=offset, limit=limit)
 
     def grep_raw(self, pattern: str, path: Optional[str] = None, glob: Optional[str] = None) -> list[GrepMatch] | str:
-        """Delegate content search to the wrapped backend."""
-        return self._inner.grep_raw(pattern, path=path, glob=glob)
+        """Delegate content search to the wrapped backend, excluding matches inside ``.versions/``.
+
+        Without this, a grep could match text that only exists in a stale, already-overwritten
+        snapshot — the agent would see it as if it were part of the folder's current content.
+        """
+        result = self._inner.grep_raw(pattern, path=path, glob=glob)
+        if isinstance(result, str):
+            return result
+        return [m for m in result if not _is_internal_path(m["path"])]
 
     def glob_info(self, pattern: str, path: str = "/") -> list[FileInfo]:
-        """Delegate glob matching to the wrapped backend."""
-        return self._inner.glob_info(pattern, path=path)
+        """Delegate glob matching to the wrapped backend, hiding ``.versions/``."""
+        return [f for f in self._inner.glob_info(pattern, path=path) if not _is_internal_path(f["path"])]
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Delegate file download to the wrapped backend."""
