@@ -63,6 +63,22 @@ async def _owned_or_error(action_id: int, user: User):
     return action
 
 
+@router.get("/{action_id}/preview", response_model=PendingActionResponse)
+@limiter.limit(_RATE)
+async def preview_action(
+    request: Request, action_id: int, user: User = Depends(get_current_user)
+) -> PendingActionResponse:
+    """Return a pending action's payload for review before confirming/rejecting. Owner-scoped."""
+    action = await _owned_or_error(action_id, user)
+    return PendingActionResponse(
+        id=action.id,
+        session_id=action.session_id,
+        action_type=action.action_type,
+        payload=action.payload,
+        status=action.status,
+    )
+
+
 @router.post("/{action_id}/confirm")
 @limiter.limit(_RATE)
 async def confirm_action(request: Request, action_id: int, user: User = Depends(get_current_user)) -> dict:

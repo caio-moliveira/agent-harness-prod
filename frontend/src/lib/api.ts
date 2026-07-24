@@ -1,5 +1,6 @@
 import type {
   Agent,
+  ArtifactPreview,
   Skill,
   RegistrySkill,
   DatabaseSummary,
@@ -174,6 +175,13 @@ export async function confirmAction(
 export async function rejectAction(userToken: string, actionId: number): Promise<{ rejected: boolean }> {
   const res = await fetch(`${BASE}/hitl/${actionId}/reject`, {
     method: "POST",
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
+export async function previewArtifact(userToken: string, actionId: number): Promise<ArtifactPreview> {
+  const res = await fetch(`${BASE}/hitl/${actionId}/preview`, {
     headers: { Authorization: `Bearer ${userToken}` },
   });
   return (await ensureOk(res)).json();

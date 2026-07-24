@@ -160,6 +160,59 @@ export interface TurnApproval {
   action_type?: string;
 }
 
+/** Provenance for one claim/item in an artifact — mirrors the backend's Source model. */
+export interface ArtifactSource {
+  kind: "query" | "doc_chunk";
+  tables?: string[];
+  query?: string;
+  extracted_at?: string;
+  document?: string;
+  section?: string;
+  excerpt?: string;
+}
+
+export interface ArtifactClaim {
+  text: string;
+  source?: ArtifactSource | null;
+}
+
+export interface ArtifactSection {
+  heading: string;
+  claims: ArtifactClaim[];
+}
+
+/** Structured content for a docx/pptx artifact — same shape rendered to the final file. */
+export interface ArtifactDocSpec {
+  title: string;
+  subtitle?: string | null;
+  sections: ArtifactSection[];
+}
+
+export interface ArtifactSheet {
+  name: string;
+  columns: string[];
+  rows: unknown[][];
+}
+
+/** Structured content for an xlsx artifact. */
+export interface ArtifactSheetSpec {
+  title: string;
+  sheets: ArtifactSheet[];
+}
+
+/** A pending action's full payload, returned by the preview endpoint. */
+export interface ArtifactPreview {
+  id: number;
+  session_id: string;
+  action_type: string;
+  status: string;
+  payload: {
+    kind?: "spreadsheet";
+    spec?: ArtifactDocSpec | ArtifactSheetSpec;
+    fmt?: string;
+  };
+}
+
 export interface ToolStep {
   id: number;
   name: string;

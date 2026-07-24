@@ -122,3 +122,33 @@ class TestHitlApi:
         token = await _register_and_token(client, f"u-{uuid.uuid4()}@e.com")
         resp = await client.post("/api/v1/hitl/999999/reject", headers=_auth(token))
         assert resp.status_code == 404
+
+
+class TestHitlPreview:
+    async def test_owner_sees_payload(self, client: AsyncClient):
+        from src.app.init import pending_action_repository
+
+        token = await _register_and_token(client, f"owner-{uuid.uuid4()}@e.com")
+        spec = {"title": "Relatório", "sections": [{"heading": "Resumo", "claims": [{"text": "x", "source": None}]}]}
+        action = await pending_action_repository.create(1, "sess", "export_artifact", {"spec": spec, "fmt": "docx"})
+
+        resp = await client.get(f"/api/v1/hitl/{action.id}/preview", headers=_auth(token))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["id"] == action.id
+        assert body["payload"]["spec"] == spec
+
+    async def test_another_user_gets_403(self, client: AsyncClient):
+        from src.app.init import pending_action_repository
+
+        await _register_and_token(client, f"owner-{uuid.uuid4()}@e.com")  # user 1
+        attacker = await _register_and_token(client, f"attacker-{uuid.uuid4()}@e.com")  # user 2
+        action = await pending_action_repository.create(1, "sess", "export_artifact", {"spec": {}})
+
+        resp = await client.get(f"/api/v1/hitl/{action.id}/preview", headers=_auth(attacker))
+        assert resp.status_code == 403
+
+    async def test_missing_action_404(self, client: AsyncClient):
+        token = await _register_and_token(client, f"u-{uuid.uuid4()}@e.com")
+        resp = await client.get("/api/v1/hitl/999999/preview", headers=_auth(token))
+        assert resp.status_code == 404
