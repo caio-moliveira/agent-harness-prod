@@ -13,8 +13,10 @@ from fastapi import (
     APIRouter,
     BackgroundTasks,
     Depends,
+    File,
     HTTPException,
     Request,
+    UploadFile,
 )
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -51,6 +53,7 @@ from src.app.core.security import decrypt
 from src.app.core.sandbox import registry
 from src.app.core.sandbox.paths import is_within_allowed_roots, validate_grantable_folder
 from src.app.core.sandbox.registry import SessionResources
+from src.app.core.sandbox.upload import save_uploaded_folder
 from src.app.core.session.message_model import ChatMessageRole
 from src.app.core.session.session_model import Session
 from src.app.core.skill.materialize import materialize_skills
@@ -128,6 +131,28 @@ async def grant_folder(
     # the same (user, agent) the retrieval tool queries, so the two always match.
     schedule_folder_ingestion(background, session.user_id, session.agent_id, path)
     logger.info("folder_granted", session_id=session.id, folder=path)
+    return GrantFolderResponse(granted=True, folder=path)
+
+
+@router.post("/upload-folder", response_model=GrantFolderResponse)
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["data_connect"][0])
+async def upload_folder(
+    request: Request,
+    background: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    session: Session = Depends(get_current_session),
+) -> GrantFolderResponse:
+    """Grant a folder by browser upload — same effect as grant_folder, no host path needed.
+
+    The destination is a server-managed directory scoped to (user, session), never a client-
+    supplied path, so it bypasses SANDBOX_ALLOWED_ROOTS entirely (see sandbox/upload.py).
+    """
+    dest_dir = os.path.join(settings.SANDBOX_UPLOAD_ROOT, "sessions", str(session.user_id), session.id)
+    logger.info("folder_upload_requested", session_id=session.id, file_count=len(files))
+    path = await save_uploaded_folder(dest_dir, files)
+    await registry.set_folder(session.id, path)
+    schedule_folder_ingestion(background, session.user_id, session.agent_id, path)
+    logger.info("folder_granted", session_id=session.id, folder=path, via="upload")
     return GrantFolderResponse(granted=True, folder=path)
 
 
@@ -501,9 +526,7 @@ async def query_stream(
         terminal = {"type": "error", "content": "Erro ao processar a consulta."} if errored else {"type": "done"}
         yield f"data: {json.dumps(terminal)}\n\n"
 
-    return StreamingResponse(
-        _with_heartbeat(event_generator()), media_type="text/event-stream", headers=_SSE_HEADERS
-    )
+    return StreamingResponse(_with_heartbeat(event_generator()), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 @router.get("/{session_id}/messages", response_model=ChatHistoryResponse)

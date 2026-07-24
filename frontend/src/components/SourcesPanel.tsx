@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
+import { filterFolderFiles, validateFolderSize } from "../lib/folderUpload";
 import type { SourceStatus } from "../lib/types";
 
 export default function SourcesPanel({ onClose }: { onClose: () => void }) {
@@ -20,6 +21,8 @@ export default function SourcesPanel({ onClose }: { onClose: () => void }) {
   // Folder form
   const [folderPath, setFolderPath] = useState("");
   const [granting, setGranting] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   async function refreshStatus() {
     if (!sessionToken) return;
@@ -72,6 +75,31 @@ export default function SourcesPanel({ onClose }: { onClose: () => void }) {
       setError(err instanceof Error ? err.message : "Falha ao autorizar a pasta");
     } finally {
       setGranting(false);
+    }
+  }
+
+  async function handleFolderPicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const fileList = e.target.files;
+    e.target.value = ""; // allow re-picking the same folder later
+    if (!sessionToken || !fileList || fileList.length === 0) return;
+
+    const filtered = filterFolderFiles(fileList);
+    const sizeError = validateFolderSize(filtered);
+    if (sizeError) {
+      setError(sizeError);
+      return;
+    }
+
+    setError(null);
+    setUploading(true);
+    try {
+      await api.uploadFolder(sessionToken, filtered.files);
+      setError(`Pasta enviada (${filtered.files.length} arquivo(s)).`);
+      await refreshStatus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao enviar a pasta");
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -158,15 +186,42 @@ export default function SourcesPanel({ onClose }: { onClose: () => void }) {
 
         {/* Folder form */}
         <section className="mt-4 space-y-2 rounded-xl border border-slate-800 p-4">
-          <h3 className="text-sm font-medium">Autorizar pasta (somente leitura)</h3>
-          <input value={folderPath} onChange={(e) => setFolderPath(e.target.value)} placeholder="D:/caminho/para/a/pasta" className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm outline-none focus:border-indigo-500" />
-          <button onClick={handleGrant} disabled={granting || !folderPath.trim()} className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50">
-            {granting ? "Autorizando…" : "Autorizar"}
+          <h3 className="text-sm font-medium">Selecionar pasta (somente leitura)</h3>
+          <input
+            ref={folderInputRef}
+            type="file"
+            /* @ts-expect-error webkitdirectory has no TS typing but is supported by every major browser */
+            webkitdirectory=""
+            multiple
+            onChange={(e) => void handleFolderPicked(e)}
+            className="hidden"
+          />
+          <button
+            onClick={() => folderInputRef.current?.click()}
+            disabled={uploading}
+            className="w-full rounded-lg bg-indigo-600 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
+          >
+            {uploading ? "Enviando…" : "Selecionar pasta…"}
           </button>
           <p className="text-[11px] text-slate-500">
-            O agente vê a pasta em <code>/workspace</code> apenas para leitura (nunca grava nem
-            executa comandos). Só pastas sob as raízes configuradas (SANDBOX_ALLOWED_ROOTS) são permitidas.
+            Abre o seletor de pasta do seu computador — os arquivos são enviados e o agente passa a
+            lê-los em <code>/workspace</code>, apenas para leitura (nunca grava nem executa comandos).
           </p>
+
+          <details className="pt-1">
+            <summary className="cursor-pointer text-[11px] text-slate-500 hover:text-slate-300">
+              Avançado: apontar para um caminho no servidor
+            </summary>
+            <div className="mt-2 space-y-2">
+              <input value={folderPath} onChange={(e) => setFolderPath(e.target.value)} placeholder="D:/caminho/para/a/pasta" className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm outline-none focus:border-indigo-500" />
+              <button onClick={handleGrant} disabled={granting || !folderPath.trim()} className="w-full rounded-lg border border-slate-600 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50">
+                {granting ? "Autorizando…" : "Autorizar"}
+              </button>
+              <p className="text-[11px] text-slate-500">
+                Só pastas sob as raízes configuradas no servidor (SANDBOX_ALLOWED_ROOTS) são permitidas.
+              </p>
+            </div>
+          </details>
         </section>
 
         {error && (
