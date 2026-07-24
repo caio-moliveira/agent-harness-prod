@@ -22,6 +22,7 @@ write agent logic; the harness runs it in production.
 |---|---|
 | 🔌 **Connect your data** | Attach a read-only database or grant a local folder. The agent gains SQL and file tools scoped to *that* session — nothing else is exposed. |
 | 💬 **Chat with live activity** | Answers stream token-by-token. Behind the scenes the agent's tools show up in plain language — *"Consultando o banco", "Lendo arquivo", "Gerando planilha"*. |
+| ⌨️ **`/` and `@` mentions** | Type `/` in the composer to pick from the skills this agent can actually use (bundled + your approved ones), or `@` to pick a file already in the granted folder — no more typos or guessing exact names. |
 | 🗂️ **Persistent history** | Every conversation is saved and reopenable from a sidebar. The active conversation's id lives in the URL (`/c/{session_id}`) for easy traceability. |
 | 🕒 **Activity timeline** | A right-hand rail logs everything the agent did this session (queries, file reads, artifacts) — restored when you reopen a past conversation. |
 | ✅ **Human-in-the-loop** | Anything that produces an outward deliverable is *parked for your approval* — it only runs after you say yes, right inside the chat. |
@@ -165,7 +166,9 @@ Why this shape:
 - **Reflection:** confirmed artifacts and audited events feed a reflection pass that derives learned
   preferences (e.g. `preferred_output_format`) injected back into the agent.
 - **Corrections → skills:** user corrections propose skill refinements as drafts that require
-  re-approval before they ever reach the agent.
+  re-approval before they ever reach the agent. The skill library panel shows each skill's status
+  (draft/in_review/approved) with a one-click action to advance it — a skill sitting in `draft` is
+  simply invisible to the agent until then.
 
 ---
 

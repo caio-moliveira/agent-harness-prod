@@ -142,7 +142,12 @@ never heard of it. If you add a new skill source, give it its own mount; don't h
 
 User-authored skills are gated by an approval state machine (`draft → in_review → approved`,
 `src/app/core/skill/skill_status.py`) — only `approved` skills materialize. Editing an approved
-skill returns it to `draft`.
+skill returns it to `draft`. **Every surface that decides which skills a user can see or load must
+filter through `filter_loadable()`** (same module) rather than re-deriving the
+owner+approved check — it's the single rule shared by runtime materialization
+(`_materialize_agent_skills`) and the `GET /agents/{id}/skills` listing behind the chat composer's
+`/` picker. Two independent copies of this filter is exactly how a skill ends up listed but
+unreachable, or reachable but not listed.
 
 ## Workspace memory (`AGENTS.md` in the granted folder)
 
