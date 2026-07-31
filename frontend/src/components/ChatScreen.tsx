@@ -1,7 +1,15 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
-import type { AssistantTurn, Segment, SourceStatus, TodoItem, ToolStep, Turn } from "../lib/types";
+import type {
+  AssistantTurn,
+  ResumableEndReason,
+  Segment,
+  SourceStatus,
+  TodoItem,
+  ToolStep,
+  Turn,
+} from "../lib/types";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import AgentActivity from "./AgentActivity";
@@ -382,8 +390,11 @@ export default function ChatScreen() {
           );
         } else if (ev.type === "done") {
           // A capped/timed-out turn is a recoverable boundary, not a failure: keep everything
-          // rendered and surface the "continuar" notice under the turn.
-          const endReason = ev.reason && ev.reason !== "completed" ? ev.reason : undefined;
+          // rendered and surface the "continuar" notice under the turn. `blocked_input` is NOT
+          // resumable — the refusal is already the answer and repeating it changes nothing.
+          const resumable: ReadonlyArray<string> = ["call_limit", "timeout", "recursion_backstop"];
+          const endReason =
+            ev.reason && resumable.includes(ev.reason) ? (ev.reason as ResumableEndReason) : undefined;
           setTurns((prev) =>
             updateLastAssistant(prev, (a) => ({ ...settleTodos(a), streaming: false, endReason })),
           );

@@ -153,6 +153,24 @@ User-authored skills are gated by an approval state machine (`draft → in_revie
 `src/app/core/skill/skill_status.py`) — only `approved` skills materialize. Editing an approved
 skill returns it to `draft`.
 
+## Guardrails (entrada bloqueia, saída redige)
+
+Política completa em [`docs/security.md`](docs/security.md); o resumo operacional:
+
+- **Entrada** — `core/guardrails/input_screening.py` roda em **todos** os caminhos (streaming
+  inclusive) *antes* do agente: content filter (keywords + prompt injection) e PII de alto risco
+  (chave de API, cartão, SSN, **CPF/CNPJ**). Recusa em pt-BR que nunca ecoa o dado, persistida no
+  histórico, terminando o turno com `done{reason:"blocked_input"}`.
+- **Saída** — `PIIMiddleware` redige e-mail/CPF/CNPJ no que trafega pelo modelo (um resultado de
+  ferramenta levaria os documentos para o contexto, traces e histórico). A avaliação semântica
+  (`evaluate_safety`) **bloqueia no caminho não-stream** e é **auditoria** no streaming
+  (`OUTPUT_SAFETY_AUDIT_ENABLED`, default off) — um veredito pós-hoc não desfaz tokens já lidos, e
+  bufferizar a resposta mataria o streaming. Escolha explícita, não omissão.
+- CPF/CNPJ são validados por **dígito verificador**: sem isso todo id numérico de 11 dígitos das
+  planilhas do usuário seria redigido e a análise sairia corrompida.
+- Ao adicionar detecção de um novo tipo de dado, adicione também o caso negativo (o "parecido que
+  não é") — precisão importa tanto quanto cobertura aqui.
+
 ## SLOs, alertas e runbooks
 
 `observability/` é provisionado pelo compose: Prometheus carrega `prometheus/alerts.yml` (regras de
