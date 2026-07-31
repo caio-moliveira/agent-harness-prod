@@ -38,7 +38,15 @@ async def _run(monkeypatch, evs) -> list[dict]:
     monkeypatch.setattr(ad._step_repo, "get_for_session", AsyncMock(return_value=[]))
     agent = SimpleNamespace(astream_events=await _events(*evs))
     fake_self = SimpleNamespace(
-        agent=agent, name="Data Agent", root_dir=None, agent_id=1, memory_enabled=False, _checkpointer=None
+        agent=agent,
+        name="Data Agent",
+        root_dir=None,
+        agent_id=1,
+        memory_enabled=False,
+        _checkpointer=None,
+        # Normally derived from the compiled graph in DataAgent.__init__ (turn_limits.py); the
+        # stand-in agent has no real graph, so pin a generous value.
+        _recursion_limit=999,
     )
     # Bind the real methods the streamer calls on self, so we exercise the actual event loop.
     fake_self._invoke_config = MethodType(ad.DataAgent._invoke_config, fake_self)

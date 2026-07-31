@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-tests:
+    name: Backend tests (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (incl. test group)
+        # pytest-asyncio lives in the `test` dependency-group — without it every async test is
+        # SILENTLY SKIPPED (pytest reports them as skips, not failures). Never drop --group test.
+        run: uv sync --group test
+
+      - name: Run test suite (unit + integration, in-memory SQLite — no services needed)
+        run: uv run pytest tests/ -q
+
+  e2e:
+    name: E2E (real API + Postgres + mock LLM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mydb
+          POSTGRES_USER: myuser
+          POSTGRES_PASSWORD: mypassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U myuser -d mydb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (incl. test group)
+        run: uv sync --group test
+
+      - name: Run E2E suite
+        # Real API subprocess + scripted mock LLM (OpenAI-compatible; zero tokens spent). Covers
+        # the core product flow, the turn-limit taxonomy (call_limit/timeout), and artifact+HITL.
+        run: RUN_E2E=1 uv run pytest tests/e2e -q
+
+  lint:
+    name: Lint (ruff on changed files)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Ruff on files changed in this PR
+        # Diff-scoped while the pre-existing repo-wide backlog (~550 findings) is paid down —
+        # see issue #69. New/changed files must be clean; untouched legacy files don't block.
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          CHANGED=$(git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}"...HEAD -- '*.py')
+          if [ -z "$CHANGED" ]; then
+            echo "No Python files changed."
+            exit 0
+          fi
+          echo "$CHANGED"
+          echo "$CHANGED" | xargs uv run ruff check
+
+  frontend:
+    name: Frontend (tsc + vite build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check and build
+        run: npm run build
