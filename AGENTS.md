@@ -225,7 +225,7 @@ SLOs atuais: taxa de `reason="error"` < 2% dos turnos · p95 de turno concluído
 `recursion_backstop` **sempre zero** (o invariante da política de limites) · 5xx HTTP < 5%.
 
 Cada alerta carrega uma anotação `runbook` que aponta para a seção correspondente em
-`docs/runbooks.md` — **alerta sem runbook é pager que ninguém sabe responder**.
+[`docs/runbooks.md`](docs/runbooks.md) — **alerta sem runbook é pager que ninguém sabe responder**.
 `tests/unit/test_alert_rules.py` trava as duas pontas: toda regra precisa de severidade, descrição
 e âncora de runbook existente, e **toda série consultada precisa ser uma série que o app expõe de
 fato** (o `prometheus_client` sufixa counters com `_total`, então `rate(llm_errors[5m])` casaria

@@ -4,6 +4,9 @@ Como o produto trata segredos, dados pessoais e entradas hostis. Complementa o `
 descreve o *como* do código) com o *porquê* das decisões de segurança e o que um operador precisa
 fazer em produção.
 
+> Docs vizinhos: [`operations.md`](operations.md) (rotina do operador — backup, retenção,
+> capacidade, sondas) · [`runbooks.md`](runbooks.md) (o que fazer quando um alerta dispara).
+
 O contexto que molda tudo abaixo: o agente recebe acesso de leitura a **uma pasta de trabalho do
 usuário** — planilhas de vendas, contratos, cadastros. É dado real de terceiros, muitas vezes com
 CPF/CNPJ. A postura é: dado sensível não deve *entrar* na conversa, e o que já está nos arquivos
@@ -89,8 +92,13 @@ redigidos adiante, não motivo para recusar o pedido.
   seguro). Nunca inclua diretórios com segredos; raiz de disco anula o sandbox.
 - **Isolamento por usuário**: memórias, sessões, artefatos e downloads são escopados por
   `(user_id, agent_id)` e verificados na rota. Coberto por testes de autorização.
-- **Direito de exclusão**: apagar um usuário exige remover sessões, mensagens, memórias (mem0/
-  pgvector) e artefatos gerados. Rotina automatizada é *follow-up* registrado na issue #75.
+- **Retenção por idade**: `make purge` aplica as janelas de `RETENTION_*`. Os defaults de conversa
+  são `0` (nunca apagar) de propósito — ver [`operations.md`](operations.md#retenção-e-exclusão-lgpd).
+- **Direito de exclusão**: `uv run python -m src.cli.retention erase --user <id>` remove sessões,
+  mensagens, steps, eventos, ações pendentes, memórias (mem0/pgvector), uso, artefatos gerados e a
+  thread de checkpoint — e a própria conta, salvo `--keep-account`. Coberto por
+  `tests/integration/test_retention.py`, porque "conseguimos apagar seus dados" precisa ser fato
+  verificado, não promessa.
 
 ---
 

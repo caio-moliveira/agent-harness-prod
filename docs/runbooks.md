@@ -8,6 +8,12 @@ nobody knows how to answer.
 Consoles: Prometheus `http://localhost:9090` (alertas em `/alerts`) · Grafana
 `http://localhost:3000` (dashboards **Agent Health & SLOs** e **LLM Observability**).
 
+> Docs vizinhos: [`operations.md`](operations.md) (backup, retenção, capacidade, sondas — o que
+> fazer *antes* do alerta) · [`security.md`](security.md) (guardrails, segredos, LGPD).
+>
+> `tests/unit/test_alert_rules.py` trava a sincronia: toda regra em `alerts.yml` precisa de uma
+> seção `##` aqui com o mesmo nome. Renomear um título quebra o teste — de propósito.
+
 ---
 
 ## APIDown

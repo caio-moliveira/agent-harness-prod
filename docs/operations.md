@@ -1,7 +1,10 @@
 # Operação
 
-Backup, retenção, capacidade e sondas de saúde. Complementa [`docs/runbooks.md`](runbooks.md) (o
+Backup, retenção, capacidade e sondas de saúde. Complementa [`runbooks.md`](runbooks.md) (o
 que fazer quando um alerta dispara) com o que fazer **antes** de qualquer alerta disparar.
+
+> Docs vizinhos: [`runbooks.md`](runbooks.md) (resposta a alerta) ·
+> [`security.md`](security.md) (guardrails, segredos, LGPD).
 
 ---
 
@@ -41,10 +44,14 @@ readinessProbe:
 ## Backup e restore
 
 ```bash
-./scripts/backup.sh                       # dump comprimido em ./backups (ou $BACKUP_DIR)
-./scripts/restore.sh backups/x.dump --into mydb_restore_check   # ensaio em banco descartável
-./scripts/restore.sh backups/x.dump       # restauração real (sobre o banco configurado)
+make backup                                # dump comprimido em ./backups (ou $BACKUP_DIR)
+make restore-drill dump=backups/x.dump     # ensaio em banco descartável (<POSTGRES_DB>_restore_check)
+./scripts/restore.sh backups/x.dump        # restauração REAL (sobre o banco configurado) — sem atalho de make
 ```
+
+Os dois primeiros são atalhos para `scripts/backup.sh` e `scripts/restore.sh --into`. A restauração
+real não tem alvo de `make` de propósito: sobrescrever o banco vivo deve custar um comando escrito à
+mão.
 
 **Formato `custom` (-Fc)** de propósito: permite restaurar seletivamente (uma tabela, um schema) e
 já vem comprimido. O backup falha explicitamente se o dump sair menor que 1 KB — melhor um erro
@@ -76,7 +83,7 @@ Registre cada ensaio nessa tabela. Um backup sem ensaio recente é esperança, n
 Dois comandos com propósitos diferentes — não confunda:
 
 ```bash
-uv run python -m src.cli.retention purge                       # janelas de retenção
+make purge                                                     # = retention purge (janelas de retenção)
 uv run python -m src.cli.retention erase --user 42             # direito de exclusão
 uv run python -m src.cli.retention erase --user 42 --keep-account   # apaga histórico, mantém login
 ```
@@ -99,14 +106,15 @@ lateral como uma conversa vazia e inexplicável.
 **Exclusão** (`erase`) atende a um pedido do titular: remove sessões (com mensagens, steps, eventos,
 ações pendentes, artefatos e a thread de checkpoint), memórias, uso e — salvo `--keep-account` — a
 própria conta. Coberto por testes de integração (`tests/integration/test_retention.py`) justamente
-porque "conseguimos apagar seus dados" precisa ser fato verificado.
+porque "conseguimos apagar seus dados" precisa ser fato verificado. A política de dados pessoais que
+justifica isso está em [`security.md`](security.md#dados-pessoais-lgpd).
 
 ---
 
 ## Capacidade
 
 ```bash
-uv run python -m tests.load.streaming_load --users 20 --turns 3
+make load-test USERS=20 TURNS=3        # = python -m tests.load.streaming_load --users 20 --turns 3
 ```
 
 Sobe a API real com o mock LLM (zero tokens) e mede p50/p95/p99 por turno. Medição em
