@@ -24,6 +24,7 @@ from src.app.api.v1.hitl import router as hitl_router
 from src.app.api.v1.metrics import router as metrics_router
 from src.app.api.v1.sessions import router as sessions_router
 from src.app.api.v1.skills import router as skills_router
+from src.app.api.v1.usage import router as usage_router
 from src.app.api.v1.text_to_sql import router as text_to_sql_router
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
@@ -41,6 +42,7 @@ api_router.include_router(skills_router, prefix="/skills", tags=["skills"])
 api_router.include_router(deep_research_router, prefix="/deep-research", tags=["deep-research"])
 api_router.include_router(text_to_sql_router, prefix="/text-to-sql", tags=["text-to-sql"])
 api_router.include_router(data_agent_router, prefix="/data-agent", tags=["data-agent"])
+api_router.include_router(usage_router, prefix="/me", tags=["usage"])
 
 
 @api_router.get("/health")

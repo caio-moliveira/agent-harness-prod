@@ -134,6 +134,25 @@ pedindo "continuar" com frequência demais.
 
 ---
 
+## TokenBudgetsExhaustingFrequently
+
+**Significa** Muitos turnos estão sendo recusados por orçamento diário (`TOKEN_BUDGET_DAILY`). Não é
+falha — é política apertada demais ou uso anômalo.
+
+**Onde olhar**
+- `GET /me/usage` do usuário afetado (ou a tabela `tokenusage`: uma linha por usuário/dia com
+  `turns` e totais) — muitos turnos pequenos e um único turno gigante pedem respostas diferentes.
+- Log `token_budget_exhausted` traz `user_id`, `used` e `limit`.
+
+**O que fazer**
+1. Uso legítimo batendo no teto → suba `TOKEN_BUDGET_DAILY`, ou dê override na conta
+   (`user.token_budget_daily`; `0` = ilimitado para aquele usuário).
+2. Uma conta destoando das demais → investigue abuso antes de subir o limite global.
+3. Consumo alto por turno (poucos `turns`, muitos tokens) → é contexto inflado, não volume:
+   veja `AgentTurnLatencySLOBreach` e o read-ledger do turno.
+
+---
+
 ## LLMProviderErrorsSpiking
 
 **Significa** O provedor está devolvendo erro em volume (`llm_errors`).

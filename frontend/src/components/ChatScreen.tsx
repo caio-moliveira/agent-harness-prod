@@ -14,6 +14,7 @@ import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import AgentActivity from "./AgentActivity";
 import TodoList from "./TodoList";
+import UsageIndicator from "./UsageIndicator";
 import ThinkingPanel from "./ThinkingPanel";
 import ArtifactApproval from "./ArtifactApproval";
 import DeliverableLinks from "./DeliverableLinks";
@@ -434,15 +435,20 @@ export default function ChatScreen() {
   return (
     <div className="flex h-full">
       {userToken && (
-        <ConversationsSidebar
-          userToken={userToken}
-          agentId={agentId}
-          currentSessionId={sessionId}
-          reloadKey={sidebarReload}
-          onSelect={setActiveSession}
-          onNew={handleNewConversation}
-          onDeletedActive={handleDeletedActive}
-        />
+        <div className="flex flex-col">
+          <ConversationsSidebar
+            userToken={userToken}
+            agentId={agentId}
+            currentSessionId={sessionId}
+            reloadKey={sidebarReload}
+            onSelect={setActiveSession}
+            onNew={handleNewConversation}
+            onDeletedActive={handleDeletedActive}
+          />
+          {/* Renders nothing unless a daily budget is configured — see UsageIndicator. Refreshed
+              after each turn so the number the user sees matches what they just spent. */}
+          <UsageIndicator userToken={userToken} reloadKey={turns.length} />
+        </div>
       )}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-slate-800 px-4 py-2.5">

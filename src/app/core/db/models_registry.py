@@ -14,4 +14,5 @@ from src.app.core.learning import models as learning_models  # noqa: F401
 from src.app.core.memory import agent_memory_model  # noqa: F401
 from src.app.core.session import event_model, message_model, session_model  # noqa: F401
 from src.app.core.skill import skill_model  # noqa: F401
+from src.app.core.usage import usage_model  # noqa: F401
 from src.app.core.user import user_model  # noqa: F401

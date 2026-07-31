@@ -132,6 +132,19 @@ export interface TodoItem {
  * recoverable boundaries (call cap / wall-clock timeout / recursion backstop): partial work is
  * persisted server-side and the UI offers "continuar" to resume from the accumulated context.
  */
+/** Token consumption and budget standing for the current UTC day (`GET /me/usage`). */
+export interface UsageStatus {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  turns: number;
+  /** 0 means no budget is enforced. */
+  limit: number;
+  remaining: number;
+  exceeded: boolean;
+  resets_at: string;
+}
+
 export type TurnEndReason =
   | "completed"
   | "call_limit"

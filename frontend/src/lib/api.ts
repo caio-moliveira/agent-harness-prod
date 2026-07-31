@@ -18,6 +18,7 @@ import type {
   SourceStatus,
   StreamEvent,
   TokenResponse,
+  UsageStatus,
   UserResponse,
 } from "./types";
 
@@ -494,6 +495,14 @@ export function saveBlob(blob: Blob, filename: string): void {
 /** A session's episodic audit log (persisted actions) — used to rehydrate the activity timeline. */
 export async function listSessionEvents(userToken: string, sessionId: string): Promise<SessionEvent[]> {
   const res = await fetchWithRetry(`${BASE}/sessions/${sessionId}/events`, {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  return (await ensureOk(res)).json();
+}
+
+/** This account's token usage and budget standing for the current UTC day (cost governance). */
+export async function getUsage(userToken: string): Promise<UsageStatus> {
+  const res = await fetchWithRetry(`${BASE}/me/usage`, {
     headers: { Authorization: `Bearer ${userToken}` },
   });
   return (await ensureOk(res)).json();

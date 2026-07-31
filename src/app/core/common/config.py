@@ -178,6 +178,11 @@ class Settings:
             "1",
             "yes",
         )
+        # Daily token budget per user (#73). 0 = disabled (default): a single-user or local-Ollama
+        # deployment has no per-user cost to govern. Rate limits cap REQUESTS; this caps TOKENS,
+        # which is what an LLM product actually pays for — two users with the same request count
+        # can differ by orders of magnitude. A per-account override lives on the User row.
+        self.TOKEN_BUDGET_DAILY = int(os.getenv("TOKEN_BUDGET_DAILY", "0"))
         # Utility (cheap) model for low-stakes sub-flows (file descriptions, safety check, deep-research
         # internals, and mem0's memory-extraction LLM). Same "provider:model" format; blank = reuse MODEL.
         self.UTILITY_MODEL = os.getenv("UTILITY_MODEL", "")
@@ -293,6 +298,8 @@ class Settings:
             "success_metrics": ["60 per minute"],
             "hitl": ["60 per minute"],
             "session_delete": ["30 per minute"],
+            # Usage/budget read — polled by the UI indicator, so it sits with the other cheap reads.
+            "usage": ["60 per minute"],
             "register": ["10 per hour"],
             "login": ["20 per minute"],
             "root": ["10 per minute"],

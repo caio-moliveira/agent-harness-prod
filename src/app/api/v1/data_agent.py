@@ -53,6 +53,7 @@ from src.app.core.metrics.metrics import (
     agent_turn_terminations_total,
     guardrail_checks_total,
 )
+from src.app.core.usage import check_budget, record_turn_usage
 from src.app.core.ingestion.source_repository import IngestedFileRepository
 from src.app.core.ingestion.trigger import (
     is_ingesting,
@@ -78,6 +79,7 @@ from src.app.init import (
     pending_action_repository,
     session_repository,
     skill_repository,
+    user_repository,
 )
 
 _ARTIFACT_MEDIA_TYPES = {
@@ -397,6 +399,17 @@ async def _persist_user_message(session: Session, query: str) -> None:
         await session_repository.update_session_name(session.id, name)
 
 
+async def _user_budget_override(user_id: int) -> Optional[int]:
+    """This user's per-account daily token budget, or None to follow the global default."""
+    try:
+        user = await user_repository.get_user(user_id)
+        return getattr(user, "token_budget_daily", None) if user else None
+    except Exception:
+        # Never let a budget lookup break a turn: fall back to the global policy.
+        logger.exception("budget_override_lookup_failed", user_id=user_id)
+        return None
+
+
 async def _audit_answer_safety(session_id: str, answer: str) -> None:
     """Record a model-based safety verdict for an answer that was already streamed.
 
@@ -534,10 +547,31 @@ async def query_stream(
         reason = "completed"
         agen = None
         turn_started = time.monotonic()
+        turn_tokens = (0, 0)
         try:
             # Input guardrails run BEFORE anything else — the only point where a guardrail can
             # prevent harm instead of describing it afterwards. Deterministic and microseconds
             # cheap, so the streamed path pays the same policy as the non-streamed one.
+            # Cost governance (#73): checked at the START of a turn against what the user already
+            # spent today. A turn in flight is never killed for budget — the user would lose work
+            # for a limit they could not see coming, and the tokens are already spent.
+            budget = await check_budget(session.user_id, await _user_budget_override(session.user_id))
+            if budget.exceeded:
+                reason = "budget_exhausted"
+                await _persist_user_message(session, body.query)
+                # pt-BR thousands separator, applied per number (never to the whole sentence).
+                limit_str = f"{budget.limit:,}".replace(",", ".")
+                used_str = f"{budget.used:,}".replace(",", ".")
+                message = (
+                    f"Você atingiu o limite diário de {limit_str} tokens desta conta "
+                    f"({used_str} usados). O limite renova às "
+                    f"{budget.resets_at:%H:%M} UTC — depois disso posso retomar normalmente."
+                )
+                answer_parts.append(message)
+                yield f"data: {json.dumps({'type': 'token', 'content': message})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'reason': reason})}\n\n"
+                return
+
             screening = screen_user_input(body.query, session_id=session.id)
             if screening.blocked:
                 reason = "blocked_input"
@@ -566,6 +600,7 @@ async def query_stream(
                     if etype == "turn_end":
                         # Internal marker, not part of the client contract — fold into `done`.
                         reason = ev.get("reason", "completed")
+                        turn_tokens = (ev.get("input_tokens", 0), ev.get("output_tokens", 0))
                         continue
                     if etype == "token":
                         answer_parts.append(ev.get("content", ""))
@@ -626,6 +661,9 @@ async def query_stream(
             # it never delays the turn's last byte.
             if settings.OUTPUT_SAFETY_AUDIT_ENABLED and answer_parts:
                 asyncio.create_task(_audit_answer_safety(session.id, "".join(answer_parts)))
+            # Bill the turn's tokens even when it ended at a limit or errored — the provider
+            # charged for them either way, so the budget must reflect reality, not intent.
+            await record_turn_usage(session.user_id, turn_tokens[0], turn_tokens[1])
         # Always emit a terminal event so the client never hangs on silence. (Skipped only when the
         # generator was cancelled by a disconnect — GeneratorExit — where the client is already gone.)
         # `done` carries how the turn ended so the client can offer "continuar" on a capped/timed-out

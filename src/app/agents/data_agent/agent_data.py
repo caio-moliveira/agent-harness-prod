@@ -419,6 +419,10 @@ class DataAgent:
         # derived to fire first — but if it DOES fire (e.g. a middleware jump loop that consumes no
         # model calls), the turn must end with the same polite UX, never the generic error.
         hit_recursion_backstop = False
+        # Tokens consumed by this turn (parent + subagents), reported by the provider on each
+        # model call's final message. Surfaced in the turn_end marker for the API layer to bill.
+        turn_input_tokens = 0
+        turn_output_tokens = 0
         try:
             async for event in self.agent.astream_events(
                 {"messages": payload_messages}, config=config, version="v2"
@@ -521,6 +525,14 @@ class DataAgent:
                         if kind_ == "token":
                             answer += text
                         yield {"type": kind_, "content": text}
+                elif kind == "on_chat_model_end":
+                    # Token accounting (#73): the provider reports usage on the final message of
+                    # each model call. Subagent calls are counted too — the user pays for them
+                    # just the same — so this is deliberately outside the delegation_depth guard.
+                    usage = getattr(event.get("data", {}).get("output"), "usage_metadata", None)
+                    if usage:
+                        turn_input_tokens += usage.get("input_tokens", 0) or 0
+                        turn_output_tokens += usage.get("output_tokens", 0) or 0
         except GraphRecursionError:
             # Should be unreachable with the derived limit; kept as the last line of defense. The
             # partial work already streamed/persisted survives, and the client gets the same polite
@@ -552,6 +564,8 @@ class DataAgent:
             hit_call_cap=hit_call_cap,
             hit_recursion_backstop=hit_recursion_backstop,
             incomplete=turn_incomplete,
+            input_tokens=turn_input_tokens,
+            output_tokens=turn_output_tokens,
         )
         if hit_call_cap or hit_recursion_backstop:
             hint = (
@@ -577,7 +591,12 @@ class DataAgent:
             turn_reason = "call_limit"
         else:
             turn_reason = "completed"
-        yield {"type": "turn_end", "reason": turn_reason}
+        yield {
+            "type": "turn_end",
+            "reason": turn_reason,
+            "input_tokens": turn_input_tokens,
+            "output_tokens": turn_output_tokens,
+        }
 
         # Store this exchange back into long-term memory (non-blocking), scoped to this agent.
         if self.memory_enabled and user_id is not None and last_user and answer:
