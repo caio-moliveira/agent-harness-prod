@@ -153,6 +153,24 @@ User-authored skills are gated by an approval state machine (`draft → in_revie
 `src/app/core/skill/skill_status.py`) — only `approved` skills materialize. Editing an approved
 skill returns it to `draft`.
 
+## SLOs, alertas e runbooks
+
+`observability/` é provisionado pelo compose: Prometheus carrega `prometheus/alerts.yml` (regras de
+SLO) e o Grafana provisiona os dashboards de `grafana/dashboards/json/` — subir `make
+docker-compose-up ENV=development` já traz alertas (`http://localhost:9090/alerts`) e o dashboard
+**Agent Health & SLOs** funcionando, sem clique manual.
+
+SLOs atuais: taxa de `reason="error"` < 2% dos turnos · p95 de turno concluído < 120s ·
+`recursion_backstop` **sempre zero** (o invariante da política de limites) · 5xx HTTP < 5%.
+
+Cada alerta carrega uma anotação `runbook` que aponta para a seção correspondente em
+`docs/runbooks.md` — **alerta sem runbook é pager que ninguém sabe responder**.
+`tests/unit/test_alert_rules.py` trava as duas pontas: toda regra precisa de severidade, descrição
+e âncora de runbook existente, e **toda série consultada precisa ser uma série que o app expõe de
+fato** (o `prometheus_client` sufixa counters com `_total`, então `rate(llm_errors[5m])` casaria
+com nada e o alerta nunca dispararia — esse bug foi pego exatamente assim). Métrica nova relevante
+nasce com painel e, quando fizer sentido, regra de alerta.
+
 ## Golden evals (quality regression gate)
 
 `evals/` holds the **golden-eval harness** (issue #70): a versioned dataset

@@ -62,6 +62,16 @@ agent_turn_terminations_total = Counter(
     ["agent", "reason"],
 )
 
+# End-to-end wall clock of ONE agent turn (what the user actually waits), as opposed to
+# llm_inference_duration_seconds which times a single model call. This is the series behind the
+# p95-latency SLO; buckets span a quick answer (seconds) to a long multi-deliverable turn.
+agent_turn_duration_seconds = Histogram(
+    "agent_turn_duration_seconds",
+    "Wall-clock duration of one agent turn, by termination reason",
+    ["agent", "reason"],
+    buckets=(1, 2.5, 5, 10, 20, 30, 60, 120, 180, 300, 600),
+)
+
 # Guardrail metrics
 guardrail_checks_total = Counter(
     "guardrail_checks_total",

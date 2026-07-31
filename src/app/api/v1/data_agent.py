@@ -8,6 +8,7 @@ import asyncio
 import contextlib
 import json
 import os
+import time
 from typing import Optional
 
 from fastapi import (
@@ -45,7 +46,7 @@ from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
 from src.app.core.hitl.pending_model import PendingActionStatus
-from src.app.core.metrics.metrics import agent_turn_terminations_total
+from src.app.core.metrics.metrics import agent_turn_duration_seconds, agent_turn_terminations_total
 from src.app.core.ingestion.source_repository import IngestedFileRepository
 from src.app.core.ingestion.trigger import (
     is_ingesting,
@@ -508,6 +509,7 @@ async def query_stream(
         # (enforced here) | error. Rides on the terminal `done` event and the terminations metric.
         reason = "completed"
         agen = None
+        turn_started = time.monotonic()
         try:
             known_ids = await _session_pending_ids(session)
             # Rebuild the recent context from our own persisted history (the client sends only the
@@ -576,6 +578,9 @@ async def query_stream(
             except Exception:
                 logger.exception("data_stream_persist_failed", session_id=session.id)
             agent_turn_terminations_total.labels(agent="data_agent", reason=reason).inc()
+            agent_turn_duration_seconds.labels(agent="data_agent", reason=reason).observe(
+                time.monotonic() - turn_started
+            )
         # Always emit a terminal event so the client never hangs on silence. (Skipped only when the
         # generator was cancelled by a disconnect — GeneratorExit — where the client is already gone.)
         # `done` carries how the turn ended so the client can offer "continuar" on a capped/timed-out
