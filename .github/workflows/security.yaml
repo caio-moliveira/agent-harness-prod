@@ -1,0 +1,67 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  # Vulnerabilities are disclosed against code that never changed — a weekly sweep catches those.
+  schedule:
+    - cron: "0 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    name: Dependency audit (pip-audit + npm audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Audit Python dependencies
+        # Reporting, not blocking (yet): a fresh advisory against a transitive dep would otherwise
+        # block every unrelated PR. Review the summary and pin/upgrade deliberately; flip to
+        # blocking once the backlog is at zero.
+        continue-on-error: true
+        run: |
+          uv export --format requirements-txt --no-hashes --all-groups > /tmp/requirements.txt
+          uvx pip-audit --requirement /tmp/requirements.txt --strict --desc
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Audit npm dependencies
+        continue-on-error: true
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so a secret committed earlier and later "removed" is still caught — it
+          # stays in the objects and must be rotated regardless.
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        # This one DOES block: a committed credential is not a backlog item, it is an incident.
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo" \
+            zricethezav/gitleaks:latest detect \
+            --source=/repo \
+            --redact \
+            --verbose \
+            --config=/repo/.gitleaks.toml

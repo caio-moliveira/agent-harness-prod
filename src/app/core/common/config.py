@@ -167,6 +167,17 @@ class Settings:
         # a hung or very slow provider (e.g. a large local Ollama model). On expiry the turn ends
         # with a recoverable "continuar" message and the partial work is persisted.
         self.TURN_TIMEOUT_SECONDS = int(os.getenv("TURN_TIMEOUT_SECONDS", "600"))
+        # Model-based safety evaluation of the STREAMED answer. Off by default and audit-only by
+        # design: a post-hoc verdict cannot un-send tokens the user already read, and blocking for
+        # real would mean buffering the whole answer (killing the streaming UX). When on, it costs
+        # one cheap utility-model call per turn and only records a metric + structured log. The
+        # non-streaming path keeps blocking (there the message can still be replaced). Input
+        # guardrails — which DO block, on every path — are always on (guardrails/input_screening.py).
+        self.OUTPUT_SAFETY_AUDIT_ENABLED = os.getenv("OUTPUT_SAFETY_AUDIT_ENABLED", "false").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
         # Utility (cheap) model for low-stakes sub-flows (file descriptions, safety check, deep-research
         # internals, and mem0's memory-extraction LLM). Same "provider:model" format; blank = reuse MODEL.
         self.UTILITY_MODEL = os.getenv("UTILITY_MODEL", "")

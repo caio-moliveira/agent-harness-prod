@@ -132,7 +132,17 @@ export interface TodoItem {
  * recoverable boundaries (call cap / wall-clock timeout / recursion backstop): partial work is
  * persisted server-side and the UI offers "continuar" to resume from the accumulated context.
  */
-export type TurnEndReason = "completed" | "call_limit" | "timeout" | "recursion_backstop";
+export type TurnEndReason =
+  | "completed"
+  | "call_limit"
+  | "timeout"
+  | "recursion_backstop"
+  /** Input guardrail refused the message (content filter or high-risk PII); the refusal itself is
+   *  streamed as the answer. Not recoverable by "continuar" — the user must rephrase. */
+  | "blocked_input";
+
+/** Turn endings the UI offers to resume: the work stopped at a boundary, nothing was lost. */
+export type ResumableEndReason = "call_limit" | "timeout" | "recursion_backstop";
 
 export type StreamEvent =
   | { type: "tool_start"; name: string; input?: string }
@@ -265,7 +275,7 @@ export interface AssistantTurn {
   /** Live reasoning (Anthropic summarized thinking), streamed before/with the answer. */
   thinking?: string;
   /** Set when the turn stopped at a recoverable limit (cap/timeout) — renders the "continuar" notice. */
-  endReason?: Exclude<TurnEndReason, "completed">;
+  endReason?: ResumableEndReason;
 }
 
 export type Turn = UserTurn | AssistantTurn;

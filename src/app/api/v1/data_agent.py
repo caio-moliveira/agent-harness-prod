@@ -45,8 +45,14 @@ from src.app.api.v1.dtos.data_agent import (
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
+from src.app.core.guardrails.input_screening import screen_user_input
+from src.app.core.guardrails.safety_check import evaluate_safety
 from src.app.core.hitl.pending_model import PendingActionStatus
-from src.app.core.metrics.metrics import agent_turn_duration_seconds, agent_turn_terminations_total
+from src.app.core.metrics.metrics import (
+    agent_turn_duration_seconds,
+    agent_turn_terminations_total,
+    guardrail_checks_total,
+)
 from src.app.core.ingestion.source_repository import IngestedFileRepository
 from src.app.core.ingestion.trigger import (
     is_ingesting,
@@ -391,6 +397,24 @@ async def _persist_user_message(session: Session, query: str) -> None:
         await session_repository.update_session_name(session.id, name)
 
 
+async def _audit_answer_safety(session_id: str, answer: str) -> None:
+    """Record a model-based safety verdict for an answer that was already streamed.
+
+    Audit only, by design (see ``OUTPUT_SAFETY_AUDIT_ENABLED``): the tokens are with the user
+    already, so the verdict becomes a metric + a structured log for review, never a rewrite. Any
+    failure here is swallowed — an audit must not affect the turn it observes.
+    """
+    try:
+        is_safe = await evaluate_safety(answer)
+        guardrail_checks_total.labels(
+            guardrail_type="safety", check_type="output_audit", result="safe" if is_safe else "unsafe"
+        ).inc()
+        if not is_safe:
+            logger.warning("output_safety_audit_flagged", session_id=session_id, answer_chars=len(answer))
+    except Exception:
+        logger.exception("output_safety_audit_failed", session_id=session_id)
+
+
 async def _persist_answer(session: Session, answer: str, steps: list[dict]) -> None:
     """Persist the assistant's reply and its tool-activity steps for this turn.
 
@@ -511,6 +535,21 @@ async def query_stream(
         agen = None
         turn_started = time.monotonic()
         try:
+            # Input guardrails run BEFORE anything else — the only point where a guardrail can
+            # prevent harm instead of describing it afterwards. Deterministic and microseconds
+            # cheap, so the streamed path pays the same policy as the non-streamed one.
+            screening = screen_user_input(body.query, session_id=session.id)
+            if screening.blocked:
+                reason = "blocked_input"
+                await _persist_user_message(session, body.query)
+                answer_parts.append(screening.message)
+                # Emit the refusal and its own terminal event, then stop: returning here still
+                # runs the `finally` below (the turn is persisted and counted), but nothing after
+                # the try/finally would run — so the terminal event must be yielded right here or
+                # the client would hang waiting for `done`.
+                yield f"data: {json.dumps({'type': 'token', 'content': screening.message})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'reason': reason})}\n\n"
+                return
             known_ids = await _session_pending_ids(session)
             # Rebuild the recent context from our own persisted history (the client sends only the
             # new message); older turns are covered by the agent's long-term memory.
@@ -581,6 +620,12 @@ async def query_stream(
             agent_turn_duration_seconds.labels(agent="data_agent", reason=reason).observe(
                 time.monotonic() - turn_started
             )
+            # Output safety AUDIT (opt-in): a verdict after the fact cannot un-send streamed
+            # tokens, so this never rewrites the answer — it records that an unsafe answer went
+            # out, which is what a regulated deployment needs to review. Runs in the background so
+            # it never delays the turn's last byte.
+            if settings.OUTPUT_SAFETY_AUDIT_ENABLED and answer_parts:
+                asyncio.create_task(_audit_answer_safety(session.id, "".join(answer_parts)))
         # Always emit a terminal event so the client never hangs on silence. (Skipped only when the
         # generator was cancelled by a disconnect — GeneratorExit — where the client is already gone.)
         # `done` carries how the turn ended so the client can offer "continuar" on a capped/timed-out

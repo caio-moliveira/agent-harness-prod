@@ -33,6 +33,7 @@ from src.app.core.common.config import Environment, settings
 from src.app.core.common.graph_utils import process_messages
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
+from src.app.core.guardrails.pii import detect_cnpj_matches, detect_cpf_matches
 from src.app.core.learning import get_reflected_preferences
 from src.app.core.llm.factory import active_model_name, create_chat_model
 from src.app.core.sandbox.backend import (
@@ -927,6 +928,12 @@ def _create_data_deep_agent(
             # result stays in state) — prevents a one-turn context blowup ahead of the summarizer.
             ToolResultCapMiddleware(),
             PIIMiddleware("email"),
+            # Brazilian identifiers (LGPD): the granted folder routinely holds spreadsheets and
+            # contracts with CPF/CNPJ, and a tool result carrying them would otherwise flow into
+            # the model context, the traces and the persisted history verbatim. Detected by check
+            # digits (see guardrails/pii.py), so ordinary 11-digit ids are not touched.
+            PIIMiddleware("cpf", detector=detect_cpf_matches, strategy="redact"),
+            PIIMiddleware("cnpj", detector=detect_cnpj_matches, strategy="redact"),
             # Keep weaker instruction-followers from ending the turn mid-plan: if the model stops with
             # the deliverable ungenerated and the plan still incomplete, jump back to the model with a
             # firm "finish it" nudge (bounded). Model-agnostic; the call cap below is the backstop.
