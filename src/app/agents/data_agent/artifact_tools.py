@@ -11,13 +11,13 @@ attributed and isolated to the session that produced it.
 
 import os
 import re
-import tempfile
 from typing import Any, Optional
 
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
 from src.app.core.artifacts import ArtifactSpec, Claim, Section, Sheet, SpreadsheetSpec
+from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.provenance import Source
 from src.app.init import hitl_service
@@ -78,7 +78,10 @@ def _output_dir(session_id: str, root_dir: Optional[str], writable_folder: bool)
     """
     if root_dir and writable_folder:
         return root_dir
-    return os.path.join(tempfile.gettempdir(), "agent_harness_artifacts", str(session_id))
+    # Never /tmp: a container restart (or the host's tmp reaper) would delete an approved
+    # deliverable and its download would 404 with no explanation. ARTIFACT_STORAGE_ROOT is meant
+    # to sit on a mounted volume — see docs/operations.md.
+    return os.path.join(settings.ARTIFACT_STORAGE_ROOT, str(session_id))
 
 
 def make_artifact_tools(

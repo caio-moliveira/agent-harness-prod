@@ -4,6 +4,7 @@ This module sets up the main API router and includes all sub-routers for differe
 endpoints like authentication and the data agent.
 """
 
+import asyncio
 from datetime import datetime
 
 from fastapi import APIRouter
@@ -11,8 +12,10 @@ from fastapi import (
     Request,
     status,
 )
+from sqlmodel import select
 from starlette.responses import JSONResponse
 
+from src.app.core.db.database import session_scope
 from src.app.api.security.limiter import (
     limiter,
 )
@@ -45,6 +48,58 @@ api_router.include_router(data_agent_router, prefix="/data-agent", tags=["data-a
 api_router.include_router(usage_router, prefix="/me", tags=["usage"])
 
 
+async def _database_reachable() -> bool:
+    """Whether the database answers a trivial query right now.
+
+    Deliberately runs a real ``SELECT 1`` in a thread: the repositories are ``async def`` wrappers
+    around sync sessions, and calling one WITHOUT awaiting (the previous implementation) only built
+    a coroutine — the database was never touched, so the probe could not fail and always reported
+    healthy. A health check that cannot fail is worse than none: the orchestrator keeps routing
+    traffic to a broken instance.
+    """
+    try:
+        await asyncio.to_thread(_ping_database)
+        return True
+    except Exception as exc:
+        logger.warning("database_health_check_failed", error=str(exc))
+        return False
+
+
+def _ping_database() -> None:
+    """Blocking ``SELECT 1`` against the pool (runs in a worker thread)."""
+    with session_scope() as session:
+        session.exec(select(1)).first()
+
+
+@api_router.get("/health/live")
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["health"][0])
+async def liveness(request: Request) -> JSONResponse:
+    """Liveness: is this process alive and serving?
+
+    Never touches dependencies — a liveness probe that fails on a database blip would make the
+    orchestrator RESTART a perfectly healthy process, turning a recoverable outage into a crash
+    loop. Use ``/health/ready`` to decide whether to send traffic.
+    """
+    return JSONResponse(content={"status": "alive", "version": settings.VERSION}, status_code=status.HTTP_200_OK)
+
+
+@api_router.get("/health/ready")
+@limiter.limit(settings.RATE_LIMIT_ENDPOINTS["health"][0])
+async def readiness(request: Request) -> JSONResponse:
+    """Readiness: can this instance serve real traffic (dependencies included)?
+
+    Returns 503 when the database is unreachable so the load balancer takes this instance out of
+    rotation while leaving the process running.
+    """
+    db_healthy = await _database_reachable()
+    payload = {
+        "status": "ready" if db_healthy else "not_ready",
+        "components": {"database": "healthy" if db_healthy else "unhealthy"},
+    }
+    code = status.HTTP_200_OK if db_healthy else status.HTTP_503_SERVICE_UNAVAILABLE
+    return JSONResponse(content=payload, status_code=code)
+
+
 @api_router.get("/health")
 @limiter.limit(settings.RATE_LIMIT_ENDPOINTS["health"][0])
 async def health_check(request: Request) -> JSONResponse:
@@ -54,12 +109,7 @@ async def health_check(request: Request) -> JSONResponse:
         Dict[str, Any]: Health status information
     """
     logger.info("health_check_called")
-    db_healthy = False
-    try:
-        user_repository.get_user(1)  # Simple query to check DB connectivity
-        db_healthy = True
-    except Exception as e:
-        logger.error("database_health_check_failed", error=str(e))
+    db_healthy = await _database_reachable()
 
     response = {
         "status": "healthy" if db_healthy else "degraded",

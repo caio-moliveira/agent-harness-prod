@@ -59,3 +59,6 @@ conversation_summaries/
 /sandbox_demo/
 /sandbox_uploads/
 ideia.md
+
+# Runtime artifact storage (ARTIFACT_STORAGE_ROOT) — generated deliverables, never source.
+data/

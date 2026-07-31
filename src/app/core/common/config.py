@@ -183,6 +183,21 @@ class Settings:
         # which is what an LLM product actually pays for — two users with the same request count
         # can differ by orders of magnitude. A per-account override lives on the User row.
         self.TOKEN_BUDGET_DAILY = int(os.getenv("TOKEN_BUDGET_DAILY", "0"))
+
+        # ── Operational storage & retention (#75) ───────────────────────────────────────────────
+        # Where confirmed artifacts are written when the granted folder is read-only. MUST NOT be
+        # /tmp in production: in a container that directory is wiped on restart (and cleaned
+        # periodically on a host), so an approved artifact's download 404s with no explanation.
+        # Mount this path on a volume — see docker-compose.yml and docs/operations.md.
+        self.ARTIFACT_STORAGE_ROOT = os.path.expanduser(
+            os.path.expandvars(os.getenv("ARTIFACT_STORAGE_ROOT", "./data/artifacts"))
+        )
+        # Retention windows in days (0 = keep forever). Conversations and their tool trails are the
+        # bulk of the data; the audit event log usually has a longer legal life than chat content.
+        self.RETENTION_MESSAGES_DAYS = int(os.getenv("RETENTION_MESSAGES_DAYS", "0"))
+        self.RETENTION_EVENTS_DAYS = int(os.getenv("RETENTION_EVENTS_DAYS", "0"))
+        self.RETENTION_USAGE_DAYS = int(os.getenv("RETENTION_USAGE_DAYS", "400"))
+        self.RETENTION_ARTIFACTS_DAYS = int(os.getenv("RETENTION_ARTIFACTS_DAYS", "30"))
         # Utility (cheap) model for low-stakes sub-flows (file descriptions, safety check, deep-research
         # internals, and mem0's memory-extraction LLM). Same "provider:model" format; blank = reuse MODEL.
         self.UTILITY_MODEL = os.getenv("UTILITY_MODEL", "")
