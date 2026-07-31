@@ -158,8 +158,15 @@ class Settings:
         # Hard cap on model calls per turn (safety net against a runaway agent loop). Applied to the
         # deep agents via ModelCallLimitMiddleware; the agent ends gracefully at the cap. A legit
         # multi-deliverable turn can use ~25-30 calls, so 40 leaves headroom while still bounding a
-        # runaway. The deep agent's recursion_limit is set above this so the graceful cap wins.
+        # runaway. The deep agent's recursion_limit is DERIVED from its compiled graph (every
+        # middleware before/after_model hook is a graph node — see turn_limits.py) so this graceful
+        # cap always fires before LangGraph's hard GraphRecursionError.
         self.MODEL_CALL_LIMIT = int(os.getenv("MODEL_CALL_LIMIT", "40"))
+        # Wall-clock ceiling for one agent turn (seconds; 0 disables). The temporal backstop of the
+        # turn-limit policy (see agents/data_agent/turn_limits.py) — protects the stream/UX against
+        # a hung or very slow provider (e.g. a large local Ollama model). On expiry the turn ends
+        # with a recoverable "continuar" message and the partial work is persisted.
+        self.TURN_TIMEOUT_SECONDS = int(os.getenv("TURN_TIMEOUT_SECONDS", "600"))
         # Utility (cheap) model for low-stakes sub-flows (file descriptions, safety check, deep-research
         # internals, and mem0's memory-extraction LLM). Same "provider:model" format; blank = reuse MODEL.
         self.UTILITY_MODEL = os.getenv("UTILITY_MODEL", "")

@@ -53,6 +53,15 @@ tool_executions_total = Counter(
     ["tool_name", "status"]
 )
 
+# How agent turns end: completed | call_limit | timeout | recursion_backstop | error. A rising
+# call_limit/timeout share is the signal to retune MODEL_CALL_LIMIT / TURN_TIMEOUT_SECONDS;
+# recursion_backstop should stay at zero (the derived recursion limit makes it unreachable).
+agent_turn_terminations_total = Counter(
+    "agent_turn_terminations_total",
+    "Agent turn terminations by reason",
+    ["agent", "reason"],
+)
+
 # Guardrail metrics
 guardrail_checks_total = Counter(
     "guardrail_checks_total",

@@ -151,6 +151,28 @@ User-authored skills are gated by an approval state machine (`draft → in_revie
 `src/app/core/skill/skill_status.py`) — only `approved` skills materialize. Editing an approved
 skill returns it to `draft`.
 
+## Turn limits (data_agent)
+
+Three independent layers bound one agent turn (`src/app/agents/data_agent/turn_limits.py`); the
+**semantic cap is the only limit a legitimate turn should ever hit**, and every layer ends with the
+same recoverable UX (partial persisted + "continuar" hint + SSE `done{reason}`), never a generic
+error:
+
+1. **`MODEL_CALL_LIMIT`** — model calls per turn via `ModelCallLimitMiddleware(exit_behavior="end")`.
+   Subagents get their own cap (`cap_subagent_specs`) because they inherit the parent's recursion
+   budget but no call limit of their own.
+2. **Recursion backstop** — LangGraph's `recursion_limit` is **derived from the compiled graph**
+   (`compute_recursion_limit`): in LangChain v1 every middleware `before_model`/`after_model` hook is
+   a graph node costing one super-step per round (~8-10 with this stack), so never guess this with a
+   constant — that's exactly the bug that made `GraphRecursionError` fire before the graceful cap.
+3. **`TURN_TIMEOUT_SECONDS`** — wall-clock ceiling enforced at the API layer (0 disables); protects
+   the stream against a hung/slow provider (e.g. a large local Ollama model).
+
+The SSE terminal event is `done` with `reason: "completed" | "call_limit" | "timeout" |
+"recursion_backstop"` (or `error` for real failures); terminations are counted in Prometheus
+(`agent_turn_terminations_total{agent,reason}`) — `recursion_backstop` staying at zero is the
+invariant to watch.
+
 ## Workspace memory (`AGENTS.md` in the granted folder)
 
 The granted folder can carry its own `AGENTS.md` (the [agents.md](https://agents.md/) convention —

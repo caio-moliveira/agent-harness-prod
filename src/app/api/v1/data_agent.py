@@ -5,6 +5,7 @@ connection held by the per-session registry, and never persisted or logged.
 """
 
 import asyncio
+import contextlib
 import json
 import os
 from typing import Optional
@@ -44,6 +45,7 @@ from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
 from src.app.core.hitl.pending_model import PendingActionStatus
+from src.app.core.metrics.metrics import agent_turn_terminations_total
 from src.app.core.ingestion.source_repository import IngestedFileRepository
 from src.app.core.ingestion.trigger import (
     is_ingesting,
@@ -501,6 +503,11 @@ async def query_stream(
         steps: list[dict] = []
         agent_messages: list = []
         errored = False
+        # How the turn ended (turn-limit policy, see turn_limits.py): completed | call_limit |
+        # recursion_backstop (both reported by the agent via its `turn_end` marker) | timeout
+        # (enforced here) | error. Rides on the terminal `done` event and the terminations metric.
+        reason = "completed"
+        agen = None
         try:
             known_ids = await _session_pending_ids(session)
             # Rebuild the recent context from our own persisted history (the client sends only the
@@ -508,20 +515,49 @@ async def query_stream(
             history = await chat_message_repository.get_messages(session.id, limit=_HISTORY_WINDOW)
             agent_messages = _agent_messages(history, body.query)
             await _persist_user_message(session, body.query)
-            async for ev in agent.astream_query_events(agent_messages, session.id, session.user_id):
-                etype = ev.get("type")
-                if etype == "token":
-                    answer_parts.append(ev.get("content", ""))
-                elif etype == "tool_start":
-                    steps.append({"name": ev.get("name", ""), "input": ev.get("input"), "output": None})
-                elif etype == "tool_end":
-                    _close_step(steps, ev.get("name", ""), ev.get("output"))
-                yield f"data: {json.dumps(ev)}\n\n"
+            agen = agent.astream_query_events(agent_messages, session.id, session.user_id)
+            # Temporal backstop: a hung/slow provider must not hold the stream open forever. The
+            # deadline covers the whole agent run; on expiry the partial work is persisted and the
+            # client gets a recoverable "continuar" hint, mirroring the call-cap UX.
+            async with asyncio.timeout(settings.TURN_TIMEOUT_SECONDS or None):
+                async for ev in agen:
+                    etype = ev.get("type")
+                    if etype == "turn_end":
+                        # Internal marker, not part of the client contract — fold into `done`.
+                        reason = ev.get("reason", "completed")
+                        continue
+                    if etype == "token":
+                        answer_parts.append(ev.get("content", ""))
+                    elif etype == "tool_start":
+                        steps.append({"name": ev.get("name", ""), "input": ev.get("input"), "output": None})
+                    elif etype == "tool_end":
+                        _close_step(steps, ev.get("name", ""), ev.get("output"))
+                    yield f"data: {json.dumps(ev)}\n\n"
             # Surface any approval the agent just parked as an inline card, before closing the turn.
             for hitl_ev in await _new_hitl_events(session, known_ids):
                 yield f"data: {json.dumps(hitl_ev)}\n\n"
+        except TimeoutError:
+            reason = "timeout"
+            logger.warning(
+                "data_stream_timeout",
+                session_id=session.id,
+                timeout_seconds=settings.TURN_TIMEOUT_SECONDS,
+                steps=len(steps),
+                answer_chars=len("".join(answer_parts)),
+            )
+            if agen is not None:
+                with contextlib.suppress(Exception):
+                    await agen.aclose()  # cancel the in-flight agent run
+            hint = (
+                "\n\n---\n\n_Este turno atingiu o tempo máximo de processamento. Envie "
+                '**"continuar"** que eu retomo do ponto em que parei, aproveitando o que já '
+                "foi apurado._"
+            )
+            answer_parts.append(hint)
+            yield f"data: {json.dumps({'type': 'token', 'content': hint})}\n\n"
         except Exception:
             errored = True
+            reason = "error"
             # Log the real failure with enough context to diagnose (Langfuse captured an empty
             # statusMessage on the degraded turn — this is our own record).
             logger.exception(
@@ -539,9 +575,16 @@ async def query_stream(
                 await _persist_answer(session, "".join(answer_parts), steps)
             except Exception:
                 logger.exception("data_stream_persist_failed", session_id=session.id)
+            agent_turn_terminations_total.labels(agent="data_agent", reason=reason).inc()
         # Always emit a terminal event so the client never hangs on silence. (Skipped only when the
         # generator was cancelled by a disconnect — GeneratorExit — where the client is already gone.)
-        terminal = {"type": "error", "content": "Erro ao processar a consulta."} if errored else {"type": "done"}
+        # `done` carries how the turn ended so the client can offer "continuar" on a capped/timed-out
+        # turn instead of treating it as a plain completion.
+        terminal = (
+            {"type": "error", "content": "Erro ao processar a consulta."}
+            if errored
+            else {"type": "done", "reason": reason}
+        )
         yield f"data: {json.dumps(terminal)}\n\n"
 
     return StreamingResponse(_with_heartbeat(event_generator()), media_type="text/event-stream", headers=_SSE_HEADERS)
