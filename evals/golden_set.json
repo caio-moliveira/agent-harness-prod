@@ -1,0 +1,191 @@
+[
+  {
+    "id": "listar-arquivos",
+    "tags": ["smoke", "core"],
+    "turns": ["Liste os arquivos da minha pasta de trabalho e diga o que tem nela."],
+    "criteria": {
+      "termination": "completed",
+      "expect_tools": ["ls"],
+      "answer_contains_any": [["vendas.csv"]],
+      "max_seconds": 120
+    }
+  },
+  {
+    "id": "multi-turno-contexto",
+    "tags": ["smoke", "core"],
+    "turns": [
+      "Liste os arquivos da minha pasta de trabalho.",
+      "E o que mais você viu além do primeiro arquivo?"
+    ],
+    "criteria": {
+      "termination": "completed",
+      "max_seconds": 180
+    }
+  },
+  {
+    "id": "artefato-docx-com-fontes",
+    "tags": ["smoke", "deliverable"],
+    "turns": ["Gere um relatório em docx com um resumo das vendas, citando as fontes dos dados."],
+    "criteria": {
+      "termination": "completed",
+      "expect_tools": ["gerar_artefato"],
+      "artifact": { "format": "docx", "sources_required": true },
+      "max_seconds": 240
+    }
+  },
+  {
+    "id": "soma-quantidade-produto",
+    "tags": ["analysis"],
+    "turns": ["Quantas unidades de Widget A foram vendidas no total? Responda com o número."],
+    "criteria": {
+      "termination": "completed",
+      "answer_contains_any": [["25"]],
+      "max_seconds": 240
+    }
+  },
+  {
+    "id": "faturamento-total",
+    "tags": ["analysis"],
+    "turns": ["Qual o valor total de vendas somando todas as linhas de vendas.csv?"],
+    "criteria": {
+      "termination": "completed",
+      "answer_contains_any": [["1150", "1.150"]],
+      "max_seconds": 240
+    }
+  },
+  {
+    "id": "produto-mais-vendido",
+    "tags": ["analysis"],
+    "turns": ["Qual produto vendeu mais unidades no total?"],
+    "criteria": {
+      "termination": "completed",
+      "answer_contains_any": [["Widget A"]],
+      "max_seconds": 240
+    }
+  },
+  {
+    "id": "pergunta-sobre-documento",
+    "tags": ["docs"],
+    "turns": ["Segundo as notas do projeto, qual produto tem a margem maior?"],
+    "criteria": {
+      "termination": "completed",
+      "answer_contains_any": [["Widget B"]],
+      "max_seconds": 240
+    }
+  },
+  {
+    "id": "prazo-do-contrato",
+    "tags": ["docs"],
+    "turns": ["Qual é o prazo de entrega definido no contrato?"],
+    "criteria": {
+      "termination": "completed",
+      "answer_contains_any": [["30 dias", "trinta dias"]],
+      "max_seconds": 240
+    }
+  },
+  {
+    "id": "multa-do-contrato",
+    "tags": ["docs"],
+    "turns": ["Qual o percentual de multa por atraso previsto no contrato?"],
+    "criteria": {
+      "termination": "completed",
+      "answer_contains_any": [["2%", "2 %", "dois por cento"]],
+      "max_seconds": 240
+    }
+  },
+  {
+    "id": "clientes-por-cidade",
+    "tags": ["analysis"],
+    "turns": ["Quantos clientes temos em Belo Horizonte?"],
+    "criteria": {
+      "termination": "completed",
+      "answer_contains_any": [["2", "dois", "duas"]],
+      "max_seconds": 240
+    }
+  },
+  {
+    "id": "cruzamento-cliente-segmento",
+    "tags": ["analysis"],
+    "turns": ["Liste os clientes do segmento varejo."],
+    "criteria": {
+      "termination": "completed",
+      "answer_contains_any": [["Mercado Silva"], ["Loja Central"]],
+      "max_seconds": 240
+    }
+  },
+  {
+    "id": "resumo-executivo",
+    "tags": ["synthesis"],
+    "turns": ["Faça um resumo executivo curto (3 a 5 linhas) do que há na pasta: vendas, clientes e contrato."],
+    "criteria": {
+      "termination": "completed",
+      "answer_contains_any": [["vendas", "Vendas"], ["cliente", "Cliente"], ["contrato", "Contrato"]],
+      "max_seconds": 300
+    }
+  },
+  {
+    "id": "artefato-planilha",
+    "tags": ["deliverable"],
+    "turns": ["Gere uma planilha xlsx com o total de unidades vendidas por produto."],
+    "criteria": {
+      "termination": "completed",
+      "expect_tools": ["gerar_planilha"],
+      "max_seconds": 300
+    }
+  },
+  {
+    "id": "relatorio-pptx",
+    "tags": ["deliverable"],
+    "turns": ["Monte uma apresentação pptx com os destaques das vendas do mês, citando fontes."],
+    "criteria": {
+      "termination": "completed",
+      "expect_tools": ["gerar_artefato"],
+      "artifact": { "format": "pptx", "sources_required": true },
+      "max_seconds": 300
+    }
+  },
+  {
+    "id": "arquivo-inexistente",
+    "tags": ["robustness"],
+    "turns": ["O que diz o arquivo orcamento_2027.xlsx da minha pasta?"],
+    "criteria": {
+      "termination": "completed",
+      "answer_not_contains": ["orcamento_2027 contém", "Segundo o orcamento_2027"],
+      "max_seconds": 240
+    }
+  },
+  {
+    "id": "plano-antes-de-entregavel",
+    "tags": ["planning"],
+    "turns": ["Analise as vendas por produto e depois gere um relatório docx com as conclusões e fontes."],
+    "criteria": {
+      "termination": "completed",
+      "expect_tools": ["gerar_artefato"],
+      "artifact": { "format": "docx", "sources_required": true },
+      "max_seconds": 420
+    }
+  },
+  {
+    "id": "continuidade-apos-analise",
+    "tags": ["core"],
+    "turns": [
+      "Qual o total de unidades vendidas por produto?",
+      "Agora compare com a meta das notas do projeto: batemos a meta de julho?"
+    ],
+    "criteria": {
+      "termination": "completed",
+      "answer_contains_any": [["meta", "Meta", "5.000", "5000"]],
+      "max_seconds": 420
+    }
+  },
+  {
+    "id": "idioma-resposta",
+    "tags": ["ux"],
+    "turns": ["Resuma em uma frase o que há na pasta de trabalho."],
+    "criteria": {
+      "termination": "completed",
+      "answer_not_contains": ["I found", "The folder contains", "Here is"],
+      "max_seconds": 240
+    }
+  }
+]

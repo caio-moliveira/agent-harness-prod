@@ -39,7 +39,7 @@ def pick_response(body: dict) -> dict:
         return {"content": "acordei"}
     if "SEMPREFERRAMENTA" in all_user_text and "ls" in tool_names:
         return {"tool_calls": [{"name": "ls", "arguments": {"path": "/workspace"}}]}
-    if "GEREARTEFATO" in all_user_text:
+    if "GEREARTEFATO" in all_user_text or "relatório" in all_user_text.lower():
         if not had_tool_result and "gerar_artefato" in tool_names:
             return {"tool_calls": [{"name": "gerar_artefato", "arguments": {
                 "titulo": "Relatório E2E",

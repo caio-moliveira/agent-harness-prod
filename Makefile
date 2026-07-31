@@ -29,6 +29,14 @@ dev:
 	@bash -c "source scripts/set_env.sh development && uv run uvicorn src.app.main:app --reload --port 8000 --loop uvloop"
 
 # Evaluation commands
+eval-golden:
+	@echo "Golden evals against the mock LLM (zero tokens; needs Postgres up)"
+	uv run python -m evals.run_eval --mode harness
+
+eval-golden-live:
+	@echo "Golden evals against the real MODEL from the environment (needs its API key + Postgres)"
+	uv run python -m evals.run_eval --mode live
+
 eval:
 	@echo "Running evaluation with interactive mode"
 	@bash -c "source scripts/set_env.sh ${ENV:-development} && python -m src.evals.main --interactive"
