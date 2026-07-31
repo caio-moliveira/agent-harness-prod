@@ -36,7 +36,7 @@ class TestQueryStreamRobustness:
 
         sid, token = await _make_session(client, user_token)
 
-        async def _events(_messages, _session_id, _user_id):
+        async def _events(_messages, _session_id, _user_id, **_kw):
             yield {"type": "tool_start", "name": "read_file", "input": "{'file_path': '/workspace/x.md'}"}
             yield {"type": "tool_end", "name": "read_file", "output": "conteúdo lido"}
             yield {"type": "token", "content": "resposta parcial"}
@@ -67,7 +67,7 @@ class TestQueryStreamRobustness:
 
         sid, token = await _make_session(client, user_token)
 
-        async def _events(_messages, _session_id, _user_id):
+        async def _events(_messages, _session_id, _user_id, **_kw):
             yield {"type": "token", "content": "tudo certo"}
 
         agent = AsyncMock()

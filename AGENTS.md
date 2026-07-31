@@ -273,6 +273,34 @@ The SSE terminal event is `done` with `reason: "completed" | "call_limit" | "tim
 (`agent_turn_terminations_total{agent,reason}`) — `recursion_backstop` staying at zero is the
 invariant to watch.
 
+### Retomada automática (`MAX_AUTO_CONTINUES`)
+
+Um turno que para no cap semântico pode ser retomado **pelo servidor**, dentro da mesma requisição
+SSE, quando o cliente manda `auto_continue: true` (opt-in; o botão "Continuar" segue sendo o
+padrão). O laço vive na rota (`api/v1/data_agent.py`), não no cliente — um laço no cliente gravaria
+uma mensagem "continuar" do usuário por retomada, gastaria o rate limit e esconderia a contagem do
+servidor. Regras que não são detalhe de implementação:
+
+- **Só `call_limit` retoma.** `timeout` não: o deadline é da requisição inteira (o `asyncio.timeout`
+  envolve o laço), então uma retomada nunca estica o relógio — que é justamente o que o teto
+  protege. `recursion_backstop` não: é o invariante que deve ficar em zero, e retomar encobriria uma
+  regressão na derivação do limite queimando tokens.
+- **O cliente opta, o servidor limita.** A quantidade é sempre `MAX_AUTO_CONTINUES` (0 desliga); se
+  o cliente escolhesse, um cliente adulterado faria laço infinito.
+- **Aprovação parada vence a retomada.** Se a tentativa parkou um HITL, o turno devolve o controle —
+  retomar seria passar por cima do portão de aprovação.
+- **Orçamento (#73) é reconferido antes de cada retomada** — uma retomada é um turno *novo*, e
+  recusar-se a iniciá-lo é exatamente a política ("turno em andamento nunca é morto por orçamento").
+- **A instrução sintética nunca é persistida**: o usuário mandou uma mensagem, a transcrição mostra
+  uma. As parciais de todas as tentativas viram **uma** resposta contínua, e o hint textual "envie
+  continuar" é suprimido enquanto ainda houver retomada em mãos (`resume_hint=False`) — pedir uma
+  ação que o servidor já vai tomar seria mentira visível no meio da resposta.
+
+O stream ganha `auto_continue{attempt,max}` (informativo — quem encerra o turno continua sendo
+`done`), e `agent_turn_auto_continues` (histograma, observado 1x por requisição **incluindo o zero**)
+é o instrumento de calibragem: mediana > 0 significa `MODEL_CALL_LIMIT` baixo demais para o trabalho
+real.
+
 ## Workspace memory (`AGENTS.md` in the granted folder)
 
 The granted folder can carry its own `AGENTS.md` (the [agents.md](https://agents.md/) convention —

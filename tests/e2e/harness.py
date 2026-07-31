@@ -57,6 +57,7 @@ def launch_stack(
     *,
     call_limit: int = 8,
     turn_timeout: int = 20,
+    max_auto_continues: int = 2,
     model: str | None = None,
     use_mock_llm: bool = True,
 ) -> Stack:
@@ -87,6 +88,7 @@ def launch_stack(
         **provider_env,
         "MODEL_CALL_LIMIT": str(call_limit),
         "TURN_TIMEOUT_SECONDS": str(turn_timeout),
+        "MAX_AUTO_CONTINUES": str(max_auto_continues),
         "LONG_TERM_MEMORY_ENABLED": "false",
         "MCP_ENABLED": "false",
         "JWT_SECRET_KEY": "e2e-secret",

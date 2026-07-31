@@ -29,7 +29,7 @@ def _install_agent(monkeypatch, input_tokens: int = 0, output_tokens: int = 0):
     """An agent whose turn reports the given token usage via the turn_end marker."""
     from src.app.api.v1 import data_agent as da
 
-    async def _events(_messages, _session_id, _user_id):
+    async def _events(_messages, _session_id, _user_id, **_kw):
         yield {"type": "token", "content": "resposta"}
         yield {
             "type": "turn_end",
@@ -103,7 +103,7 @@ class TestBudgetEnforcement:
         # The next one is refused before the agent is reached.
         called = {"ran": False}
 
-        async def _must_not_run(_messages, _session_id, _user_id):
+        async def _must_not_run(_messages, _session_id, _user_id, **_kw):
             called["ran"] = True
             yield {"type": "token", "content": "não deveria"}
 

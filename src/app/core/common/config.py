@@ -167,6 +167,13 @@ class Settings:
         # a hung or very slow provider (e.g. a large local Ollama model). On expiry the turn ends
         # with a recoverable "continuar" message and the partial work is persisted.
         self.TURN_TIMEOUT_SECONDS = int(os.getenv("TURN_TIMEOUT_SECONDS", "600"))
+        # How many times the server may resume a capped turn by itself within ONE request (#77).
+        # 0 disables auto-resumption entirely (the manual "continuar" button remains). This is the
+        # server's ceiling: a request opts in with `auto_continue`, but never chooses the count —
+        # otherwise a tampered client could loop forever. Only `call_limit` is resumed: a `timeout`
+        # already consumed the request-wide deadline, and `recursion_backstop` is the invariant that
+        # must stay at zero (auto-resuming it would burn tokens papering over a limit-derivation bug).
+        self.MAX_AUTO_CONTINUES = int(os.getenv("MAX_AUTO_CONTINUES", "2"))
         # Model-based safety evaluation of the STREAMED answer. Off by default and audit-only by
         # design: a post-hoc verdict cannot un-send tokens the user already read, and blocking for
         # real would mean buffering the whole answer (killing the streaming UX). When on, it costs

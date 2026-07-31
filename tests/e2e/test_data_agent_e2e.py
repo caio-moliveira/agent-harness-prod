@@ -8,6 +8,7 @@ provider plumbing production uses.
 Covered scenarios (each also asserts the SSE terminal taxonomy from the turn-limit policy):
 - auth → session → grant-folder → streamed query with a real ``ls`` tool round → ``done{completed}``
 - runaway tool loop → ends gracefully at exactly ``MODEL_CALL_LIMIT`` calls → ``done{call_limit}``
+- opted-in auto-resumption → resumes the cap exactly ``MAX_AUTO_CONTINUES`` times, never loops
 - hung provider → wall-clock timeout → ``done{timeout}`` with the turn persisted
 - artifact + HITL: gerar_artefato → pending action → confirm → downloadable .docx
 - Prometheus terminations counter incremented per reason
@@ -29,6 +30,7 @@ pytestmark = [
 
 _CALL_LIMIT = 8
 _TURN_TIMEOUT = 20
+_MAX_AUTO_CONTINUES = 2
 
 
 @pytest.fixture(scope="session")
@@ -43,6 +45,7 @@ def api(tmp_path_factory):
         tmp_path_factory.mktemp("e2e-logs"),
         call_limit=_CALL_LIMIT,
         turn_timeout=_TURN_TIMEOUT,
+        max_auto_continues=_MAX_AUTO_CONTINUES,
     )
     try:
         yield {"base": stack.base, "workspace": stack.workspace}
@@ -73,10 +76,13 @@ def _new_session(client) -> tuple[str, dict]:
     return sid, headers
 
 
-def _stream(client, sid: str, headers: dict, query: str) -> list[dict]:
+def _stream(client, sid: str, headers: dict, query: str, auto_continue: bool = False) -> list[dict]:
     events = []
     with client["http"].stream(
-        "POST", f"/data-agent/{sid}/query/stream", json={"query": query}, headers=headers
+        "POST",
+        f"/data-agent/{sid}/query/stream",
+        json={"query": query, "auto_continue": auto_continue},
+        headers=headers,
     ) as resp:
         assert resp.status_code == 200
         for line in resp.iter_lines():
@@ -135,6 +141,30 @@ class TestTurnLimits:
         assert elapsed < _TURN_TIMEOUT + 15  # ended at the ceiling, not at the mock's 60s stall
         r = client["http"].get(f"/data-agent/{sid}/messages", headers=headers)
         assert r.status_code == 200 and len(r.json()["messages"]) >= 1
+
+    def test_auto_continue_resumes_the_cap_but_cannot_loop_forever(self, client):
+        """Opted in, a capped turn resumes — but exactly MAX_AUTO_CONTINUES times, then hands back.
+
+        Runs against the real deep agent, checkpointer and Postgres, with a mock that never stops
+        calling tools: the only thing that can end this stream is the ceiling itself. That makes it
+        the honest test of "no infinite auto-resumption" — the integration suite scripts the agent,
+        this one cannot cheat.
+        """
+        sid, headers = _new_session(client)
+        events = _stream(client, sid, headers, "SEMPREFERRAMENTA use ferramentas sem parar", auto_continue=True)
+
+        resumptions = [e for e in events if e.get("type") == "auto_continue"]
+        assert [e["attempt"] for e in resumptions] == [1, 2]  # bounded, and disclosed to the client
+        # Each attempt got its own fresh call budget, so the work really did continue.
+        tools = [e for e in events if e.get("type") == "tool_start"]
+        assert len(tools) == _CALL_LIMIT * (1 + _MAX_AUTO_CONTINUES)
+        # Out of resumptions, it ends on the recoverable reason — the manual button still applies.
+        assert _terminal(events) == {"type": "done", "reason": "call_limit"}
+        assert not any(e.get("type") == "error" for e in events)
+
+        # The synthetic "continuar" never became a user message: one question in, one stored.
+        messages = client["http"].get(f"/data-agent/{sid}/messages", headers=headers).json()["messages"]
+        assert [m["role"] for m in messages] == ["user", "assistant"]
 
     def test_terminations_metric_counts_each_reason(self, client):
         """The Prometheus counter carries completed/call_limit/timeout after the scenarios above."""

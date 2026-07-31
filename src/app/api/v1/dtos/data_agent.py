@@ -39,6 +39,14 @@ class GrantFolderResponse(BaseModel):
 
 class DataQueryRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000)
+    # Opt-in to transparent resumption (#77): when the turn stops at the step cap, the server
+    # resumes it in-stream instead of asking the user to press "continuar". Defaults to False so
+    # the manual button stays the product's default. The client opts IN but never chooses how many
+    # times — that ceiling is the server's MAX_AUTO_CONTINUES, or a tampered client could loop.
+    auto_continue: bool = Field(
+        default=False,
+        description="Let the server auto-resume a step-capped turn, up to MAX_AUTO_CONTINUES times",
+    )
 
 
 class DataQueryResponse(BaseModel):
