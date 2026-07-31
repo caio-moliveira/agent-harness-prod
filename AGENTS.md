@@ -153,6 +153,25 @@ User-authored skills are gated by an approval state machine (`draft → in_revie
 `src/app/core/skill/skill_status.py`) — only `approved` skills materialize. Editing an approved
 skill returns it to `draft`.
 
+## Golden evals (quality regression gate)
+
+`evals/` holds the **golden-eval harness** (issue #70): a versioned dataset
+(`evals/golden_set.json`, PT-BR cases over the fixture workspace in `evals/workspace/`) scored by
+**deterministic rubrics** — termination reason, tools used, answer content, artifact
+generation/provenance, duration. `evals/config.yaml` sets the thresholds; below them the runner
+exits 1 (the gate).
+
+- `make eval-golden` — mock-LLM mode (zero tokens; `smoke` cases): validates the eval machinery +
+  provider plumbing. Runs in CI on any PR touching `evals/` or `tests/e2e/`.
+- `make eval-golden-live` — the real `MODEL` from the env (full dataset): the number that answers
+  "did quality regress?". Runs nightly + on demand via `workflow_dispatch`
+  (`.github/workflows/evals.yaml`; needs a provider secret configured in the repo).
+
+The runner reuses the E2E stack launcher (`tests/e2e/harness.py`). When you add a product
+capability, add a golden case for it — a failing eval drives the next task, not a bug report.
+This is complementary to `src/evals` (`make eval`), the Langfuse **trace** evaluator that scores
+production traffic after the fact.
+
 ## Turn limits (data_agent)
 
 Three independent layers bound one agent turn (`src/app/agents/data_agent/turn_limits.py`); the

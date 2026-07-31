@@ -1,0 +1,18 @@
+# Golden-eval thresholds and run profiles (issue #70). The run FAILS (exit 1) below any threshold —
+# that is the CI gate. Raise thresholds as the product matures; never lower them to make a run pass
+# without recording why.
+
+thresholds:
+  # Fraction of cases whose turn ended with done{completed} (turn-limit taxonomy).
+  min_completion_rate: 0.90
+  # Fraction of cases that passed ALL their criteria (tools, content, artifact, duration).
+  min_pass_rate: 0.80
+
+# Per-mode stack profile. Harness drives the scripted mock LLM (zero tokens — validates the eval
+# machinery + API plumbing on every PR); live drives the real configured provider (MODEL env).
+harness:
+  call_limit: 8
+  turn_timeout_seconds: 60
+live:
+  call_limit: 40
+  turn_timeout_seconds: 420

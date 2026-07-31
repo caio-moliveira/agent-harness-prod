@@ -1,0 +1,137 @@
+name: Golden Evals
+
+on:
+  # Pipeline smoke (mock LLM, zero tokens) whenever the eval machinery itself changes.
+  pull_request:
+    paths:
+      - "evals/**"
+      - "tests/e2e/**"
+      - ".github/workflows/evals.yaml"
+  push:
+    branches:
+      - main
+    paths:
+      - "evals/**"
+      - "tests/e2e/**"
+      - ".github/workflows/evals.yaml"
+  # Nightly quality regression against the real provider (needs a provider secret).
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "provider:model to evaluate (default: anthropic:claude-sonnet-5)"
+        required: false
+        default: "anthropic:claude-sonnet-5"
+      tags:
+        description: "comma-separated case tags (empty = full dataset)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  harness-smoke:
+    name: Eval pipeline smoke (mock LLM)
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mydb
+          POSTGRES_USER: myuser
+          POSTGRES_PASSWORD: mypassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U myuser -d mydb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --group test
+
+      - name: Run golden evals against the mock LLM
+        run: uv run python -m evals.run_eval --mode harness
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-harness
+          path: evals/reports/*.json
+
+  live:
+    name: Live evals (real provider)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mydb
+          POSTGRES_USER: myuser
+          POSTGRES_PASSWORD: mypassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U myuser -d mydb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      MODEL: ${{ github.event.inputs.model || 'anthropic:claude-sonnet-5' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check provider secret
+        id: secret
+        # Without a key the run cannot measure anything real — exit as a visible no-op (warning),
+        # not a hard failure, so the nightly doesn't page anyone before secrets are configured.
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$OPENAI_API_KEY" ]; then
+            echo "::warning::No provider secret configured (ANTHROPIC_API_KEY / OPENAI_API_KEY) — skipping live evals."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install uv
+        if: steps.secret.outputs.available == 'true'
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        if: steps.secret.outputs.available == 'true'
+        run: uv sync --group test
+
+      - name: Run golden evals against ${{ env.MODEL }}
+        if: steps.secret.outputs.available == 'true'
+        run: |
+          TAGS_ARG=""
+          if [ -n "${{ github.event.inputs.tags }}" ]; then
+            TAGS_ARG="--tags ${{ github.event.inputs.tags }}"
+          fi
+          uv run python -m evals.run_eval --mode live $TAGS_ARG
+
+      - name: Upload report
+        if: always() && steps.secret.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-live
+          path: evals/reports/*.json

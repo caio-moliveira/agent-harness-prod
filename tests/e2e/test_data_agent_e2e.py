@@ -15,101 +15,39 @@ Covered scenarios (each also asserts the SSE terminal taxonomy from the turn-lim
 
 import json
 import os
-import socket
-import subprocess
-import sys
 import time
-from pathlib import Path
 
 import httpx
 import pytest
 
-from tests.e2e import mock_llm_server
+from tests.e2e.harness import launch_stack
 
 pytestmark = [
     pytest.mark.skipif(os.getenv("RUN_E2E") != "1", reason="E2E: set RUN_E2E=1 (needs Postgres; see module docstring)"),
     pytest.mark.e2e,
 ]
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
 _CALL_LIMIT = 8
 _TURN_TIMEOUT = 20
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 @pytest.fixture(scope="session")
 def api(tmp_path_factory):
     """Mock LLM (in-process) + API (subprocess) wired together; yields the API base URL."""
-    mock = mock_llm_server.start()
-    mock_port = mock.server_address[1]
-
     workspace = tmp_path_factory.mktemp("e2e-data")
     (workspace / "vendas.csv").write_text("data,produto,quantidade\n2026-07-01,Widget A,18\n")
     (workspace / "notas.md").write_text("# Notas\nWidget B tem margem maior\n")
 
-    api_port = _free_port()
-    env = {
-        **os.environ,
-        "APP_ENV": "development",
-        "MODEL": "openai:mock-gpt",
-        "OPENAI_BASE_URL": f"http://127.0.0.1:{mock_port}/v1",
-        "OPENAI_API_KEY": "",
-        "ANTHROPIC_API_KEY": "",
-        "MODEL_CALL_LIMIT": str(_CALL_LIMIT),
-        "TURN_TIMEOUT_SECONDS": str(_TURN_TIMEOUT),
-        "LONG_TERM_MEMORY_ENABLED": "false",
-        "MCP_ENABLED": "false",
-        "JWT_SECRET_KEY": "e2e-secret",
-        "SANDBOX_ALLOWED_ROOTS": str(workspace),
-        "POSTGRES_HOST": os.getenv("E2E_POSTGRES_HOST", "127.0.0.1"),
-        "POSTGRES_PORT": os.getenv("E2E_POSTGRES_PORT", "5432"),
-        "POSTGRES_DB": os.getenv("E2E_POSTGRES_DB", "mydb"),
-        "POSTGRES_USER": os.getenv("E2E_POSTGRES_USER", "myuser"),
-        "POSTGRES_PASSWORD": os.getenv("E2E_POSTGRES_PASSWORD", "mypassword"),
-        "LOG_FORMAT": "console",
-        "NO_PROXY": "127.0.0.1,localhost",
-        "no_proxy": "127.0.0.1,localhost",
-    }
-    # Logs go to a FILE, never a PIPE: nobody drains a pipe during the run, so a chatty scenario
-    # (the runaway loop logs a lot) would fill the 64KB pipe buffer and block the API on write().
-    log_path = tmp_path_factory.mktemp("e2e-logs") / "api.log"
-    log_file = open(log_path, "wb")
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "src.app.main:app", "--host", "127.0.0.1", "--port", str(api_port)],
-        cwd=_REPO_ROOT,
-        env=env,
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
+    stack = launch_stack(
+        workspace,
+        tmp_path_factory.mktemp("e2e-logs"),
+        call_limit=_CALL_LIMIT,
+        turn_timeout=_TURN_TIMEOUT,
     )
-    base = f"http://127.0.0.1:{api_port}/api/v1"
     try:
-        deadline = time.monotonic() + 60
-        while time.monotonic() < deadline:
-            if proc.poll() is not None:
-                raise RuntimeError(f"API process died during startup:\n{log_path.read_text()[-4000:]}")
-            try:
-                if httpx.get(f"{base}/openapi.json", timeout=2, trust_env=False).status_code == 200:
-                    break
-            except Exception:
-                time.sleep(0.5)
-        else:
-            raise RuntimeError(f"API did not become healthy within 60s:\n{log_path.read_text()[-4000:]}")
-        yield {"base": base, "workspace": str(workspace)}
+        yield {"base": stack.base, "workspace": stack.workspace}
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            # A mock handler may still be mid-stall (TRAVE60) holding a connection open.
-            proc.kill()
-            proc.wait(timeout=10)
-        log_file.close()
-        mock.shutdown()
+        stack.stop()
 
 
 @pytest.fixture(scope="session")
