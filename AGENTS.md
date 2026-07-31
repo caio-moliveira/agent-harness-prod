@@ -81,14 +81,21 @@ config.
 ### Choosing an LLM model
 
 Set **one** env var: `MODEL="provider:model"` — e.g. `anthropic:claude-sonnet-5`, `openai:gpt-4o`,
-or `azure_openai:<deployment>`. LangChain's `init_chat_model` infers the provider from the prefix, so
-you only set that provider's API key (Azure also needs `AZURE_OPENAI_ENDPOINT` + `_API_VERSION`).
-Startup builds `MODEL` once and fails fast with a clear message if the key is missing. `MODEL_MAX_TOKENS`
-and `MODEL_CALL_LIMIT` tune the output cap and the per-turn safety cap. `UTILITY_MODEL` (blank = reuse
-`MODEL`) is the cheap model for low-stakes sub-flows (file descriptions, safety check, research
-internals, mem0's memory-extraction LLM). **Embeddings are separate** (`EMBEDDINGS_MODEL`) because
-Anthropic has no embedding model: chat/utility/deep-research work on any provider, but long-term memory
-needs OpenAI or Azure embeddings — blank auto-resolves from a present key, else memory auto-disables
+`azure_openai:<deployment>`, or `ollama:llama3.3` for open-weight local models. LangChain's
+`init_chat_model` infers the provider from the prefix, so you only set that provider's API key (Azure
+also needs `AZURE_OPENAI_ENDPOINT` + `_API_VERSION`; Ollama needs **no key** — just `OLLAMA_BASE_URL`,
+default `http://localhost:11434`). Setting `OPENAI_BASE_URL` points `openai:<model>` at any
+OpenAI-compatible server (vLLM, LM Studio, a LiteLLM proxy, OpenRouter) with the key optional — so
+LiteLLM users route through its proxy with zero extra dependencies. Other `init_chat_model` providers
+(`groq:`, `google_genai:`, `mistralai:`, …) also work: install their `langchain-*` package and set
+their standard env key. Startup builds `MODEL` once and fails fast with a clear message if the key is
+missing. `MODEL_MAX_TOKENS` and `MODEL_CALL_LIMIT` tune the output cap and the per-turn safety cap.
+`UTILITY_MODEL` (blank = reuse `MODEL`) is the cheap model for low-stakes sub-flows (file descriptions,
+safety check, research internals, mem0's memory-extraction LLM). **Embeddings are separate**
+(`EMBEDDINGS_MODEL`) because Anthropic has no embedding model: chat/utility/deep-research work on any
+provider, but long-term memory needs OpenAI, Azure, or Ollama embeddings (`ollama:nomic-embed-text`
+makes memory fully local; `EMBEDDINGS_DIMS` overrides the vector size) — blank auto-resolves from a
+present OpenAI/Azure key (Ollama must be explicit), else memory auto-disables
 with a warning (`long_term_memory_disabled_no_embeddings`). Everything is built by
 `src/app/core/llm/factory.py` (`create_chat_model` / `create_utility_chat_model`); never hardcode a
 provider/model or call `ChatOpenAI`/`ChatAnthropic`/`init_chat_model` directly in an agent — go through

@@ -172,6 +172,12 @@ class Settings:
         self.AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
         self.AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
         self.AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "")
+        # Ollama (open-weight local models) — used when MODEL/UTILITY_MODEL/EMBEDDINGS_MODEL carry the
+        # "ollama:" prefix. No API key; this is the Ollama server address.
+        self.OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        # Optional OpenAI-compatible endpoint (vLLM, LM Studio, a LiteLLM proxy, OpenRouter, …): when
+        # set, "openai:<model>" requests go here instead of api.openai.com and the key becomes optional.
+        self.OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
 
         # ── Long-term memory (mem0) + embeddings ────────────────────────────────────────────────────
         # Embeddings are a SEPARATE provider because Anthropic has no embedding model. EMBEDDINGS_MODEL
@@ -180,6 +186,9 @@ class Settings:
         # The mem0 extraction LLM reuses UTILITY_MODEL (→ MODEL). Set LONG_TERM_MEMORY_ENABLED=false to
         # turn memory off explicitly.
         self.EMBEDDINGS_MODEL = os.getenv("EMBEDDINGS_MODEL", "")
+        # Embedding vector size — 0 = provider default (1536 for OpenAI/Azure, 768 for Ollama's
+        # nomic-embed-text). Must match the configured embedder; pgvector's collection uses this size.
+        self.EMBEDDINGS_DIMS = int(os.getenv("EMBEDDINGS_DIMS", "0"))
         self.LONG_TERM_MEMORY_COLLECTION_NAME = os.getenv("LONG_TERM_MEMORY_COLLECTION_NAME", "longterm_memory")
         self.LONG_TERM_MEMORY_ENABLED = os.getenv("LONG_TERM_MEMORY_ENABLED", "true").lower() in ("true", "1", "yes")
         # For an Azure embeddings model: the deployment name (endpoint/key/version reuse AZURE_OPENAI_*).
