@@ -35,11 +35,24 @@ SEARCH_API = SearchAPI.TAVILY
 # init_chat_model). For Azure the base id is the deployment name and endpoint/version are threaded
 # through the config dicts below (env-var names differ from what init_chat_model auto-reads).
 def _model_config(model: str, max_tokens: int) -> dict:
-    """Build the ``.with_config`` payload, adding Azure endpoint/version when the model is on Azure."""
+    """Build the ``.with_config`` payload with the provider extras init_chat_model can't auto-read.
+
+    Azure gets endpoint/version; Ollama gets base URL + ``num_predict``; a custom OpenAI-compatible
+    server gets ``OPENAI_BASE_URL`` (key optional).
+    """
     config: dict = {"model": model, "max_tokens": max_tokens, "api_key": get_api_key_for_model(model)}
     if model.startswith(("azure_openai:", "azure:")):
         config["azure_endpoint"] = settings.AZURE_OPENAI_ENDPOINT
         config["api_version"] = settings.AZURE_OPENAI_API_VERSION
+    elif model.startswith("ollama:"):
+        # ChatOllama needs no API key, reads the server from base_url, and caps output via
+        # num_predict (it silently ignores max_tokens).
+        config["base_url"] = settings.OLLAMA_BASE_URL
+        config["num_predict"] = max_tokens
+    elif model.startswith("openai:") and settings.OPENAI_BASE_URL:
+        # OpenAI-compatible server (vLLM, LM Studio, LiteLLM proxy, …); any key value is accepted.
+        config["base_url"] = settings.OPENAI_BASE_URL
+        config["api_key"] = config["api_key"] or "not-needed"
     return config
 
 
@@ -56,9 +69,12 @@ FINAL_REPORT_MODEL_MAX_TOKENS = 10000
 MAX_CONTENT_LENGTH = 50000
 
 # Shared configurable model used across all subgraphs. Azure needs endpoint/version to be
-# configurable too (init_chat_model's auto env-read uses different var names than our settings).
+# configurable too (init_chat_model's auto env-read uses different var names than our settings), and
+# Ollama / OpenAI-compatible servers need base_url + num_predict (see _model_config).
 configurable_model = init_chat_model(
-    configurable_fields=("model", "max_tokens", "api_key", "azure_endpoint", "api_version"),
+    configurable_fields=(
+        "model", "max_tokens", "api_key", "azure_endpoint", "api_version", "base_url", "num_predict",
+    ),
 )
 
 writer_model_config = _model_config(FINAL_REPORT_MODEL, FINAL_REPORT_MODEL_MAX_TOKENS)

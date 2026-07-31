@@ -55,6 +55,7 @@ dependencies = [
     "alembic>=1.18.5",
     "pymupdf>=1.28.0",
     "azure-identity>=1.25.3",
+    "langchain-ollama>=1.0.0",
 ]
 
 [project.optional-dependencies]

@@ -7,6 +7,7 @@ provider quirks (Anthropic drops temperature + always gets max_tokens) are appli
 
 import pytest
 from langchain_anthropic import ChatAnthropic
+from langchain_ollama import ChatOllama
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
 
 from src.app.core.llm import factory
@@ -21,6 +22,8 @@ def all_keys(monkeypatch):
     monkeypatch.setattr(factory.settings, "AZURE_OPENAI_ENDPOINT", "https://x.openai.azure.com", raising=False)
     monkeypatch.setattr(factory.settings, "AZURE_OPENAI_API_VERSION", "2025-01-01-preview", raising=False)
     monkeypatch.setattr(factory.settings, "MODEL_MAX_TOKENS", 8192, raising=False)
+    monkeypatch.setattr(factory.settings, "OLLAMA_BASE_URL", "http://localhost:11434", raising=False)
+    monkeypatch.setattr(factory.settings, "OPENAI_BASE_URL", "", raising=False)
 
 
 def _set_model(monkeypatch, spec: str) -> None:
@@ -103,3 +106,48 @@ def test_non_reasoning_models_omit_reasoning_effort(all_keys):
     for spec in ("openai:gpt-4o", "anthropic:claude-sonnet-5"):
         assert not factory._is_openai_reasoning_model(spec)
         assert "reasoning_effort" not in factory._build_kwargs(spec, None, None)
+
+
+def test_reasoning_detection_is_openai_azure_only(all_keys):
+    """An o-series-looking id on a non-OpenAI provider must not get reasoning_effort."""
+    for spec in ("ollama:o3", "groq:o1-mini"):
+        assert not factory._is_openai_reasoning_model(spec)
+
+
+def test_build_ollama(all_keys, monkeypatch):
+    """MODEL=ollama:... builds a ChatOllama pointed at OLLAMA_BASE_URL with num_predict set."""
+    _set_model(monkeypatch, "ollama:llama3.3")
+    monkeypatch.setattr(factory.settings, "OLLAMA_BASE_URL", "http://ollama-host:11434", raising=False)
+    model = factory.create_chat_model(max_tokens=2048, temperature=0.1)
+    assert isinstance(model, ChatOllama)
+    assert model.base_url == "http://ollama-host:11434"
+    assert model.num_predict == 2048
+    assert model.temperature == 0.1
+
+
+def test_ollama_kwargs_are_keyless_and_map_max_tokens(all_keys):
+    """Ollama quirk: no api_key/max_tokens kwargs — the output cap rides in num_predict."""
+    kwargs = factory._build_kwargs("ollama:llama3.3", max_tokens=None, temperature=None)
+    assert "api_key" not in kwargs and "max_tokens" not in kwargs
+    assert kwargs["num_predict"] == factory.settings.MODEL_MAX_TOKENS
+    assert kwargs["base_url"] == factory.settings.OLLAMA_BASE_URL
+
+
+def test_openai_base_url_reroutes_and_defaults_key(all_keys, monkeypatch):
+    """OPENAI_BASE_URL set → openai:... goes to the compatible server; blank key gets a dummy."""
+    monkeypatch.setattr(factory.settings, "OPENAI_BASE_URL", "http://localhost:8080/v1", raising=False)
+    kwargs = factory._build_kwargs("openai:qwen2.5-coder", None, None)
+    assert kwargs["base_url"] == "http://localhost:8080/v1"
+    assert kwargs["api_key"] == "sk-openai-test"  # a real key still wins (OpenRouter etc.)
+    monkeypatch.setattr(factory.settings, "OPENAI_API_KEY", "", raising=False)
+    kwargs = factory._build_kwargs("openai:qwen2.5-coder", None, None)
+    assert kwargs["api_key"] == "not-needed"
+
+
+def test_provider_classification_helpers():
+    """Ollama is key-less; mapped + key-less providers are 'known'; others are not."""
+    assert factory.is_keyless_provider("ollama:llama3.3")
+    assert not factory.is_keyless_provider("openai:gpt-4o")
+    assert factory.is_known_provider("ollama:llama3.3")
+    assert factory.is_known_provider("anthropic:claude-sonnet-5")
+    assert not factory.is_known_provider("groq:llama-3.3-70b-versatile")
