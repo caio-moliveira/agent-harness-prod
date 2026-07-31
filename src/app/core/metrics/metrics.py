@@ -65,6 +65,13 @@ agent_turn_terminations_total = Counter(
 # End-to-end wall clock of ONE agent turn (what the user actually waits), as opposed to
 # llm_inference_duration_seconds which times a single model call. This is the series behind the
 # p95-latency SLO; buckets span a quick answer (seconds) to a long multi-deliverable turn.
+# A rising count means budgets are too tight for real usage (or someone is abusing the product) —
+# either way an operator needs to see it, not discover it through support tickets.
+user_token_budget_exhausted_total = Counter(
+    "user_token_budget_exhausted_total",
+    "Turns refused because the user's daily token budget was exhausted",
+)
+
 agent_turn_duration_seconds = Histogram(
     "agent_turn_duration_seconds",
     "Wall-clock duration of one agent turn, by termination reason",

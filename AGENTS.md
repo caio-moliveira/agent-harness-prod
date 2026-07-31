@@ -171,6 +171,23 @@ Política completa em [`docs/security.md`](docs/security.md); o resumo operacion
 - Ao adicionar detecção de um novo tipo de dado, adicione também o caso negativo (o "parecido que
   não é") — precisão importa tanto quanto cobertura aqui.
 
+## Governança de custo (orçamento de tokens)
+
+Rate limit protege **requisições**; `TOKEN_BUDGET_DAILY` protege **tokens** — o que um produto LLM
+de fato paga (dois usuários com a mesma contagem de requisições podem diferir em ordens de
+grandeza). `0` = desligado (default: deploy single-user ou Ollama local não tem custo por usuário
+a governar); `user.token_budget_daily` sobrepõe por conta (`0` = ilimitada para aquela conta).
+
+- Contabilização: `core/usage/` — uma linha por `(user_id, dia UTC)`, incrementada ao fim de cada
+  turno com o `usage_metadata` que o provedor reporta (inclui os tokens dos subagentes: o usuário
+  paga por eles igual).
+- Enforcement: verificado **no início** do turno. Um turno em andamento nunca é morto por
+  orçamento — o usuário perderia trabalho por um limite que não via chegar, e o custo já foi gasto.
+  O turno que cruza a linha termina; o **próximo** é recusado com `done{reason:"budget_exhausted"}`
+  e uma mensagem dizendo quanto foi usado e quando renova.
+- Visibilidade: `GET /me/usage` + indicador discreto no sidebar (invisível quando não há orçamento)
+  e a métrica `user_token_budget_exhausted_total` com alerta próprio.
+
 ## SLOs, alertas e runbooks
 
 `observability/` é provisionado pelo compose: Prometheus carrega `prometheus/alerts.yml` (regras de

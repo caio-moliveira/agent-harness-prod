@@ -112,6 +112,19 @@ groups:
           description: "agent={{ $labels.agent }} p95 is {{ $value | humanizeDuration }} over 30m — check provider latency, context size, and tool round-trips."
           runbook: "docs/runbooks.md#agentturnlatencyslobreach"
 
+  - name: harness-cost
+    rules:
+      - alert: TokenBudgetsExhaustingFrequently
+        expr: increase(user_token_budget_exhausted_total[1h]) > 10
+        for: 1h
+        labels:
+          severity: info
+          service: cost
+        annotations:
+          summary: "Users are hitting the daily token budget repeatedly"
+          description: "{{ $value | printf \"%.0f\" }} refusals in the last hour — either TOKEN_BUDGET_DAILY is too tight for real usage or an account is being abused."
+          runbook: "docs/runbooks.md#tokenbudgetsexhaustingfrequently"
+
   - name: harness-dependencies
     rules:
       - alert: LLMProviderErrorsSpiking
