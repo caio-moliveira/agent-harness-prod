@@ -108,8 +108,16 @@ the factory. See `.env.example` for the full surface.
 ```bash
 cd frontend && npm install     # first time
 npm run dev                    # http://localhost:5173 (proxies /api → :8000)
+npm test                       # vitest (jsdom) — SSE contract + turn-ending UX + two-token auth
 npm run build                  # type-check (tsc -b) + bundle
 ```
+
+Specs live next to what they cover (`src/**/*.test.{ts,tsx}`) and run in CI before the build. They
+exist for what `tsc` cannot see: that the **SSE parser** survives frames split across network
+chunks, and that each `done{reason}` maps to the right UX — `call_limit`/`timeout`/
+`recursion_backstop` offer **Continuar**, while `blocked_input`/`budget_exhausted` must NOT (a
+retry cannot succeed). Add a `done{reason}` to the backend → add it to `TurnEndReason` and to
+`ChatScreen.test.tsx`, or the client silently mishandles it.
 
 React chat UI for the `data_agent` (auth, sessions sidebar, streaming, activity timeline, inline
 HITL approval + deliverable download). Talks to the backend only via the Vite proxy (`/api/*`);

@@ -138,5 +138,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Unit tests (vitest)
+        # Guards the SSE contract and the turn-ending UX mapping — neither is visible to `tsc`,
+        # and a backend change that breaks them would otherwise only surface in production.
+        run: npm test
+
       - name: Type-check and build
         run: npm run build

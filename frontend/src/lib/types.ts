@@ -152,7 +152,10 @@ export type TurnEndReason =
   | "recursion_backstop"
   /** Input guardrail refused the message (content filter or high-risk PII); the refusal itself is
    *  streamed as the answer. Not recoverable by "continuar" — the user must rephrase. */
-  | "blocked_input";
+  | "blocked_input"
+  /** The account's daily token budget is spent; the refusal is streamed as the answer. Not
+   *  resumable either — the budget resets on a clock, not on a click. */
+  | "budget_exhausted";
 
 /** Turn endings the UI offers to resume: the work stopped at a boundary, nothing was lost. */
 export type ResumableEndReason = "call_limit" | "timeout" | "recursion_backstop";
