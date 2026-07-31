@@ -98,6 +98,27 @@ jobs:
           echo "$CHANGED"
           echo "$CHANGED" | xargs uvx ruff check
 
+  observability:
+    name: Observability (promtool + dashboards)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Prometheus config and alert rules
+        # promtool is the authority on PromQL syntax; the unit tests
+        # (tests/unit/test_alert_rules.py) cover the semantics — that every queried series is one
+        # the app actually exposes, and that each alert has a runbook.
+        run: |
+          docker run --rm -v "${{ github.workspace }}/observability/prometheus:/rules" \
+            --entrypoint promtool prom/prometheus:latest check rules /rules/alerts.yml
+
+      - name: Validate Grafana dashboard JSON
+        run: |
+          for f in observability/grafana/dashboards/json/*.json; do
+            python -c "import json,sys; json.load(open(sys.argv[1]))" "$f" && echo "ok: $f"
+          done
+
   frontend:
     name: Frontend (tsc + vite build)
     runs-on: ubuntu-latest
