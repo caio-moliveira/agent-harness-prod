@@ -86,6 +86,8 @@ jobs:
       - name: Ruff on files changed in this PR
         # Diff-scoped while the pre-existing repo-wide backlog (~550 findings) is paid down —
         # see issue #69. New/changed files must be clean; untouched legacy files don't block.
+        # `uvx` runs ruff standalone — the project env (where ruff is only a dev extra) is never
+        # synced in this job, so `uv run ruff` would fail with "Failed to spawn: ruff".
         run: |
           git fetch origin "${{ github.base_ref }}" --depth=1
           CHANGED=$(git diff --name-only --diff-filter=ACMR "origin/${{ github.base_ref }}"...HEAD -- '*.py')
@@ -94,7 +96,7 @@ jobs:
             exit 0
           fi
           echo "$CHANGED"
-          echo "$CHANGED" | xargs uv run ruff check
+          echo "$CHANGED" | xargs uvx ruff check
 
   frontend:
     name: Frontend (tsc + vite build)
