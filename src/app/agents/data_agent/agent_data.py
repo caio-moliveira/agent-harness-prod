@@ -622,8 +622,26 @@ _TURN_TIMEOUT_MESSAGE = (
 
 def _short(value: Any, limit: int = 1500) -> str:
     """Render a tool input/output to a short display string."""
-    text = value if isinstance(value, str) else str(value)
+    text = value if isinstance(value, str) else str(_readable_output(value))
     return text[:limit]
+
+
+def _readable_output(value: Any) -> Any:
+    """Turn a framework object into something a user can read on the timeline.
+
+    LangGraph's file tools return a ``Command`` whose repr is the whole state update
+    (``Command(update={'files': {'/x.md': {'content': [...], 'created_at': ...}}})``). Streaming
+    that verbatim shows the user an internal data structure instead of "what the tool did", so the
+    file-writing commands are summarized by the paths they touched. Anything else is left alone.
+    """
+    update = getattr(value, "update", None)
+    if not isinstance(update, dict):
+        return value
+    files = update.get("files")
+    if not isinstance(files, dict) or not files:
+        return value
+    paths = ", ".join(sorted(files))
+    return f"Arquivo salvo no rascunho da sessão: {paths}"
 
 
 # Human labels for a task() delegation, keyed by the subagent it targets, so the streamed timeline
@@ -743,6 +761,11 @@ Conforme as fontes que o usuário conectou, você pode ter:
   **IMPORTANTE: para gerar `.docx` ou `.pptx` use SEMPRE `gerar_artefato`. NUNCA crie um arquivo
   `.docx`/`.pptx`/`.xlsx` com `write_file`** — `write_file` grava apenas texto e o arquivo Office
   sairia corrompido. `write_file` serve só para arquivos de texto (`.md`, `.txt`, `.csv`).
+  **Atenção — `write_file` é rascunho interno da sessão**: sem uma pasta gravável concedida, o que
+  ele grava NÃO fica acessível ao usuário (não aparece nos arquivos da sessão nem tem download).
+  Nunca diga que "criou o arquivo X" para o usuário com base num `write_file`: um entregável de
+  verdade sai por `gerar_artefato`/`gerar_planilha` (que geram download após aprovação) ou é escrito
+  na pasta concedida quando ela é gravável.
 
 Regras: somente leitura em dados/banco; nunca modifique dados. Para perguntas sobre **arquivos**, use `ls`/`glob`
 em `/workspace` e depois `read_file` para ler o conteúdo — funciona com texto, CSV, **PDF, Word e Excel**
