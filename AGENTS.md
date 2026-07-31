@@ -161,6 +161,24 @@ User-authored skills are gated by an approval state machine (`draft → in_revie
 `src/app/core/skill/skill_status.py`) — only `approved` skills materialize. Editing an approved
 skill returns it to `draft`.
 
+## Operação (backup, retenção, capacidade, sondas)
+
+Detalhes em [`docs/operations.md`](docs/operations.md); o essencial:
+
+- **Sondas separadas**: `/health/live` (processo — nunca toca dependências) vs `/health/ready`
+  (banco incluso; 503 tira do balanceador). Usar a readiness como liveness faria o orquestrador
+  **reiniciar** processos sadios num soluço do banco, virando crash loop.
+- **Artefatos fora de `/tmp`**: `ARTIFACT_STORAGE_ROOT` (volume). Em container, `/tmp` some no
+  restart e o download de um artefato aprovado passa a dar 404.
+- **Retenção** (`make purge`) é opt-in: janelas de conversa vêm em `0` (nunca apagar). Conversas
+  são removidas **inteiras**, nunca aparadas — sessão sem mensagens vira conversa fantasma.
+- **Exclusão LGPD**: `python -m src.cli.retention erase --user <id>` remove sessões, mensagens,
+  eventos, memórias, uso e artefatos, com teste de integração provando cada tabela.
+- **Backup/restore**: `make backup` e `make restore-drill dump=...` (ensaio em banco descartável).
+  O dump do Postgres **não** contém os artefatos — inclua o volume na rotina.
+- **Capacidade**: `make load-test` mede p50/p95 com o mock LLM. Medição atual e leitura honesta do
+  gargalo estão em `docs/operations.md` — refaça no hardware de produção.
+
 ## Guardrails (entrada bloqueia, saída redige)
 
 Política completa em [`docs/security.md`](docs/security.md); o resumo operacional:

@@ -134,6 +134,57 @@ pedindo "continuar" com frequência demais.
 
 ---
 
+## Postgres fora do ar
+
+**Significa** O banco não responde. A API **continua de pé** (degrada para stateless: sem
+checkpoint, sem histórico), então o sintoma é `APIDown` ausente + `/health/ready` em 503 + erros de
+turno subindo.
+
+**Onde olhar**
+- `GET /api/v1/health/ready` → `components.database`.
+- Logs `database_health_check_failed` e `data_stream_failed`.
+- No host do banco: serviço vivo? disco cheio? conexões esgotadas (`DatabaseConnectionsSaturated`)?
+
+**O que fazer**
+1. A readiness já tirou a instância do balanceador — **não reinicie a API** (a liveness é separada
+   justamente para evitar crash loop). Concentre-se em recuperar o banco.
+2. Banco irrecuperável → restaure do backup (`scripts/restore.sh`, ver `docs/operations.md`) e
+   aceite a perda até o último dump. Comunique a janela perdida.
+3. Depois de voltar: confira `alembic current` — uma restauração pode trazer schema antigo.
+
+---
+
+## Disco cheio de artefatos
+
+**Significa** O volume de `ARTIFACT_STORAGE_ROOT` encheu. Geração de novos entregáveis falha; se o
+mesmo volume hospedar o banco, o Postgres para de aceitar escrita (bem pior).
+
+**Onde olhar**
+- `du -sh $ARTIFACT_STORAGE_ROOT/* | sort -h | tail` — diretórios por sessão.
+- Diretórios órfãos (sessão já apagada) são o acúmulo típico.
+
+**O que fazer**
+1. Imediato: `uv run python -m src.cli.retention purge` remove diretórios além de
+   `RETENTION_ARTIFACTS_DAYS` (default 30).
+2. Se ainda apertado, reduza a janela ou aumente o volume.
+3. Preventivo: agende o `purge` (cron diário) — é o que impede a reincidência.
+
+---
+
+## Reprocessar um turno
+
+**Significa** Um turno terminou errado (erro, backstop, entregável faltando) e você quer refazê-lo.
+
+**O que fazer**
+1. Peça ao usuário para enviar **"continuar"** na mesma conversa: o histórico persistido + o
+   checkpoint dão contexto, sem refazer a análise. É o caminho normal para `call_limit`/`timeout`.
+2. Para investigar antes: o trace no Langfuse tem a sequência completa de chamadas e ferramentas;
+   o log `data_turn_summary` traz `model_calls`, `deliverable_called` e `incomplete`.
+3. Se o turno corrompeu o estado da thread (raro), apagar a conversa e recomeçar é o último
+   recurso — a exclusão em cascata limpa mensagens, eventos, ações e checkpoint.
+
+---
+
 ## TokenBudgetsExhaustingFrequently
 
 **Significa** Muitos turnos estão sendo recusados por orçamento diário (`TOKEN_BUDGET_DAILY`). Não é
