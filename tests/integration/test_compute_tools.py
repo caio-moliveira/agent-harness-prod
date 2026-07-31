@@ -5,11 +5,33 @@ by the LLM. No DB needed — the tools read the granted folder directly. In the 
 ``SANDBOX_ALLOWED_ROOTS`` is empty, so the allow-list check is skipped and tmp files load freely.
 """
 
+import duckdb
 import pytest
 
 from src.app.agents.data_agent.compute_tools import make_compute_tools
 
 pytestmark = pytest.mark.asyncio
+
+
+def _duckdb_excel_available() -> bool:
+    """Whether DuckDB's `excel` extension can be loaded (it auto-downloads on first use).
+
+    In offline/proxied environments the download fails — the xlsx tests then skip with an
+    explicit reason instead of failing on an environment condition the code doesn't control.
+    """
+    try:
+        con = duckdb.connect()
+        con.execute("INSTALL excel; LOAD excel;")
+        con.close()
+        return True
+    except Exception:
+        return False
+
+
+requires_duckdb_excel = pytest.mark.skipif(
+    not _duckdb_excel_available(),
+    reason="DuckDB 'excel' extension unavailable (offline/proxied environment)",
+)
 
 USER, AGENT = 1, 7
 
@@ -42,6 +64,7 @@ class TestComputeTools:
         out = await tools["consultar_dados"].ainvoke({"sql": "SELECT SUM(receita) AS s FROM vendas"})
         assert "3500" in out
 
+    @requires_duckdb_excel
     async def test_xlsx_single_sheet_uses_base_name(self, tmp_path):
         """A single-sheet workbook is queryable under the file's base name."""
         _write_xlsx(tmp_path / "dados.xlsx", {"qualquer": [["a", "b"], [1, 2], [3, 4]]})
@@ -53,6 +76,7 @@ class TestComputeTools:
         out = await tools["consultar_dados"].ainvoke({"sql": "SELECT SUM(a) AS s FROM dados"})
         assert "4" in out  # 1 + 3
 
+    @requires_duckdb_excel
     async def test_xlsx_multi_sheet_becomes_multiple_tables(self, tmp_path):
         """A multi-sheet workbook exposes one table per sheet (file base + sheet name)."""
         _write_xlsx(

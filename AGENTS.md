@@ -60,10 +60,12 @@ frontend/                      # React chat UI (Vite + React 19 + TS + Tailwind 
 ## Dev commands
 
 ```bash
-make install              # uv sync
+make install              # uv sync --group test (the test group has pytest-asyncio — without it
+                          # async tests are SILENTLY SKIPPED, not failed)
 make db-up                # start ONLY Postgres (pgvector) in Docker  ← start here
 make dev                  # run API on :8000 (reload), reads .env.development
-uv run pytest tests/      # run tests
+uv run pytest tests/      # run tests (in-memory SQLite — no Postgres needed)
+RUN_E2E=1 uv run pytest tests/e2e   # E2E: real API + Postgres + scripted mock LLM (no tokens)
 make lint                 # ruff check
 make format               # ruff format
 make eval                 # interactive evaluation

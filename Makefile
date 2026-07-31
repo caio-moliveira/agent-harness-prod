@@ -1,6 +1,6 @@
 install:
 	pip install uv
-	uv sync
+	uv sync --group test
 
 DOCKER_COMPOSE ?= docker-compose
 
