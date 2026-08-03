@@ -23,21 +23,29 @@ class ConnectDbRequest(BaseModel):
 
 
 class ConnectDbResponse(BaseModel):
+    """Outcome of a connection attempt, with the schema size the agent can now see."""
+
     connected: bool
     dialect: str
     table_count: int
 
 
 class GrantFolderRequest(BaseModel):
+    """The host folder to mount read-only as the session's workspace."""
+
     path: str = Field(..., min_length=1, description="Absolute path of the folder to mount read-only")
 
 
 class GrantFolderResponse(BaseModel):
+    """Confirmation of the granted folder, echoing the path the session actually mounted."""
+
     granted: bool
     folder: str
 
 
 class DataQueryRequest(BaseModel):
+    """A user turn for the data agent, plus the caller's turn-resumption preference."""
+
     query: str = Field(..., min_length=1, max_length=2000)
     # Opt-in to transparent resumption (#77): when the turn stops at the step cap, the server
     # resumes it in-stream instead of asking the user to press "continuar". Defaults to False so
@@ -50,6 +58,8 @@ class DataQueryRequest(BaseModel):
 
 
 class DataQueryResponse(BaseModel):
+    """The non-streaming turn result: the messages produced by the agent."""
+
     messages: List[Message]
 
 
@@ -76,6 +86,8 @@ class ChatHistoryResponse(BaseModel):
 
 
 class SourceStatusResponse(BaseModel):
+    """What the session is currently attached to (database and/or folder), for the UI's source chips."""
+
     db_connected: bool = False
     dialect: Optional[str] = None
     folder: Optional[str] = None
@@ -86,6 +98,8 @@ class SourceStatusResponse(BaseModel):
 
 
 class DisconnectResponse(BaseModel):
+    """Human-readable confirmation that the session's source was released."""
+
     message: str
 
 
