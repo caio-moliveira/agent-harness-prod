@@ -31,7 +31,7 @@ def _agent_that_must_not_run(monkeypatch) -> dict:
 
     called = {"ran": False}
 
-    async def _events(_messages, _session_id, _user_id):
+    async def _events(_messages, _session_id, _user_id, **_kw):
         called["ran"] = True
         yield {"type": "token", "content": "não deveria ter rodado"}
 
@@ -99,7 +99,7 @@ class TestStreamInputGuardrail:
         """The guardrail must not become a wall: an ordinary product request runs normally."""
         from src.app.api.v1 import data_agent as da
 
-        async def _events(_messages, _session_id, _user_id):
+        async def _events(_messages, _session_id, _user_id, **_kw):
             yield {"type": "token", "content": "Analisei a pasta."}
             yield {"type": "turn_end", "reason": "completed"}
 

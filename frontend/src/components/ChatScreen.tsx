@@ -33,6 +33,8 @@ import {
 // Opened rarely (an explicit "Fontes" click), so it doesn't need to be in the initial bundle.
 const SourcesPanel = lazy(() => import("./SourcesPanel"));
 
+const AUTO_CONTINUE_KEY = "agent.autoContinue";
+
 function updateLastAssistant(turns: Turn[], fn: (a: AssistantTurn) => AssistantTurn): Turn[] {
   const copy = [...turns];
   for (let i = copy.length - 1; i >= 0; i--) {
@@ -135,6 +137,12 @@ export default function ChatScreen() {
   const [sidebarReload, setSidebarReload] = useState(0);
   const [showSources, setShowSources] = useState(false);
   const [sources, setSources] = useState<SourceStatus>({ db_connected: false });
+  // Opt-in to server-side resumption of a step-capped turn (#77). Off by default — pressing
+  // "Continuar" stays the product's default — and remembered once chosen, because a user who wants
+  // long tasks to run unattended wants it for the next one too, not just the turn they clicked on.
+  const [autoContinue, setAutoContinue] = useState(
+    () => localStorage.getItem(AUTO_CONTINUE_KEY) === "true",
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const stepIdRef = useRef(0);
   // The in-flight stream's controller. Aborted whenever the visible session changes (switch,
@@ -297,7 +305,19 @@ export default function ChatScreen() {
     if (el) el.scrollTop = el.scrollHeight; // instant, so streaming doesn't jank
   }, [turns]);
 
-  async function handleSend(text: string) {
+  /** Turn on unattended resumption and immediately apply it to the turn the user is looking at.
+   *
+   * The flag is passed explicitly into `handleSend` rather than read from state: `setAutoContinue`
+   * has not committed yet at this point, so the closure would still send the old value and the
+   * resumption the user just asked for would run without it.
+   */
+  function enableAutoContinue(next: boolean) {
+    setAutoContinue(next);
+    localStorage.setItem(AUTO_CONTINUE_KEY, String(next));
+    if (next) void handleSend("continuar", true);
+  }
+
+  async function handleSend(text: string, auto: boolean = autoContinue) {
     if (sending) return;
 
     // Create the session on the first message (lazy) — its id then shows in the URL.
@@ -334,7 +354,7 @@ export default function ChatScreen() {
 
     try {
       // Only the new message is sent — the agent keeps context via its long-term memory, not a replay.
-      for await (const ev of api.streamDataQuery(stoken, sid, text, controller.signal)) {
+      for await (const ev of api.streamDataQuery(stoken, sid, text, controller.signal, auto)) {
         if (!isCurrent()) break; // superseded — the backend still finishes and persists the turn
         if (ev.type === "tool_start") {
           const id = stepIdRef.current++;
@@ -385,6 +405,10 @@ export default function ChatScreen() {
               },
             })),
           );
+        } else if (ev.type === "auto_continue") {
+          // The turn hit the step cap and the server picked it back up. Disclosed, never silent:
+          // the turn is still streaming, so this only annotates it — `done` still ends it.
+          setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...a, resumptions: ev.attempt })));
         } else if (ev.type === "error") {
           setTurns((prev) =>
             updateLastAssistant(prev, (a) => ({ ...settleTodos(a), streaming: false, error: ev.content })),
@@ -592,6 +616,13 @@ export default function ChatScreen() {
                         {turn.error}
                       </div>
                     )}
+                    {turn.resumptions ? (
+                      <div className="ml-[42px] mt-1 text-xs text-slate-500">
+                        {turn.resumptions === 1
+                          ? "Retomado automaticamente uma vez para concluir a tarefa."
+                          : `Retomado automaticamente ${turn.resumptions} vezes para concluir a tarefa.`}
+                      </div>
+                    ) : null}
                     {turn.endReason && !turn.streaming && (
                       <div className="ml-[42px] mt-1 flex items-center justify-between gap-3 rounded-lg border border-amber-900 bg-amber-950/40 px-3 py-2 text-sm text-amber-200">
                         <span>
@@ -599,13 +630,29 @@ export default function ChatScreen() {
                             ? "O turno atingiu o tempo máximo de processamento — o progresso foi preservado."
                             : "O turno atingiu o limite de passos — o progresso foi preservado."}
                         </span>
-                        <button
-                          onClick={() => void handleSend("continuar")}
-                          disabled={sending}
-                          className="shrink-0 rounded-md border border-amber-700 px-2.5 py-1 text-xs font-medium text-amber-100 hover:bg-amber-900/50 disabled:opacity-50"
-                        >
-                          Continuar
-                        </button>
+                        <div className="flex shrink-0 items-center gap-3">
+                          {/* Offered only for the step cap: it is the one ending the server can pick
+                              back up on its own, so promising it on a timeout would be a lie. */}
+                          {turn.endReason === "call_limit" && !autoContinue && (
+                            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-amber-300/90">
+                              <input
+                                type="checkbox"
+                                checked={autoContinue}
+                                onChange={(e) => enableAutoContinue(e.target.checked)}
+                                disabled={sending}
+                                className="accent-amber-500"
+                              />
+                              Continuar automaticamente
+                            </label>
+                          )}
+                          <button
+                            onClick={() => void handleSend("continuar")}
+                            disabled={sending}
+                            className="shrink-0 rounded-md border border-amber-700 px-2.5 py-1 text-xs font-medium text-amber-100 hover:bg-amber-900/50 disabled:opacity-50"
+                          >
+                            Continuar
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>

@@ -330,6 +330,7 @@ class DataAgent:
         messages: list[Message],
         session_id: str,
         user_id: Optional[int] = None,
+        resume_hint: bool = True,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream the agent's work as structured events for a transparent UI timeline.
 
@@ -341,6 +342,11 @@ class DataAgent:
         The full message history is passed in, so multi-turn context works without a
         server-side checkpointer. Relevant long-term memory is auto-injected before the turn,
         and the exchange is stored back to memory afterwards. Traced by Langfuse.
+
+        ``resume_hint`` controls the closing "envie *continuar*" text on a turn that stopped at a
+        limit. The caller sets it to False when it will resume the turn itself (#77): the hint asks
+        the user for an action the server is about to take, so leaving it in would be a visible lie
+        mid-answer. The ``turn_end`` marker is unaffected — the reason is reported either way.
         """
         config = self._invoke_config(session_id, user_id)
         history = [{"role": m.role, "content": m.content} for m in messages]
@@ -567,7 +573,9 @@ class DataAgent:
             input_tokens=turn_input_tokens,
             output_tokens=turn_output_tokens,
         )
-        if hit_call_cap or hit_recursion_backstop:
+        # The closing hints ask the user to send "continuar"; both are suppressed when the caller
+        # will resume this turn itself, since the action they request is already under way.
+        if resume_hint and (hit_call_cap or hit_recursion_backstop):
             hint = (
                 "\n\n---\n\n_Cheguei ao limite de passos deste turno. Se ainda faltou algo (ex.: gerar o "
                 'arquivo), envie **"continuar"** que eu retomo daqui — mantenho todo o contexto já '
@@ -575,7 +583,7 @@ class DataAgent:
             )
             answer += hint
             yield {"type": "token", "content": hint}
-        elif turn_incomplete:
+        elif resume_hint and turn_incomplete:
             hint = (
                 '_Reuni os dados mas não cheguei a gerar o arquivo neste turno. Envie **"continuar"** '
                 "que eu finalizo o entregável a partir do que já apurei — sem refazer a análise._"

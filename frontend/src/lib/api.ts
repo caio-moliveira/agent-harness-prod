@@ -537,17 +537,22 @@ export async function disconnectSources(sessionToken: string): Promise<void> {
  * Stream the Data Agent's work as structured events (tool calls, tokens).
  * Only the new message is sent; the server rebuilds recent context from the persisted history and
  * relies on the agent's long-term memory for older turns — so the payload stays small.
+ *
+ * `autoContinue` opts this turn into server-side resumption of a step cap (#77): the stream then
+ * carries `auto_continue` events and ends as `completed` if the resumption finished the work. It is
+ * an opt-in only — how many resumptions are allowed is the server's decision, not ours.
  */
 export async function* streamDataQuery(
   sessionToken: string,
   sessionId: string,
   query: string,
   signal?: AbortSignal,
+  autoContinue = false,
 ): AsyncGenerator<StreamEvent, void, unknown> {
   const res = await fetch(`${BASE}/data-agent/${sessionId}/query/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${sessionToken}` },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({ query, auto_continue: autoContinue }),
     signal,
   });
   await ensureOk(res);

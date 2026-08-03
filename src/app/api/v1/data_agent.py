@@ -49,6 +49,7 @@ from src.app.core.guardrails.input_screening import screen_user_input
 from src.app.core.guardrails.safety_check import evaluate_safety
 from src.app.core.hitl.pending_model import PendingActionStatus
 from src.app.core.metrics.metrics import (
+    agent_turn_auto_continues,
     agent_turn_duration_seconds,
     agent_turn_terminations_total,
     guardrail_checks_total,
@@ -391,6 +392,25 @@ def _agent_messages(history, query: str) -> list[Message]:
     return window + [Message(role="user", content=query)]
 
 
+# The exact text the manual "Continuar" button sends. Automatic resumption reuses it instead of a
+# bespoke prompt on purpose: the manual path is the one the system prompt was tuned against, so the
+# agent behaves identically whether the human or the server asked for the continuation.
+_CONTINUE_INSTRUCTION = "continuar"
+
+
+def _continuation_messages(base: list[Message], partial: str) -> list[Message]:
+    """Model input for an automatic resumption — deliberately NOT persisted as a user turn.
+
+    The instruction reaches the model only; persisting it would litter the transcript with a
+    "continuar" bubble the user never typed, once per resumption. The answer so far rides along so
+    the stateless path (no checkpointer) resumes with the same context a checkpointed thread already
+    holds — there the graph appended it already, and ``_compose_payload`` sends only the new message.
+    ``Message.content`` must be non-empty, so an empty partial is simply omitted.
+    """
+    so_far = [Message(role="assistant", content=partial)] if partial.strip() else []
+    return [*base, *so_far, Message(role="user", content=_CONTINUE_INSTRUCTION)]
+
+
 async def _persist_user_message(session: Session, query: str) -> None:
     """Persist the user's new message and name the session from it on the first turn."""
     await chat_message_repository.add_message(session.id, session.user_id, ChatMessageRole.USER, query)
@@ -531,6 +551,11 @@ async def query_stream(
     The client sends only the new message; the server rebuilds a bounded recent window from the
     persisted history for immediate coherence, while long-term memory and learned preferences carry
     the older/cross-session context.
+
+    With ``auto_continue`` the server also resumes a step-capped turn in-stream (up to
+    ``MAX_AUTO_CONTINUES``), emitting an ``auto_continue`` event per resumption; the terminal
+    ``done`` still reports how the turn *finally* ended, so a resumed-then-finished turn is a plain
+    ``completed``.
     """
     _require_session(session_id, session)
     agent = await _get_or_build_agent(session)
@@ -544,10 +569,12 @@ async def query_stream(
         # How the turn ended (turn-limit policy, see turn_limits.py): completed | call_limit |
         # recursion_backstop (both reported by the agent via its `turn_end` marker) | timeout
         # (enforced here) | error. Rides on the terminal `done` event and the terminations metric.
+        # With auto-resumption this is the reason of the LAST attempt — the one the user must act on.
         reason = "completed"
         agen = None
         turn_started = time.monotonic()
         turn_tokens = (0, 0)
+        auto_continues = 0
         try:
             # Input guardrails run BEFORE anything else — the only point where a guardrail can
             # prevent harm instead of describing it afterwards. Deterministic and microseconds
@@ -590,28 +617,76 @@ async def query_stream(
             history = await chat_message_repository.get_messages(session.id, limit=_HISTORY_WINDOW)
             agent_messages = _agent_messages(history, body.query)
             await _persist_user_message(session, body.query)
-            agen = agent.astream_query_events(agent_messages, session.id, session.user_id)
+            # Transparent resumption (#77): the client opts in, the SERVER owns the ceiling. Only
+            # `call_limit` is resumed — see MAX_AUTO_CONTINUES for why timeout/recursion_backstop
+            # are not. All attempts stream into the same assistant message, so the user reads one
+            # continuous answer instead of a turn chopped at an internal budget.
+            attempts_left = settings.MAX_AUTO_CONTINUES if body.auto_continue else 0
+            payload = agent_messages
             # Temporal backstop: a hung/slow provider must not hold the stream open forever. The
             # deadline covers the whole agent run; on expiry the partial work is persisted and the
-            # client gets a recoverable "continuar" hint, mirroring the call-cap UX.
+            # client gets a recoverable "continuar" hint, mirroring the call-cap UX. It wraps the
+            # resumption loop, not each attempt: auto-resumption must never extend the wall clock.
             async with asyncio.timeout(settings.TURN_TIMEOUT_SECONDS or None):
-                async for ev in agen:
-                    etype = ev.get("type")
-                    if etype == "turn_end":
-                        # Internal marker, not part of the client contract — fold into `done`.
-                        reason = ev.get("reason", "completed")
-                        turn_tokens = (ev.get("input_tokens", 0), ev.get("output_tokens", 0))
-                        continue
-                    if etype == "token":
-                        answer_parts.append(ev.get("content", ""))
-                    elif etype == "tool_start":
-                        steps.append({"name": ev.get("name", ""), "input": ev.get("input"), "output": None})
-                    elif etype == "tool_end":
-                        _close_step(steps, ev.get("name", ""), ev.get("output"))
-                    yield f"data: {json.dumps(ev)}\n\n"
-            # Surface any approval the agent just parked as an inline card, before closing the turn.
-            for hitl_ev in await _new_hitl_events(session, known_ids):
-                yield f"data: {json.dumps(hitl_ev)}\n\n"
+                while True:
+                    agen = agent.astream_query_events(
+                        payload,
+                        session.id,
+                        session.user_id,
+                        # The "envie continuar" hint would be a lie while we still have resumptions
+                        # in hand — the action it asks for is about to happen on its own.
+                        resume_hint=attempts_left == 0,
+                    )
+                    async for ev in agen:
+                        etype = ev.get("type")
+                        if etype == "turn_end":
+                            # Internal marker, not part of the client contract — fold into `done`.
+                            reason = ev.get("reason", "completed")
+                            # Summed across attempts: the provider charged for every one of them.
+                            turn_tokens = (
+                                turn_tokens[0] + ev.get("input_tokens", 0),
+                                turn_tokens[1] + ev.get("output_tokens", 0),
+                            )
+                            continue
+                        if etype == "token":
+                            answer_parts.append(ev.get("content", ""))
+                        elif etype == "tool_start":
+                            steps.append({"name": ev.get("name", ""), "input": ev.get("input"), "output": None})
+                        elif etype == "tool_end":
+                            _close_step(steps, ev.get("name", ""), ev.get("output"))
+                        yield f"data: {json.dumps(ev)}\n\n"
+                    # Surface any approval this attempt parked as an inline card, before closing.
+                    hitl_events = await _new_hitl_events(session, known_ids)
+                    for hitl_ev in hitl_events:
+                        yield f"data: {json.dumps(hitl_ev)}\n\n"
+                    # A parked approval outranks any remaining resumption budget: the agent is
+                    # waiting on the user, and resuming over it would walk past the approval gate.
+                    if reason != "call_limit" or attempts_left == 0 or hitl_events:
+                        break
+                    # A resumption is a NEW turn, so the budget policy applies to it: a turn in
+                    # flight is never killed for budget, but starting the next one is refused.
+                    budget = await check_budget(session.user_id, await _user_budget_override(session.user_id))
+                    if budget.exceeded:
+                        reason = "budget_exhausted"
+                        limit_str = f"{budget.limit:,}".replace(",", ".")
+                        message = (
+                            f"\n\n---\n\n_Parei aqui: o limite diário de {limit_str} tokens desta conta "
+                            f"foi atingido durante este turno. O limite renova às "
+                            f"{budget.resets_at:%H:%M} UTC._"
+                        )
+                        answer_parts.append(message)
+                        yield f"data: {json.dumps({'type': 'token', 'content': message})}\n\n"
+                        break
+                    attempts_left -= 1
+                    auto_continues += 1
+                    yield f"data: {json.dumps({'type': 'auto_continue', 'attempt': auto_continues, 'max': settings.MAX_AUTO_CONTINUES})}\n\n"
+                    logger.info(
+                        "turn_auto_continue",
+                        session_id=session.id,
+                        attempt=auto_continues,
+                        max_attempts=settings.MAX_AUTO_CONTINUES,
+                    )
+                    payload = _continuation_messages(agent_messages, "".join(answer_parts))
         except TimeoutError:
             reason = "timeout"
             logger.warning(
@@ -655,6 +730,9 @@ async def query_stream(
             agent_turn_duration_seconds.labels(agent="data_agent", reason=reason).observe(
                 time.monotonic() - turn_started
             )
+            # Observed on every request, including the zero — the distribution is what calibrates
+            # MODEL_CALL_LIMIT (#77), and skipping the zeros would make every request look capped.
+            agent_turn_auto_continues.labels(agent="data_agent").observe(auto_continues)
             # Output safety AUDIT (opt-in): a verdict after the fact cannot un-send streamed
             # tokens, so this never rewrites the answer — it records that an unsafe answer went
             # out, which is what a regulated deployment needs to review. Runs in the background so

@@ -62,9 +62,6 @@ agent_turn_terminations_total = Counter(
     ["agent", "reason"],
 )
 
-# End-to-end wall clock of ONE agent turn (what the user actually waits), as opposed to
-# llm_inference_duration_seconds which times a single model call. This is the series behind the
-# p95-latency SLO; buckets span a quick answer (seconds) to a long multi-deliverable turn.
 # A rising count means budgets are too tight for real usage (or someone is abusing the product) —
 # either way an operator needs to see it, not discover it through support tickets.
 user_token_budget_exhausted_total = Counter(
@@ -72,11 +69,25 @@ user_token_budget_exhausted_total = Counter(
     "Turns refused because the user's daily token budget was exhausted",
 )
 
+# End-to-end wall clock of ONE agent turn (what the user actually waits), as opposed to
+# llm_inference_duration_seconds which times a single model call. This is the series behind the
+# p95-latency SLO; buckets span a quick answer (seconds) to a long multi-deliverable turn.
 agent_turn_duration_seconds = Histogram(
     "agent_turn_duration_seconds",
     "Wall-clock duration of one agent turn, by termination reason",
     ["agent", "reason"],
     buckets=(1, 2.5, 5, 10, 20, 30, 60, 120, 180, 300, 600),
+)
+
+# Automatic resumptions of a capped turn within one request (#77). Observed ONCE per request,
+# including the zero, so this is the instrument that calibrates MODEL_CALL_LIMIT: a median above 0
+# means the cap is too low for real work (legitimate turns routinely need a second wind), while a
+# p99 pinned at MAX_AUTO_CONTINUES means requests are giving up before finishing.
+agent_turn_auto_continues = Histogram(
+    "agent_turn_auto_continues",
+    "Automatic turn resumptions used within one request",
+    ["agent"],
+    buckets=(0, 1, 2, 3, 5),
 )
 
 # Guardrail metrics

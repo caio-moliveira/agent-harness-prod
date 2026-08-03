@@ -150,7 +150,7 @@
       "title": "Terminações por motivo (taxa)",
       "description": "completed | call_limit | timeout | recursion_backstop | error. Uma mudança de mistura aqui é o sinal mais direto de regressão de comportamento do agente.",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 7 },
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } } },
       "targets": [
         {
@@ -164,12 +164,43 @@
       "type": "piechart",
       "title": "Mistura de terminações (janela atual)",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 7 },
       "targets": [
         {
           "expr": "sum by (reason) (increase(agent_turn_terminations_total{agent=~\"$agent\"}[$__range]))",
           "legendFormat": "{{reason}}",
           "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Continuações automáticas (mediana)",
+      "description": "Mediana de retomadas automáticas por requisição (#77). A regra de calibragem: mediana > 0 significa que MODEL_CALL_LIMIT está baixo — turnos legítimos precisam rotineiramente de fôlego extra. Só conta requisições que optaram pela retomada.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 7 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(agent_turn_auto_continues_bucket{agent=~\"$agent\"}[1h])))",
+          "legendFormat": "mediana",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(agent_turn_auto_continues_bucket{agent=~\"$agent\"}[1h])))",
+          "legendFormat": "p99",
+          "refId": "B"
         }
       ]
     },

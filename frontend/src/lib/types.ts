@@ -127,11 +127,6 @@ export interface TodoItem {
   status: "pending" | "in_progress" | "completed" | string;
 }
 
-/**
- * How a turn ended (server turn-limit policy). Only "completed" is a plain finish — the others are
- * recoverable boundaries (call cap / wall-clock timeout / recursion backstop): partial work is
- * persisted server-side and the UI offers "continuar" to resume from the accumulated context.
- */
 /** Token consumption and budget standing for the current UTC day (`GET /me/usage`). */
 export interface UsageStatus {
   input_tokens: number;
@@ -145,6 +140,11 @@ export interface UsageStatus {
   resets_at: string;
 }
 
+/**
+ * How a turn ended (server turn-limit policy). Only "completed" is a plain finish — the others are
+ * recoverable boundaries (call cap / wall-clock timeout / recursion backstop): partial work is
+ * persisted server-side and the UI offers "continuar" to resume from the accumulated context.
+ */
 export type TurnEndReason =
   | "completed"
   | "call_limit"
@@ -167,6 +167,9 @@ export type StreamEvent =
   | { type: "thinking"; content: string }
   | { type: "todos"; items: TodoItem[] }
   | { type: "hitl_request"; id: number; action_type: string; title?: string; format?: string }
+  /** The server resumed a step-capped turn by itself (opt-in, #77). Purely informational: the turn
+   *  is still running, so this must NOT be treated as an ending — `done` still closes the turn. */
+  | { type: "auto_continue"; attempt: number; max: number }
   | { type: "done"; reason?: TurnEndReason }
   | { type: "error"; content?: string };
 
@@ -292,6 +295,9 @@ export interface AssistantTurn {
   thinking?: string;
   /** Set when the turn stopped at a recoverable limit (cap/timeout) — renders the "continuar" notice. */
   endReason?: ResumableEndReason;
+  /** How many times the server resumed this turn on its own (#77). Shown so an automatic resumption
+   *  is disclosed rather than silent — a long pause with no explanation reads as a frozen UI. */
+  resumptions?: number;
 }
 
 export type Turn = UserTurn | AssistantTurn;
