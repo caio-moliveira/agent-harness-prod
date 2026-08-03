@@ -159,7 +159,12 @@ never heard of it. If you add a new skill source, give it its own mount; don't h
 
 User-authored skills are gated by an approval state machine (`draft → in_review → approved`,
 `src/app/core/skill/skill_status.py`) — only `approved` skills materialize. Editing an approved
-skill returns it to `draft`.
+skill returns it to `draft`. **Every surface that decides which skills a user can see or load must
+filter through `filter_loadable()`** (same module) rather than re-deriving the
+owner+approved check — it's the single rule shared by runtime materialization
+(`_materialize_agent_skills`) and the `GET /agents/{id}/skills` listing behind the chat composer's
+`/` picker. Two independent copies of this filter is exactly how a skill ends up listed but
+unreachable, or reachable but not listed.
 
 ## Operação (backup, retenção, capacidade, sondas)
 
@@ -225,7 +230,7 @@ SLOs atuais: taxa de `reason="error"` < 2% dos turnos · p95 de turno concluído
 `recursion_backstop` **sempre zero** (o invariante da política de limites) · 5xx HTTP < 5%.
 
 Cada alerta carrega uma anotação `runbook` que aponta para a seção correspondente em
-`docs/runbooks.md` — **alerta sem runbook é pager que ninguém sabe responder**.
+[`docs/runbooks.md`](docs/runbooks.md) — **alerta sem runbook é pager que ninguém sabe responder**.
 `tests/unit/test_alert_rules.py` trava as duas pontas: toda regra precisa de severidade, descrição
 e âncora de runbook existente, e **toda série consultada precisa ser uma série que o app expõe de
 fato** (o `prometheus_client` sufixa counters com `_total`, então `rate(llm_errors[5m])` casaria
