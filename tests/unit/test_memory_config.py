@@ -22,6 +22,8 @@ def _reset(monkeypatch) -> None:
     ):
         monkeypatch.setattr(memory.settings, attr, "", raising=False)
     monkeypatch.setattr(memory, "_memory_unavailable", False, raising=False)
+    monkeypatch.setattr(memory.settings, "EMBEDDINGS_DIMS", 0, raising=False)
+    monkeypatch.setattr(memory.settings, "OLLAMA_BASE_URL", "http://localhost:11434", raising=False)
     monkeypatch.setattr(memory.settings, "LONG_TERM_MEMORY_ENABLED", True, raising=False)
     monkeypatch.setattr(memory.settings, "MODEL", "anthropic:claude-sonnet-5", raising=False)
 
@@ -78,6 +80,29 @@ def test_mem0_config_azure(monkeypatch):
     assert embed_kwargs["azure_endpoint"] == "https://x.openai.azure.com"
     assert embed_kwargs["api_version"] == "2025-01-01-preview"
     assert embed_kwargs["api_key"] == "az"
+
+
+def test_mem0_config_ollama_fully_local(monkeypatch):
+    """Ollama embeddings + an ollama utility model → mem0 runs fully local.
+
+    Both the extraction LLM and the embedder use the 'ollama' provider, and pgvector is sized to
+    the embedder's 768 dims.
+    """
+    _reset(monkeypatch)
+    monkeypatch.setattr(memory.settings, "EMBEDDINGS_MODEL", "ollama:nomic-embed-text", raising=False)
+    monkeypatch.setattr(memory.settings, "UTILITY_MODEL", "ollama:llama3.2", raising=False)
+    monkeypatch.setattr(memory.settings, "OLLAMA_BASE_URL", "http://ollama-host:11434", raising=False)
+    assert memory.long_term_memory_enabled() is True
+    cfg = memory._mem0_config()
+    assert cfg["llm"] == {
+        "provider": "ollama",
+        "config": {"model": "llama3.2", "ollama_base_url": "http://ollama-host:11434"},
+    }
+    assert cfg["embedder"] == {
+        "provider": "ollama",
+        "config": {"model": "nomic-embed-text", "embedding_dims": 768, "ollama_base_url": "http://ollama-host:11434"},
+    }
+    assert cfg["vector_store"]["config"]["embedding_model_dims"] == 768
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@
 from typing import (
     TYPE_CHECKING,
     List,
+    Optional,
 )
 
 import bcrypt
@@ -31,6 +32,9 @@ class User(BaseModel, table=True):
     id: int = Field(default=None, primary_key=True)
     email: str = Field(unique=True, index=True)
     hashed_password: str
+    # Per-account daily token budget (#73). None = follow the global TOKEN_BUDGET_DAILY; 0 = this
+    # account is explicitly unlimited even when a global cap is set.
+    token_budget_daily: Optional[int] = Field(default=None)
     sessions: List["Session"] = Relationship(back_populates="user")
 
     def verify_password(self, password: str) -> bool:

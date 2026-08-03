@@ -53,6 +53,32 @@ tool_executions_total = Counter(
     ["tool_name", "status"]
 )
 
+# How agent turns end: completed | call_limit | timeout | recursion_backstop | error. A rising
+# call_limit/timeout share is the signal to retune MODEL_CALL_LIMIT / TURN_TIMEOUT_SECONDS;
+# recursion_backstop should stay at zero (the derived recursion limit makes it unreachable).
+agent_turn_terminations_total = Counter(
+    "agent_turn_terminations_total",
+    "Agent turn terminations by reason",
+    ["agent", "reason"],
+)
+
+# End-to-end wall clock of ONE agent turn (what the user actually waits), as opposed to
+# llm_inference_duration_seconds which times a single model call. This is the series behind the
+# p95-latency SLO; buckets span a quick answer (seconds) to a long multi-deliverable turn.
+# A rising count means budgets are too tight for real usage (or someone is abusing the product) —
+# either way an operator needs to see it, not discover it through support tickets.
+user_token_budget_exhausted_total = Counter(
+    "user_token_budget_exhausted_total",
+    "Turns refused because the user's daily token budget was exhausted",
+)
+
+agent_turn_duration_seconds = Histogram(
+    "agent_turn_duration_seconds",
+    "Wall-clock duration of one agent turn, by termination reason",
+    ["agent", "reason"],
+    buckets=(1, 2.5, 5, 10, 20, 30, 60, 120, 180, 300, 600),
+)
+
 # Guardrail metrics
 guardrail_checks_total = Counter(
     "guardrail_checks_total",

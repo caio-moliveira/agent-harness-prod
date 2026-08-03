@@ -60,10 +60,12 @@ frontend/                      # React chat UI (Vite + React 19 + TS + Tailwind 
 ## Dev commands
 
 ```bash
-make install              # uv sync
+make install              # uv sync --group test (the test group has pytest-asyncio — without it
+                          # async tests are SILENTLY SKIPPED, not failed)
 make db-up                # start ONLY Postgres (pgvector) in Docker  ← start here
 make dev                  # run API on :8000 (reload), reads .env.development
-uv run pytest tests/      # run tests
+uv run pytest tests/      # run tests (in-memory SQLite — no Postgres needed)
+RUN_E2E=1 uv run pytest tests/e2e   # E2E: real API + Postgres + scripted mock LLM (no tokens)
 make lint                 # ruff check
 make format               # ruff format
 make eval                 # interactive evaluation
@@ -81,14 +83,21 @@ config.
 ### Choosing an LLM model
 
 Set **one** env var: `MODEL="provider:model"` — e.g. `anthropic:claude-sonnet-5`, `openai:gpt-4o`,
-or `azure_openai:<deployment>`. LangChain's `init_chat_model` infers the provider from the prefix, so
-you only set that provider's API key (Azure also needs `AZURE_OPENAI_ENDPOINT` + `_API_VERSION`).
-Startup builds `MODEL` once and fails fast with a clear message if the key is missing. `MODEL_MAX_TOKENS`
-and `MODEL_CALL_LIMIT` tune the output cap and the per-turn safety cap. `UTILITY_MODEL` (blank = reuse
-`MODEL`) is the cheap model for low-stakes sub-flows (file descriptions, safety check, research
-internals, mem0's memory-extraction LLM). **Embeddings are separate** (`EMBEDDINGS_MODEL`) because
-Anthropic has no embedding model: chat/utility/deep-research work on any provider, but long-term memory
-needs OpenAI or Azure embeddings — blank auto-resolves from a present key, else memory auto-disables
+`azure_openai:<deployment>`, or `ollama:llama3.3` for open-weight local models. LangChain's
+`init_chat_model` infers the provider from the prefix, so you only set that provider's API key (Azure
+also needs `AZURE_OPENAI_ENDPOINT` + `_API_VERSION`; Ollama needs **no key** — just `OLLAMA_BASE_URL`,
+default `http://localhost:11434`). Setting `OPENAI_BASE_URL` points `openai:<model>` at any
+OpenAI-compatible server (vLLM, LM Studio, a LiteLLM proxy, OpenRouter) with the key optional — so
+LiteLLM users route through its proxy with zero extra dependencies. Other `init_chat_model` providers
+(`groq:`, `google_genai:`, `mistralai:`, …) also work: install their `langchain-*` package and set
+their standard env key. Startup builds `MODEL` once and fails fast with a clear message if the key is
+missing. `MODEL_MAX_TOKENS` and `MODEL_CALL_LIMIT` tune the output cap and the per-turn safety cap.
+`UTILITY_MODEL` (blank = reuse `MODEL`) is the cheap model for low-stakes sub-flows (file descriptions,
+safety check, research internals, mem0's memory-extraction LLM). **Embeddings are separate**
+(`EMBEDDINGS_MODEL`) because Anthropic has no embedding model: chat/utility/deep-research work on any
+provider, but long-term memory needs OpenAI, Azure, or Ollama embeddings (`ollama:nomic-embed-text`
+makes memory fully local; `EMBEDDINGS_DIMS` overrides the vector size) — blank auto-resolves from a
+present OpenAI/Azure key (Ollama must be explicit), else memory auto-disables
 with a warning (`long_term_memory_disabled_no_embeddings`). Everything is built by
 `src/app/core/llm/factory.py` (`create_chat_model` / `create_utility_chat_model`); never hardcode a
 provider/model or call `ChatOpenAI`/`ChatAnthropic`/`init_chat_model` directly in an agent — go through
@@ -99,8 +108,16 @@ the factory. See `.env.example` for the full surface.
 ```bash
 cd frontend && npm install     # first time
 npm run dev                    # http://localhost:5173 (proxies /api → :8000)
+npm test                       # vitest (jsdom) — SSE contract + turn-ending UX + two-token auth
 npm run build                  # type-check (tsc -b) + bundle
 ```
+
+Specs live next to what they cover (`src/**/*.test.{ts,tsx}`) and run in CI before the build. They
+exist for what `tsc` cannot see: that the **SSE parser** survives frames split across network
+chunks, and that each `done{reason}` maps to the right UX — `call_limit`/`timeout`/
+`recursion_backstop` offer **Continuar**, while `blocked_input`/`budget_exhausted` must NOT (a
+retry cannot succeed). Add a `done{reason}` to the backend → add it to `TurnEndReason` and to
+`ChatScreen.test.tsx`, or the client silently mishandles it.
 
 React chat UI for the `data_agent` (auth, sessions sidebar, streaming, activity timeline, inline
 HITL approval + deliverable download). Talks to the backend only via the Vite proxy (`/api/*`);
@@ -148,6 +165,118 @@ owner+approved check — it's the single rule shared by runtime materialization
 (`_materialize_agent_skills`) and the `GET /agents/{id}/skills` listing behind the chat composer's
 `/` picker. Two independent copies of this filter is exactly how a skill ends up listed but
 unreachable, or reachable but not listed.
+
+## Operação (backup, retenção, capacidade, sondas)
+
+Detalhes em [`docs/operations.md`](docs/operations.md); o essencial:
+
+- **Sondas separadas**: `/health/live` (processo — nunca toca dependências) vs `/health/ready`
+  (banco incluso; 503 tira do balanceador). Usar a readiness como liveness faria o orquestrador
+  **reiniciar** processos sadios num soluço do banco, virando crash loop.
+- **Artefatos fora de `/tmp`**: `ARTIFACT_STORAGE_ROOT` (volume). Em container, `/tmp` some no
+  restart e o download de um artefato aprovado passa a dar 404.
+- **Retenção** (`make purge`) é opt-in: janelas de conversa vêm em `0` (nunca apagar). Conversas
+  são removidas **inteiras**, nunca aparadas — sessão sem mensagens vira conversa fantasma.
+- **Exclusão LGPD**: `python -m src.cli.retention erase --user <id>` remove sessões, mensagens,
+  eventos, memórias, uso e artefatos, com teste de integração provando cada tabela.
+- **Backup/restore**: `make backup` e `make restore-drill dump=...` (ensaio em banco descartável).
+  O dump do Postgres **não** contém os artefatos — inclua o volume na rotina.
+- **Capacidade**: `make load-test` mede p50/p95 com o mock LLM. Medição atual e leitura honesta do
+  gargalo estão em `docs/operations.md` — refaça no hardware de produção.
+
+## Guardrails (entrada bloqueia, saída redige)
+
+Política completa em [`docs/security.md`](docs/security.md); o resumo operacional:
+
+- **Entrada** — `core/guardrails/input_screening.py` roda em **todos** os caminhos (streaming
+  inclusive) *antes* do agente: content filter (keywords + prompt injection) e PII de alto risco
+  (chave de API, cartão, SSN, **CPF/CNPJ**). Recusa em pt-BR que nunca ecoa o dado, persistida no
+  histórico, terminando o turno com `done{reason:"blocked_input"}`.
+- **Saída** — `PIIMiddleware` redige e-mail/CPF/CNPJ no que trafega pelo modelo (um resultado de
+  ferramenta levaria os documentos para o contexto, traces e histórico). A avaliação semântica
+  (`evaluate_safety`) **bloqueia no caminho não-stream** e é **auditoria** no streaming
+  (`OUTPUT_SAFETY_AUDIT_ENABLED`, default off) — um veredito pós-hoc não desfaz tokens já lidos, e
+  bufferizar a resposta mataria o streaming. Escolha explícita, não omissão.
+- CPF/CNPJ são validados por **dígito verificador**: sem isso todo id numérico de 11 dígitos das
+  planilhas do usuário seria redigido e a análise sairia corrompida.
+- Ao adicionar detecção de um novo tipo de dado, adicione também o caso negativo (o "parecido que
+  não é") — precisão importa tanto quanto cobertura aqui.
+
+## Governança de custo (orçamento de tokens)
+
+Rate limit protege **requisições**; `TOKEN_BUDGET_DAILY` protege **tokens** — o que um produto LLM
+de fato paga (dois usuários com a mesma contagem de requisições podem diferir em ordens de
+grandeza). `0` = desligado (default: deploy single-user ou Ollama local não tem custo por usuário
+a governar); `user.token_budget_daily` sobrepõe por conta (`0` = ilimitada para aquela conta).
+
+- Contabilização: `core/usage/` — uma linha por `(user_id, dia UTC)`, incrementada ao fim de cada
+  turno com o `usage_metadata` que o provedor reporta (inclui os tokens dos subagentes: o usuário
+  paga por eles igual).
+- Enforcement: verificado **no início** do turno. Um turno em andamento nunca é morto por
+  orçamento — o usuário perderia trabalho por um limite que não via chegar, e o custo já foi gasto.
+  O turno que cruza a linha termina; o **próximo** é recusado com `done{reason:"budget_exhausted"}`
+  e uma mensagem dizendo quanto foi usado e quando renova.
+- Visibilidade: `GET /me/usage` + indicador discreto no sidebar (invisível quando não há orçamento)
+  e a métrica `user_token_budget_exhausted_total` com alerta próprio.
+
+## SLOs, alertas e runbooks
+
+`observability/` é provisionado pelo compose: Prometheus carrega `prometheus/alerts.yml` (regras de
+SLO) e o Grafana provisiona os dashboards de `grafana/dashboards/json/` — subir `make
+docker-compose-up ENV=development` já traz alertas (`http://localhost:9090/alerts`) e o dashboard
+**Agent Health & SLOs** funcionando, sem clique manual.
+
+SLOs atuais: taxa de `reason="error"` < 2% dos turnos · p95 de turno concluído < 120s ·
+`recursion_backstop` **sempre zero** (o invariante da política de limites) · 5xx HTTP < 5%.
+
+Cada alerta carrega uma anotação `runbook` que aponta para a seção correspondente em
+[`docs/runbooks.md`](docs/runbooks.md) — **alerta sem runbook é pager que ninguém sabe responder**.
+`tests/unit/test_alert_rules.py` trava as duas pontas: toda regra precisa de severidade, descrição
+e âncora de runbook existente, e **toda série consultada precisa ser uma série que o app expõe de
+fato** (o `prometheus_client` sufixa counters com `_total`, então `rate(llm_errors[5m])` casaria
+com nada e o alerta nunca dispararia — esse bug foi pego exatamente assim). Métrica nova relevante
+nasce com painel e, quando fizer sentido, regra de alerta.
+
+## Golden evals (quality regression gate)
+
+`evals/` holds the **golden-eval harness** (issue #70): a versioned dataset
+(`evals/golden_set.json`, PT-BR cases over the fixture workspace in `evals/workspace/`) scored by
+**deterministic rubrics** — termination reason, tools used, answer content, artifact
+generation/provenance, duration. `evals/config.yaml` sets the thresholds; below them the runner
+exits 1 (the gate).
+
+- `make eval-golden` — mock-LLM mode (zero tokens; `smoke` cases): validates the eval machinery +
+  provider plumbing. Runs in CI on any PR touching `evals/` or `tests/e2e/`.
+- `make eval-golden-live` — the real `MODEL` from the env (full dataset): the number that answers
+  "did quality regress?". Runs nightly + on demand via `workflow_dispatch`
+  (`.github/workflows/evals.yaml`; needs a provider secret configured in the repo).
+
+The runner reuses the E2E stack launcher (`tests/e2e/harness.py`). When you add a product
+capability, add a golden case for it — a failing eval drives the next task, not a bug report.
+This is complementary to `src/evals` (`make eval`), the Langfuse **trace** evaluator that scores
+production traffic after the fact.
+
+## Turn limits (data_agent)
+
+Three independent layers bound one agent turn (`src/app/agents/data_agent/turn_limits.py`); the
+**semantic cap is the only limit a legitimate turn should ever hit**, and every layer ends with the
+same recoverable UX (partial persisted + "continuar" hint + SSE `done{reason}`), never a generic
+error:
+
+1. **`MODEL_CALL_LIMIT`** — model calls per turn via `ModelCallLimitMiddleware(exit_behavior="end")`.
+   Subagents get their own cap (`cap_subagent_specs`) because they inherit the parent's recursion
+   budget but no call limit of their own.
+2. **Recursion backstop** — LangGraph's `recursion_limit` is **derived from the compiled graph**
+   (`compute_recursion_limit`): in LangChain v1 every middleware `before_model`/`after_model` hook is
+   a graph node costing one super-step per round (~8-10 with this stack), so never guess this with a
+   constant — that's exactly the bug that made `GraphRecursionError` fire before the graceful cap.
+3. **`TURN_TIMEOUT_SECONDS`** — wall-clock ceiling enforced at the API layer (0 disables); protects
+   the stream against a hung/slow provider (e.g. a large local Ollama model).
+
+The SSE terminal event is `done` with `reason: "completed" | "call_limit" | "timeout" |
+"recursion_backstop"` (or `error` for real failures); terminations are counted in Prometheus
+(`agent_turn_terminations_total{agent,reason}`) — `recursion_backstop` staying at zero is the
+invariant to watch.
 
 ## Workspace memory (`AGENTS.md` in the granted folder)
 

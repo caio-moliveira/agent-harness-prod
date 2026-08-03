@@ -158,8 +158,46 @@ class Settings:
         # Hard cap on model calls per turn (safety net against a runaway agent loop). Applied to the
         # deep agents via ModelCallLimitMiddleware; the agent ends gracefully at the cap. A legit
         # multi-deliverable turn can use ~25-30 calls, so 40 leaves headroom while still bounding a
-        # runaway. The deep agent's recursion_limit is set above this so the graceful cap wins.
+        # runaway. The deep agent's recursion_limit is DERIVED from its compiled graph (every
+        # middleware before/after_model hook is a graph node — see turn_limits.py) so this graceful
+        # cap always fires before LangGraph's hard GraphRecursionError.
         self.MODEL_CALL_LIMIT = int(os.getenv("MODEL_CALL_LIMIT", "40"))
+        # Wall-clock ceiling for one agent turn (seconds; 0 disables). The temporal backstop of the
+        # turn-limit policy (see agents/data_agent/turn_limits.py) — protects the stream/UX against
+        # a hung or very slow provider (e.g. a large local Ollama model). On expiry the turn ends
+        # with a recoverable "continuar" message and the partial work is persisted.
+        self.TURN_TIMEOUT_SECONDS = int(os.getenv("TURN_TIMEOUT_SECONDS", "600"))
+        # Model-based safety evaluation of the STREAMED answer. Off by default and audit-only by
+        # design: a post-hoc verdict cannot un-send tokens the user already read, and blocking for
+        # real would mean buffering the whole answer (killing the streaming UX). When on, it costs
+        # one cheap utility-model call per turn and only records a metric + structured log. The
+        # non-streaming path keeps blocking (there the message can still be replaced). Input
+        # guardrails — which DO block, on every path — are always on (guardrails/input_screening.py).
+        self.OUTPUT_SAFETY_AUDIT_ENABLED = os.getenv("OUTPUT_SAFETY_AUDIT_ENABLED", "false").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+        # Daily token budget per user (#73). 0 = disabled (default): a single-user or local-Ollama
+        # deployment has no per-user cost to govern. Rate limits cap REQUESTS; this caps TOKENS,
+        # which is what an LLM product actually pays for — two users with the same request count
+        # can differ by orders of magnitude. A per-account override lives on the User row.
+        self.TOKEN_BUDGET_DAILY = int(os.getenv("TOKEN_BUDGET_DAILY", "0"))
+
+        # ── Operational storage & retention (#75) ───────────────────────────────────────────────
+        # Where confirmed artifacts are written when the granted folder is read-only. MUST NOT be
+        # /tmp in production: in a container that directory is wiped on restart (and cleaned
+        # periodically on a host), so an approved artifact's download 404s with no explanation.
+        # Mount this path on a volume — see docker-compose.yml and docs/operations.md.
+        self.ARTIFACT_STORAGE_ROOT = os.path.expanduser(
+            os.path.expandvars(os.getenv("ARTIFACT_STORAGE_ROOT", "./data/artifacts"))
+        )
+        # Retention windows in days (0 = keep forever). Conversations and their tool trails are the
+        # bulk of the data; the audit event log usually has a longer legal life than chat content.
+        self.RETENTION_MESSAGES_DAYS = int(os.getenv("RETENTION_MESSAGES_DAYS", "0"))
+        self.RETENTION_EVENTS_DAYS = int(os.getenv("RETENTION_EVENTS_DAYS", "0"))
+        self.RETENTION_USAGE_DAYS = int(os.getenv("RETENTION_USAGE_DAYS", "400"))
+        self.RETENTION_ARTIFACTS_DAYS = int(os.getenv("RETENTION_ARTIFACTS_DAYS", "30"))
         # Utility (cheap) model for low-stakes sub-flows (file descriptions, safety check, deep-research
         # internals, and mem0's memory-extraction LLM). Same "provider:model" format; blank = reuse MODEL.
         self.UTILITY_MODEL = os.getenv("UTILITY_MODEL", "")
@@ -172,6 +210,12 @@ class Settings:
         self.AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
         self.AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
         self.AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "")
+        # Ollama (open-weight local models) — used when MODEL/UTILITY_MODEL/EMBEDDINGS_MODEL carry the
+        # "ollama:" prefix. No API key; this is the Ollama server address.
+        self.OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        # Optional OpenAI-compatible endpoint (vLLM, LM Studio, a LiteLLM proxy, OpenRouter, …): when
+        # set, "openai:<model>" requests go here instead of api.openai.com and the key becomes optional.
+        self.OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")
 
         # ── Long-term memory (mem0) + embeddings ────────────────────────────────────────────────────
         # Embeddings are a SEPARATE provider because Anthropic has no embedding model. EMBEDDINGS_MODEL
@@ -180,6 +224,9 @@ class Settings:
         # The mem0 extraction LLM reuses UTILITY_MODEL (→ MODEL). Set LONG_TERM_MEMORY_ENABLED=false to
         # turn memory off explicitly.
         self.EMBEDDINGS_MODEL = os.getenv("EMBEDDINGS_MODEL", "")
+        # Embedding vector size — 0 = provider default (1536 for OpenAI/Azure, 768 for Ollama's
+        # nomic-embed-text). Must match the configured embedder; pgvector's collection uses this size.
+        self.EMBEDDINGS_DIMS = int(os.getenv("EMBEDDINGS_DIMS", "0"))
         self.LONG_TERM_MEMORY_COLLECTION_NAME = os.getenv("LONG_TERM_MEMORY_COLLECTION_NAME", "longterm_memory")
         self.LONG_TERM_MEMORY_ENABLED = os.getenv("LONG_TERM_MEMORY_ENABLED", "true").lower() in ("true", "1", "yes")
         # For an Azure embeddings model: the deployment name (endpoint/key/version reuse AZURE_OPENAI_*).
@@ -266,6 +313,8 @@ class Settings:
             "success_metrics": ["60 per minute"],
             "hitl": ["60 per minute"],
             "session_delete": ["30 per minute"],
+            # Usage/budget read — polled by the UI indicator, so it sits with the other cheap reads.
+            "usage": ["60 per minute"],
             "register": ["10 per hour"],
             "login": ["20 per minute"],
             "root": ["10 per minute"],

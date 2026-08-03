@@ -1,0 +1,42 @@
+# gitleaks configuration (issue #72). Extends the upstream default ruleset — which already covers
+# the provider keys this project uses (Anthropic, OpenAI, Azure) — and narrows the false positives
+# that come from a repo whose whole subject matter is API keys and PII.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Placeholders, fixtures and documentation — never real credentials"
+
+# Match against the whole LINE, not just the extracted secret: these exceptions are recognisable by
+# their context (a doc placeholder, a test vector), which is exactly what makes them safe to allow.
+regexTarget = "line"
+
+paths = [
+  # Templates and docs deliberately show what a key LOOKS like.
+  '''\.env\.example''',
+  '''docs/security\.md''',
+  '''AGENTS\.md''',
+  # Test fixtures use obviously fake keys ("sk-test-fake-key") so the suite can build clients.
+  '''tests/conftest\.py''',
+  '''tests/.*/conftest\.py''',
+]
+
+regexes = [
+  # Documentation placeholders: a real credential is never wrapped in angle brackets.
+  '''<your-[a-z0-9-]+>''',
+  '''<project-name>''',
+  # Test vector for the API-key detector itself (synthetic, never issued by any provider).
+  '''sk_abc123def456ghi789jkl012mno''',
+  # Fake keys used by the test suite and the mock LLM harness.
+  '''sk-test-fake-key''',
+  '''sk-ant-test-fake-key''',
+  '''your-.*-api-key''',
+  '''not-needed''',
+  # The E2E/eval stack uses fixed throwaway credentials against an ephemeral local Postgres.
+  '''e2e-secret''',
+  '''mypassword''',
+  # Guardrail test vectors: a syntactically valid but fake key, and the sample CPF/CNPJ used to
+  # test check-digit validation (public, well-known test documents).
+  '''sk-abcdefghijklmnopqrstuvwxyz123456''',
+]

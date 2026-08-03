@@ -4,6 +4,7 @@ Mirrors the structure of ``text_sql_agent.py`` but is built PER SESSION from the
 resources in the registry, rather than as a singleton bound to a fixed database.
 """
 
+import asyncio
 import json
 import os
 import re
@@ -23,12 +24,16 @@ from src.app.agents.data_agent.context_middleware import ToolResultCapMiddleware
 from src.app.agents.data_agent.plan_tools import make_plan_tools
 from src.app.agents.data_agent.subagents import make_deep_research_subagent_spec, make_user_sql_subagent
 from src.app.agents.data_agent.tools import make_memory_tools
+from src.app.agents.data_agent.turn_limits import cap_subagent_specs, compute_recursion_limit
 from src.app.agents.data_agent.workspace_memory import WorkspaceMemoryMiddleware
+from langgraph.errors import GraphRecursionError
+
 from src.app.core.checkpoint.checkpointer import get_checkpointer
 from src.app.core.common.config import Environment, settings
 from src.app.core.common.graph_utils import process_messages
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
+from src.app.core.guardrails.pii import detect_cnpj_matches, detect_cpf_matches
 from src.app.core.learning import get_reflected_preferences
 from src.app.core.llm.factory import active_model_name, create_chat_model
 from src.app.core.sandbox.backend import (
@@ -219,6 +224,9 @@ class DataAgent:
             middlewares=[LoggingMiddleware(), ErrorHandlingMiddleware(), GuardrailMiddleware()],
             invoke_fn=self._core_invoke,
         )
+        # Derived once per build from the compiled graph: guarantees ModelCallLimitMiddleware's
+        # graceful end always fires before LangGraph's hard GraphRecursionError (see turn_limits.py).
+        self._recursion_limit = compute_recursion_limit(self.agent)
 
     def _invoke_config(self, session_id: str, user_id: Optional[int]) -> dict:
         """Build the LangGraph invoke config, threading this session's granted root dir.
@@ -229,11 +237,10 @@ class DataAgent:
         config = build_invoke_config(session_id, user_id, self.name)
         if self.root_dir:
             config["configurable"][ROOT_DIR_CONFIG_KEY] = self.root_dir
-        # A legit multi-deliverable turn can take ~25-30 tool calls (≈2 graph steps each), which
-        # exceeds the shared default recursion limit and would crash mid-task with
-        # GraphRecursionError. Raise it above the model-call cap so ModelCallLimitMiddleware (which
-        # ends gracefully) is what stops a runaway, not a hard crash.
-        config["recursion_limit"] = 2 * settings.MODEL_CALL_LIMIT + 20
+        # Every middleware before_model/after_model hook is a graph node and costs one super-step
+        # per round (~8-10 with this stack), so the limit is DERIVED from the compiled graph —
+        # guessing low made GraphRecursionError fire before the graceful ModelCallLimitMiddleware.
+        config["recursion_limit"] = self._recursion_limit
         return config
 
     async def agent_invoke(
@@ -254,12 +261,36 @@ class DataAgent:
         return await self._pipeline.run(ctx)
 
     async def _core_invoke(self, ctx: AgentContext) -> list[Message]:
-        """Core Deep Agent invocation without cross-cutting concerns."""
+        """Core Deep Agent invocation without cross-cutting concerns.
+
+        The same turn-limit policy as the streaming path applies: the recursion backstop and the
+        wall-clock timeout end the turn with a polite, recoverable message instead of surfacing an
+        exception to the pipeline (the streamed path handles these inline in
+        ``astream_query_events``).
+        """
         query = ctx.messages[-1].content if ctx.messages else ""
-        response = await self.agent.ainvoke(
-            {"messages": [{"role": "user", "content": query}]},
-            config=ctx.config,
-        )
+        try:
+            async with asyncio.timeout(settings.TURN_TIMEOUT_SECONDS or None):
+                response = await self.agent.ainvoke(
+                    {"messages": [{"role": "user", "content": query}]},
+                    config=ctx.config,
+                )
+        except GraphRecursionError:
+            logger.warning(
+                "turn_recursion_backstop_hit",
+                session_id=ctx.session_id,
+                agent_id=self.agent_id,
+                recursion_limit=self._recursion_limit,
+            )
+            return [Message(role="assistant", content=_TURN_LIMIT_MESSAGE)]
+        except TimeoutError:
+            logger.warning(
+                "turn_timeout_hit",
+                session_id=ctx.session_id,
+                agent_id=self.agent_id,
+                timeout_seconds=settings.TURN_TIMEOUT_SECONDS,
+            )
+            return [Message(role="assistant", content=_TURN_TIMEOUT_MESSAGE)]
         return process_messages(response["messages"])
 
     async def _compose_payload(
@@ -384,105 +415,136 @@ class DataAgent:
         # (the silent mid-plan stop) and surface a recoverable hint instead of an empty bubble.
         saw_planning = False
         deliverable_called = False
-        async for event in self.agent.astream_events({"messages": payload_messages}, config=config, version="v2"):
-            kind = event.get("event")
-            if kind == "on_chat_model_start" and delegation_depth == 0:
-                parent_model_calls += 1
-            if kind == "on_tool_start":
-                tool_name = event.get("name", "")
-                if delegation_depth == 0:
-                    if tool_name == "write_todos":
-                        saw_planning = True
-                    if tool_name in _DELIVERABLE_TOOL_NAMES:
-                        deliverable_called = True
-                raw_input = event.get("data", {}).get("input")
-                tool_input = _short(raw_input)
-                # For write_todos, stream/persist the plan as clean JSON (not the raw dict repr) so a
-                # reopened conversation can rebuild the checklist instead of showing a JSON blob. The
-                # live UI additionally gets a structured `todos` event below.
-                todos = _parse_todos(raw_input) if tool_name == "write_todos" else None
-                if todos is not None:
-                    tool_input = json.dumps(todos, ensure_ascii=False)
-                # A task() call delegates to a subagent — surface a human label ("Consultando o
-                # banco…" / "Pesquisando na web…") so the timeline reads clearly and never looks
-                # frozen during a long delegated run. subagent_type is None for non-task tools.
-                display_name, subagent_type = _display_for_tool(tool_name, raw_input)
-                # Only surface + audit top-level tools; a tool that fires while inside a delegation is
-                # the subagent's own internal step and stays hidden from the parent timeline.
-                if delegation_depth == 0:
-                    # A followable, one-line trace of what the agent is doing this turn.
-                    logger.info(
-                        "agent_tool_start",
-                        tool=tool_name,
-                        subagent=subagent_type,
-                        session_id=session_id,
-                        agent_id=self.agent_id,
-                        tool_input=tool_input,
-                    )
-                    # Audit trail (#10): record a delegation at its boundary (robust — does not rely on
-                    # the subagent's nested events propagating); otherwise record document reads / SQL.
-                    if subagent_type is not None:
-                        bg_record_delegation_event(
-                            _event_repo,
-                            user_id=user_id,
-                            agent_id=self.agent_id,
+        # The physical backstop (recursion limit) should be unreachable — the graceful call cap is
+        # derived to fire first — but if it DOES fire (e.g. a middleware jump loop that consumes no
+        # model calls), the turn must end with the same polite UX, never the generic error.
+        hit_recursion_backstop = False
+        # Tokens consumed by this turn (parent + subagents), reported by the provider on each
+        # model call's final message. Surfaced in the turn_end marker for the API layer to bill.
+        turn_input_tokens = 0
+        turn_output_tokens = 0
+        try:
+            async for event in self.agent.astream_events(
+                {"messages": payload_messages}, config=config, version="v2"
+            ):
+                kind = event.get("event")
+                if kind == "on_chat_model_start" and delegation_depth == 0:
+                    parent_model_calls += 1
+                if kind == "on_tool_start":
+                    tool_name = event.get("name", "")
+                    if delegation_depth == 0:
+                        if tool_name == "write_todos":
+                            saw_planning = True
+                        if tool_name in _DELIVERABLE_TOOL_NAMES:
+                            deliverable_called = True
+                    raw_input = event.get("data", {}).get("input")
+                    tool_input = _short(raw_input)
+                    # For write_todos, stream/persist the plan as clean JSON (not the raw dict repr) so a
+                    # reopened conversation can rebuild the checklist instead of showing a JSON blob. The
+                    # live UI additionally gets a structured `todos` event below.
+                    todos = _parse_todos(raw_input) if tool_name == "write_todos" else None
+                    if todos is not None:
+                        tool_input = json.dumps(todos, ensure_ascii=False)
+                    # A task() call delegates to a subagent — surface a human label ("Consultando o
+                    # banco…" / "Pesquisando na web…") so the timeline reads clearly and never looks
+                    # frozen during a long delegated run. subagent_type is None for non-task tools.
+                    display_name, subagent_type = _display_for_tool(tool_name, raw_input)
+                    # Only surface + audit top-level tools; a tool that fires while inside a delegation is
+                    # the subagent's own internal step and stays hidden from the parent timeline.
+                    if delegation_depth == 0:
+                        # A followable, one-line trace of what the agent is doing this turn.
+                        logger.info(
+                            "agent_tool_start",
+                            tool=tool_name,
+                            subagent=subagent_type,
                             session_id=session_id,
-                            subagent_type=subagent_type,
-                            task=tool_input,
-                        )
-                    else:
-                        bg_record_tool_event(
-                            _event_repo,
-                            user_id=user_id,
                             agent_id=self.agent_id,
-                            session_id=session_id,
-                            tool_name=tool_name,
                             tool_input=tool_input,
-                            scope="database" if tool_name == "run_sql" else "folder",
                         )
-                    yield {
-                        "type": "tool_start",
-                        "name": display_name,
-                        "input": tool_input,
-                    }
-                    # Surface the plan as a live checklist (not just a raw JSON step) when the agent
-                    # calls write_todos.
-                    if todos:
-                        yield {"type": "todos", "items": todos}
-                if tool_name == "task":
-                    delegation_depth += 1
-            elif kind == "on_tool_end":
-                name = event.get("name", "")
-                if name == "task" and delegation_depth > 0:
-                    delegation_depth -= 1
-                # Surface the end only for a top-level tool (or the just-closed top-level delegation).
-                if delegation_depth == 0:
-                    output = event.get("data", {}).get("output")
-                    if hasattr(output, "content"):
-                        output = output.content
-                    short_output = _short(output)
-                    end_display_name, _ = _display_for_tool(name, event.get("data", {}).get("input"))
-                    logger.info(
-                        "agent_tool_end",
-                        tool=name,
-                        session_id=session_id,
-                        output=short_output,
-                    )
-                    yield {"type": "tool_end", "name": end_display_name, "output": short_output}
-            elif kind == "on_chat_model_stream":
-                # A subagent's tokens are its private reasoning/report — never stream them as the
-                # parent's answer; the parent gets the subagent's distilled result via the tool output.
-                if delegation_depth > 0:
-                    continue
-                chunk = event.get("data", {}).get("chunk")
-                content = getattr(chunk, "content", None) if chunk is not None else None
-                # Anthropic streams text deltas as a plain string and reasoning as a list of
-                # {type: "thinking"/"text", ...} blocks. Route reasoning to a separate "thinking"
-                # event (live "raciocínio" panel) and only the answer text into the memory answer.
-                for kind_, text in _iter_stream_content(content):
-                    if kind_ == "token":
-                        answer += text
-                    yield {"type": kind_, "content": text}
+                        # Audit trail (#10): record a delegation at its boundary (robust — does not rely on
+                        # the subagent's nested events propagating); otherwise record document reads / SQL.
+                        if subagent_type is not None:
+                            bg_record_delegation_event(
+                                _event_repo,
+                                user_id=user_id,
+                                agent_id=self.agent_id,
+                                session_id=session_id,
+                                subagent_type=subagent_type,
+                                task=tool_input,
+                            )
+                        else:
+                            bg_record_tool_event(
+                                _event_repo,
+                                user_id=user_id,
+                                agent_id=self.agent_id,
+                                session_id=session_id,
+                                tool_name=tool_name,
+                                tool_input=tool_input,
+                                scope="database" if tool_name == "run_sql" else "folder",
+                            )
+                        yield {
+                            "type": "tool_start",
+                            "name": display_name,
+                            "input": tool_input,
+                        }
+                        # Surface the plan as a live checklist (not just a raw JSON step) when the agent
+                        # calls write_todos.
+                        if todos:
+                            yield {"type": "todos", "items": todos}
+                    if tool_name == "task":
+                        delegation_depth += 1
+                elif kind == "on_tool_end":
+                    name = event.get("name", "")
+                    if name == "task" and delegation_depth > 0:
+                        delegation_depth -= 1
+                    # Surface the end only for a top-level tool (or the just-closed top-level delegation).
+                    if delegation_depth == 0:
+                        output = event.get("data", {}).get("output")
+                        if hasattr(output, "content"):
+                            output = output.content
+                        short_output = _short(output)
+                        end_display_name, _ = _display_for_tool(name, event.get("data", {}).get("input"))
+                        logger.info(
+                            "agent_tool_end",
+                            tool=name,
+                            session_id=session_id,
+                            output=short_output,
+                        )
+                        yield {"type": "tool_end", "name": end_display_name, "output": short_output}
+                elif kind == "on_chat_model_stream":
+                    # A subagent's tokens are its private reasoning/report — never stream them as the
+                    # parent's answer; the parent gets the subagent's distilled result via the tool output.
+                    if delegation_depth > 0:
+                        continue
+                    chunk = event.get("data", {}).get("chunk")
+                    content = getattr(chunk, "content", None) if chunk is not None else None
+                    # Anthropic streams text deltas as a plain string and reasoning as a list of
+                    # {type: "thinking"/"text", ...} blocks. Route reasoning to a separate "thinking"
+                    # event (live "raciocínio" panel) and only the answer text into the memory answer.
+                    for kind_, text in _iter_stream_content(content):
+                        if kind_ == "token":
+                            answer += text
+                        yield {"type": kind_, "content": text}
+                elif kind == "on_chat_model_end":
+                    # Token accounting (#73): the provider reports usage on the final message of
+                    # each model call. Subagent calls are counted too — the user pays for them
+                    # just the same — so this is deliberately outside the delegation_depth guard.
+                    usage = getattr(event.get("data", {}).get("output"), "usage_metadata", None)
+                    if usage:
+                        turn_input_tokens += usage.get("input_tokens", 0) or 0
+                        turn_output_tokens += usage.get("output_tokens", 0) or 0
+        except GraphRecursionError:
+            # Should be unreachable with the derived limit; kept as the last line of defense. The
+            # partial work already streamed/persisted survives, and the client gets the same polite
+            # "continue" UX as the call cap — never the generic error bubble.
+            hit_recursion_backstop = True
+            logger.warning(
+                "turn_recursion_backstop_hit",
+                session_id=session_id,
+                agent_id=self.agent_id,
+                model_calls=parent_model_calls,
+                recursion_limit=self._recursion_limit,
+            )
 
         # A turn that ran tools but ended with no answer text and no deliverable is the silent mid-plan
         # stop the user sees as "frozen on the last task": the final model call (that would generate the
@@ -500,9 +562,12 @@ class DataAgent:
             answer_chars=len(answer),
             deliverable_called=deliverable_called,
             hit_call_cap=hit_call_cap,
+            hit_recursion_backstop=hit_recursion_backstop,
             incomplete=turn_incomplete,
+            input_tokens=turn_input_tokens,
+            output_tokens=turn_output_tokens,
         )
-        if hit_call_cap:
+        if hit_call_cap or hit_recursion_backstop:
             hint = (
                 "\n\n---\n\n_Cheguei ao limite de passos deste turno. Se ainda faltou algo (ex.: gerar o "
                 'arquivo), envie **"continuar"** que eu retomo daqui — mantenho todo o contexto já '
@@ -518,6 +583,21 @@ class DataAgent:
             answer += hint
             yield {"type": "token", "content": hint}
 
+        # Terminal marker consumed by the API layer (not forwarded raw to the client): tells it how
+        # the turn ended, so the SSE `done` event and the terminations metric carry the reason.
+        if hit_recursion_backstop:
+            turn_reason = "recursion_backstop"
+        elif hit_call_cap:
+            turn_reason = "call_limit"
+        else:
+            turn_reason = "completed"
+        yield {
+            "type": "turn_end",
+            "reason": turn_reason,
+            "input_tokens": turn_input_tokens,
+            "output_tokens": turn_output_tokens,
+        }
+
         # Store this exchange back into long-term memory (non-blocking), scoped to this agent.
         if self.memory_enabled and user_id is not None and last_user and answer:
             bg_update_memory(
@@ -528,10 +608,40 @@ class DataAgent:
             )
 
 
+# Recoverable end-of-turn messages (non-stream path): same voice as the streamed hints — the turn
+# stopped at a boundary, nothing was lost, and "continuar" resumes from the accumulated context.
+_TURN_LIMIT_MESSAGE = (
+    "Cheguei ao limite de passos deste turno. Se ainda faltou algo, envie \"continuar\" que eu "
+    "retomo daqui — mantenho todo o contexto já apurado, sem refazer a análise."
+)
+_TURN_TIMEOUT_MESSAGE = (
+    "Este turno atingiu o tempo máximo de processamento. Envie \"continuar\" que eu retomo do "
+    "ponto em que parei, aproveitando o que já foi apurado."
+)
+
+
 def _short(value: Any, limit: int = 1500) -> str:
     """Render a tool input/output to a short display string."""
-    text = value if isinstance(value, str) else str(value)
+    text = value if isinstance(value, str) else str(_readable_output(value))
     return text[:limit]
+
+
+def _readable_output(value: Any) -> Any:
+    """Turn a framework object into something a user can read on the timeline.
+
+    LangGraph's file tools return a ``Command`` whose repr is the whole state update
+    (``Command(update={'files': {'/x.md': {'content': [...], 'created_at': ...}}})``). Streaming
+    that verbatim shows the user an internal data structure instead of "what the tool did", so the
+    file-writing commands are summarized by the paths they touched. Anything else is left alone.
+    """
+    update = getattr(value, "update", None)
+    if not isinstance(update, dict):
+        return value
+    files = update.get("files")
+    if not isinstance(files, dict) or not files:
+        return value
+    paths = ", ".join(sorted(files))
+    return f"Arquivo salvo no rascunho da sessão: {paths}"
 
 
 # Human labels for a task() delegation, keyed by the subagent it targets, so the streamed timeline
@@ -651,6 +761,11 @@ Conforme as fontes que o usuário conectou, você pode ter:
   **IMPORTANTE: para gerar `.docx` ou `.pptx` use SEMPRE `gerar_artefato`. NUNCA crie um arquivo
   `.docx`/`.pptx`/`.xlsx` com `write_file`** — `write_file` grava apenas texto e o arquivo Office
   sairia corrompido. `write_file` serve só para arquivos de texto (`.md`, `.txt`, `.csv`).
+  **Atenção — `write_file` é rascunho interno da sessão**: sem uma pasta gravável concedida, o que
+  ele grava NÃO fica acessível ao usuário (não aparece nos arquivos da sessão nem tem download).
+  Nunca diga que "criou o arquivo X" para o usuário com base num `write_file`: um entregável de
+  verdade sai por `gerar_artefato`/`gerar_planilha` (que geram download após aprovação) ou é escrito
+  na pasta concedida quando ela é gravável.
 
 Regras: somente leitura em dados/banco; nunca modifique dados. Para perguntas sobre **arquivos**, use `ls`/`glob`
 em `/workspace` e depois `read_file` para ler o conteúdo — funciona com texto, CSV, **PDF, Word e Excel**
@@ -745,7 +860,9 @@ def _build_subagents(
         subagents.append(make_user_sql_subagent(db))
     if web_search and deep_research_runnable is not None:
         subagents.append(make_deep_research_subagent_spec(deep_research_runnable))
-    return subagents
+    # Subagents inherit the parent's recursion limit but have NO model-call cap of their own — a
+    # runaway subagent would burn the whole budget and kill the parent turn. Cap them gracefully.
+    return cap_subagent_specs(subagents)
 
 
 def _compose_system_prompt(system_prompt: Optional[str]) -> str:
@@ -853,6 +970,12 @@ def _create_data_deep_agent(
             # result stays in state) — prevents a one-turn context blowup ahead of the summarizer.
             ToolResultCapMiddleware(),
             PIIMiddleware("email"),
+            # Brazilian identifiers (LGPD): the granted folder routinely holds spreadsheets and
+            # contracts with CPF/CNPJ, and a tool result carrying them would otherwise flow into
+            # the model context, the traces and the persisted history verbatim. Detected by check
+            # digits (see guardrails/pii.py), so ordinary 11-digit ids are not touched.
+            PIIMiddleware("cpf", detector=detect_cpf_matches, strategy="redact"),
+            PIIMiddleware("cnpj", detector=detect_cnpj_matches, strategy="redact"),
             # Keep weaker instruction-followers from ending the turn mid-plan: if the model stops with
             # the deliverable ungenerated and the plan still incomplete, jump back to the model with a
             # firm "finish it" nudge (bounded). Model-agnostic; the call cap below is the backstop.

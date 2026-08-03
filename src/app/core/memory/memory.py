@@ -10,7 +10,7 @@ from mem0 import AsyncMemory
 
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
-from src.app.core.llm.validation import embeddings_model_name, resolve_embeddings_provider
+from src.app.core.llm.validation import embeddings_dims, embeddings_model_name, resolve_embeddings_provider
 
 # Module-level singleton for memory instance
 _memory_instance: Optional[AsyncMemory] = None
@@ -57,25 +57,35 @@ def _mem0_llm_config() -> dict:
         }
     if provider == "anthropic":
         return {"provider": "anthropic", "config": {"model": model}}
+    if provider == "ollama":
+        return {"provider": "ollama", "config": {"model": model, "ollama_base_url": settings.OLLAMA_BASE_URL}}
     return {"provider": "openai", "config": {"model": model or spec}}
 
 
 def _mem0_embedder_config(provider: str) -> dict:
-    """mem0's embedder for the resolved embeddings provider (``openai`` or ``azure``)."""
+    """mem0's embedder for the resolved embeddings provider (``openai``, ``azure`` or ``ollama``)."""
     model = embeddings_model_name(provider)
+    dims = embeddings_dims(provider)
     if provider == "azure":
         return {
             "provider": "azure_openai",
             "config": {
                 "model": model,
+                "embedding_dims": dims,
                 "azure_kwargs": {**_azure_common(), "azure_deployment": settings.AZURE_OPENAI_EMBEDDING_DEPLOYMENT},
             },
         }
-    return {"provider": "openai", "config": {"model": model}}
+    if provider == "ollama":
+        return {
+            "provider": "ollama",
+            "config": {"model": model, "embedding_dims": dims, "ollama_base_url": settings.OLLAMA_BASE_URL},
+        }
+    return {"provider": "openai", "config": {"model": model, "embedding_dims": dims}}
 
 
 def _mem0_config() -> dict:
     """Build the mem0 config: pgvector store + the extraction LLM + the resolved embedder."""
+    provider = resolve_embeddings_provider()
     vector_store = {
         "provider": "pgvector",
         "config": {
@@ -85,12 +95,15 @@ def _mem0_config() -> dict:
             "password": settings.POSTGRES_PASSWORD,
             "host": settings.POSTGRES_HOST,
             "port": settings.POSTGRES_PORT,
+            # pgvector's column dimension must match the embedder's output size (e.g. Ollama's
+            # nomic-embed-text is 768, not mem0's 1536 default).
+            "embedding_model_dims": embeddings_dims(provider),
         },
     }
     return {
         "vector_store": vector_store,
         "llm": _mem0_llm_config(),
-        "embedder": _mem0_embedder_config(resolve_embeddings_provider()),
+        "embedder": _mem0_embedder_config(provider),
     }
 
 

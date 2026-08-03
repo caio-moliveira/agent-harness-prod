@@ -2,6 +2,11 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# SLO alert rules (issue #71). Firing alerts are visible at http://localhost:9090/alerts; wire an
+# Alertmanager here when routing them to a channel/pager (rules stay the same).
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   - job_name: 'fastapi'
     metrics_path: '/metrics'

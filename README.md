@@ -266,6 +266,8 @@ src/
 ├── cli/                       # terminal clients per agent
 └── evals/                     # evaluation framework
 frontend/                      # React chat UI (see frontend/README.md)
+docs/                          # operations.md · runbooks.md · security.md (see "Operating in production")
+observability/                 # Prometheus alert rules + provisioned Grafana dashboards
 ```
 
 ---
@@ -329,6 +331,22 @@ endpoint + version). LangChain's `init_chat_model` infers the provider from the 
 all use it; long-term memory needs an embeddings provider (`EMBEDDINGS_MODEL` — OpenAI or Azure, since
 Anthropic has none), so an Anthropic-only deploy auto-disables memory with a warning. See `.env.example`
 for the complete surface.
+
+---
+
+## Operating in production
+
+Running this for real takes more than `make dev`. Three documents cover what the code cannot tell
+you — the *why* behind the operational decisions and what to do when something breaks:
+
+| Document | What it answers |
+|---|---|
+| [`docs/operations.md`](docs/operations.md) | Health probes (**liveness ≠ readiness** — and the damage of getting it wrong), backup + quarterly restore drills, retention windows & LGPD erasure, measured capacity numbers, artifact storage |
+| [`docs/runbooks.md`](docs/runbooks.md) | One section per Prometheus alert: *what it means · where to look · what to do now*. Every alert links here by anchor, and a unit test fails if a runbook section is missing |
+| [`docs/security.md`](docs/security.md) | Guardrail policy (input **blocks**, output **redacts** — and why streaming can't block), secret inventory & rotation, personal data / LGPD, dependency scanning |
+
+Operational commands: `make backup` · `make restore-drill dump=…` · `make purge` · `make load-test`.
+Alerts and SLO dashboards are provisioned by the compose stack — nothing to click.
 
 ---
 

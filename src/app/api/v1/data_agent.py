@@ -5,8 +5,10 @@ connection held by the per-session registry, and never persisted or logged.
 """
 
 import asyncio
+import contextlib
 import json
 import os
+import time
 from typing import Optional
 
 from fastapi import (
@@ -43,7 +45,15 @@ from src.app.api.v1.dtos.data_agent import (
 from src.app.core.common.config import settings
 from src.app.core.common.logging import logger
 from src.app.core.common.model.message import Message
+from src.app.core.guardrails.input_screening import screen_user_input
+from src.app.core.guardrails.safety_check import evaluate_safety
 from src.app.core.hitl.pending_model import PendingActionStatus
+from src.app.core.metrics.metrics import (
+    agent_turn_duration_seconds,
+    agent_turn_terminations_total,
+    guardrail_checks_total,
+)
+from src.app.core.usage import check_budget, record_turn_usage
 from src.app.core.ingestion.source_repository import IngestedFileRepository
 from src.app.core.ingestion.trigger import (
     is_ingesting,
@@ -69,6 +79,7 @@ from src.app.init import (
     pending_action_repository,
     session_repository,
     skill_repository,
+    user_repository,
 )
 
 _ARTIFACT_MEDIA_TYPES = {
@@ -388,6 +399,35 @@ async def _persist_user_message(session: Session, query: str) -> None:
         await session_repository.update_session_name(session.id, name)
 
 
+async def _user_budget_override(user_id: int) -> Optional[int]:
+    """This user's per-account daily token budget, or None to follow the global default."""
+    try:
+        user = await user_repository.get_user(user_id)
+        return getattr(user, "token_budget_daily", None) if user else None
+    except Exception:
+        # Never let a budget lookup break a turn: fall back to the global policy.
+        logger.exception("budget_override_lookup_failed", user_id=user_id)
+        return None
+
+
+async def _audit_answer_safety(session_id: str, answer: str) -> None:
+    """Record a model-based safety verdict for an answer that was already streamed.
+
+    Audit only, by design (see ``OUTPUT_SAFETY_AUDIT_ENABLED``): the tokens are with the user
+    already, so the verdict becomes a metric + a structured log for review, never a rewrite. Any
+    failure here is swallowed — an audit must not affect the turn it observes.
+    """
+    try:
+        is_safe = await evaluate_safety(answer)
+        guardrail_checks_total.labels(
+            guardrail_type="safety", check_type="output_audit", result="safe" if is_safe else "unsafe"
+        ).inc()
+        if not is_safe:
+            logger.warning("output_safety_audit_flagged", session_id=session_id, answer_chars=len(answer))
+    except Exception:
+        logger.exception("output_safety_audit_failed", session_id=session_id)
+
+
 async def _persist_answer(session: Session, answer: str, steps: list[dict]) -> None:
     """Persist the assistant's reply and its tool-activity steps for this turn.
 
@@ -501,27 +541,99 @@ async def query_stream(
         steps: list[dict] = []
         agent_messages: list = []
         errored = False
+        # How the turn ended (turn-limit policy, see turn_limits.py): completed | call_limit |
+        # recursion_backstop (both reported by the agent via its `turn_end` marker) | timeout
+        # (enforced here) | error. Rides on the terminal `done` event and the terminations metric.
+        reason = "completed"
+        agen = None
+        turn_started = time.monotonic()
+        turn_tokens = (0, 0)
         try:
+            # Input guardrails run BEFORE anything else — the only point where a guardrail can
+            # prevent harm instead of describing it afterwards. Deterministic and microseconds
+            # cheap, so the streamed path pays the same policy as the non-streamed one.
+            # Cost governance (#73): checked at the START of a turn against what the user already
+            # spent today. A turn in flight is never killed for budget — the user would lose work
+            # for a limit they could not see coming, and the tokens are already spent.
+            budget = await check_budget(session.user_id, await _user_budget_override(session.user_id))
+            if budget.exceeded:
+                reason = "budget_exhausted"
+                await _persist_user_message(session, body.query)
+                # pt-BR thousands separator, applied per number (never to the whole sentence).
+                limit_str = f"{budget.limit:,}".replace(",", ".")
+                used_str = f"{budget.used:,}".replace(",", ".")
+                message = (
+                    f"Você atingiu o limite diário de {limit_str} tokens desta conta "
+                    f"({used_str} usados). O limite renova às "
+                    f"{budget.resets_at:%H:%M} UTC — depois disso posso retomar normalmente."
+                )
+                answer_parts.append(message)
+                yield f"data: {json.dumps({'type': 'token', 'content': message})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'reason': reason})}\n\n"
+                return
+
+            screening = screen_user_input(body.query, session_id=session.id)
+            if screening.blocked:
+                reason = "blocked_input"
+                await _persist_user_message(session, body.query)
+                answer_parts.append(screening.message)
+                # Emit the refusal and its own terminal event, then stop: returning here still
+                # runs the `finally` below (the turn is persisted and counted), but nothing after
+                # the try/finally would run — so the terminal event must be yielded right here or
+                # the client would hang waiting for `done`.
+                yield f"data: {json.dumps({'type': 'token', 'content': screening.message})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'reason': reason})}\n\n"
+                return
             known_ids = await _session_pending_ids(session)
             # Rebuild the recent context from our own persisted history (the client sends only the
             # new message); older turns are covered by the agent's long-term memory.
             history = await chat_message_repository.get_messages(session.id, limit=_HISTORY_WINDOW)
             agent_messages = _agent_messages(history, body.query)
             await _persist_user_message(session, body.query)
-            async for ev in agent.astream_query_events(agent_messages, session.id, session.user_id):
-                etype = ev.get("type")
-                if etype == "token":
-                    answer_parts.append(ev.get("content", ""))
-                elif etype == "tool_start":
-                    steps.append({"name": ev.get("name", ""), "input": ev.get("input"), "output": None})
-                elif etype == "tool_end":
-                    _close_step(steps, ev.get("name", ""), ev.get("output"))
-                yield f"data: {json.dumps(ev)}\n\n"
+            agen = agent.astream_query_events(agent_messages, session.id, session.user_id)
+            # Temporal backstop: a hung/slow provider must not hold the stream open forever. The
+            # deadline covers the whole agent run; on expiry the partial work is persisted and the
+            # client gets a recoverable "continuar" hint, mirroring the call-cap UX.
+            async with asyncio.timeout(settings.TURN_TIMEOUT_SECONDS or None):
+                async for ev in agen:
+                    etype = ev.get("type")
+                    if etype == "turn_end":
+                        # Internal marker, not part of the client contract — fold into `done`.
+                        reason = ev.get("reason", "completed")
+                        turn_tokens = (ev.get("input_tokens", 0), ev.get("output_tokens", 0))
+                        continue
+                    if etype == "token":
+                        answer_parts.append(ev.get("content", ""))
+                    elif etype == "tool_start":
+                        steps.append({"name": ev.get("name", ""), "input": ev.get("input"), "output": None})
+                    elif etype == "tool_end":
+                        _close_step(steps, ev.get("name", ""), ev.get("output"))
+                    yield f"data: {json.dumps(ev)}\n\n"
             # Surface any approval the agent just parked as an inline card, before closing the turn.
             for hitl_ev in await _new_hitl_events(session, known_ids):
                 yield f"data: {json.dumps(hitl_ev)}\n\n"
+        except TimeoutError:
+            reason = "timeout"
+            logger.warning(
+                "data_stream_timeout",
+                session_id=session.id,
+                timeout_seconds=settings.TURN_TIMEOUT_SECONDS,
+                steps=len(steps),
+                answer_chars=len("".join(answer_parts)),
+            )
+            if agen is not None:
+                with contextlib.suppress(Exception):
+                    await agen.aclose()  # cancel the in-flight agent run
+            hint = (
+                "\n\n---\n\n_Este turno atingiu o tempo máximo de processamento. Envie "
+                '**"continuar"** que eu retomo do ponto em que parei, aproveitando o que já '
+                "foi apurado._"
+            )
+            answer_parts.append(hint)
+            yield f"data: {json.dumps({'type': 'token', 'content': hint})}\n\n"
         except Exception:
             errored = True
+            reason = "error"
             # Log the real failure with enough context to diagnose (Langfuse captured an empty
             # statusMessage on the degraded turn — this is our own record).
             logger.exception(
@@ -539,9 +651,28 @@ async def query_stream(
                 await _persist_answer(session, "".join(answer_parts), steps)
             except Exception:
                 logger.exception("data_stream_persist_failed", session_id=session.id)
+            agent_turn_terminations_total.labels(agent="data_agent", reason=reason).inc()
+            agent_turn_duration_seconds.labels(agent="data_agent", reason=reason).observe(
+                time.monotonic() - turn_started
+            )
+            # Output safety AUDIT (opt-in): a verdict after the fact cannot un-send streamed
+            # tokens, so this never rewrites the answer — it records that an unsafe answer went
+            # out, which is what a regulated deployment needs to review. Runs in the background so
+            # it never delays the turn's last byte.
+            if settings.OUTPUT_SAFETY_AUDIT_ENABLED and answer_parts:
+                asyncio.create_task(_audit_answer_safety(session.id, "".join(answer_parts)))
+            # Bill the turn's tokens even when it ended at a limit or errored — the provider
+            # charged for them either way, so the budget must reflect reality, not intent.
+            await record_turn_usage(session.user_id, turn_tokens[0], turn_tokens[1])
         # Always emit a terminal event so the client never hangs on silence. (Skipped only when the
         # generator was cancelled by a disconnect — GeneratorExit — where the client is already gone.)
-        terminal = {"type": "error", "content": "Erro ao processar a consulta."} if errored else {"type": "done"}
+        # `done` carries how the turn ended so the client can offer "continuar" on a capped/timed-out
+        # turn instead of treating it as a plain completion.
+        terminal = (
+            {"type": "error", "content": "Erro ao processar a consulta."}
+            if errored
+            else {"type": "done", "reason": reason}
+        )
         yield f"data: {json.dumps(terminal)}\n\n"
 
     return StreamingResponse(_with_heartbeat(event_generator()), media_type="text/event-stream", headers=_SSE_HEADERS)

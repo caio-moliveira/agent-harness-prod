@@ -1,0 +1,150 @@
+# Alert rules for the harness SLOs (issue #71). A metric nobody is paged about is just telemetry —
+# these turn the instrumentation into signals. Every alert carries a `runbook` annotation pointing
+# at the matching section of docs/runbooks.md; keep the two in sync.
+#
+# `for:` windows are deliberately long enough to survive a single bad turn: a support agent gets
+# woken by a trend, not by one user's unlucky request.
+
+groups:
+  - name: harness-availability
+    rules:
+      - alert: APIDown
+        expr: up{job="fastapi"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "API is not being scraped (down or unreachable)"
+          description: "Prometheus cannot scrape {{ $labels.instance }} for 2m — the API is down, crashed at startup, or /metrics is unreachable."
+          runbook: "docs/runbooks.md#apidown"
+
+      - alert: HighHTTP5xxRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+          clamp_min(sum(rate(http_requests_total[5m])), 0.001)
+            > 0.05
+        for: 10m
+        labels:
+          severity: critical
+          service: api
+        annotations:
+          summary: "Over 5% of HTTP requests are failing with 5xx"
+          description: "5xx share is {{ $value | humanizePercentage }} over 10m — check the API logs and the database/provider dependencies."
+          runbook: "docs/runbooks.md#highhttp5xxrate"
+
+  - name: harness-agent-turns
+    rules:
+      # THE invariant of the turn-limit policy (#66): the recursion limit is derived from the
+      # compiled graph precisely so the graceful call cap always fires first. Any occurrence means
+      # the derivation regressed (new middleware? changed stack?) — treat as a real bug, not noise.
+      - alert: RecursionBackstopFired
+        expr: increase(agent_turn_terminations_total{reason="recursion_backstop"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          service: agent
+        annotations:
+          summary: "Recursion backstop fired — the derived recursion limit regressed"
+          description: "agent={{ $labels.agent }} ended a turn via the physical backstop. compute_recursion_limit() should make this unreachable; check for a middleware change that raised the per-round graph-step cost."
+          runbook: "docs/runbooks.md#recursionbackstopfired"
+
+      - alert: HighAgentTurnErrorRate
+        expr: |
+          sum by (agent) (rate(agent_turn_terminations_total{reason="error"}[15m]))
+            /
+          clamp_min(sum by (agent) (rate(agent_turn_terminations_total[15m])), 0.001)
+            > 0.02
+        for: 15m
+        labels:
+          severity: critical
+          service: agent
+        annotations:
+          summary: "Over 2% of agent turns end in error (SLO breach)"
+          description: "agent={{ $labels.agent }} error share is {{ $value | humanizePercentage }} over 15m. Errors are real failures — the graceful limits report call_limit/timeout instead."
+          runbook: "docs/runbooks.md#highagentturnerrorrate"
+
+      - alert: HighAgentTurnTimeoutRate
+        expr: |
+          sum by (agent) (rate(agent_turn_terminations_total{reason="timeout"}[30m]))
+            /
+          clamp_min(sum by (agent) (rate(agent_turn_terminations_total[30m])), 0.001)
+            > 0.10
+        for: 30m
+        labels:
+          severity: warning
+          service: agent
+        annotations:
+          summary: "Over 10% of agent turns hit the wall-clock timeout"
+          description: "agent={{ $labels.agent }}: the provider is slow (a large local Ollama model?) or TURN_TIMEOUT_SECONDS is too tight for real work."
+          runbook: "docs/runbooks.md#highagentturntimeoutrate"
+
+      - alert: HighAgentTurnCallLimitRate
+        expr: |
+          sum by (agent) (rate(agent_turn_terminations_total{reason="call_limit"}[1h]))
+            /
+          clamp_min(sum by (agent) (rate(agent_turn_terminations_total[1h])), 0.001)
+            > 0.20
+        for: 1h
+        labels:
+          severity: info
+          service: agent
+        annotations:
+          summary: "Over 20% of agent turns stop at the model-call cap"
+          description: "agent={{ $labels.agent }}: users are routinely asked to send 'continuar'. Either MODEL_CALL_LIMIT is too low for the workload or the model is looping on a task it cannot finish."
+          runbook: "docs/runbooks.md#highagentturncalllimitrate"
+
+      # Latency SLO: p95 of a completed turn under 120s. Only `completed` turns count — a turn that
+      # ended at the timeout would otherwise pin p95 to the ceiling by construction.
+      - alert: AgentTurnLatencySLOBreach
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, agent) (rate(agent_turn_duration_seconds_bucket{reason="completed"}[30m]))
+          ) > 120
+        for: 30m
+        labels:
+          severity: warning
+          service: agent
+        annotations:
+          summary: "p95 turn latency above the 120s SLO"
+          description: "agent={{ $labels.agent }} p95 is {{ $value | humanizeDuration }} over 30m — check provider latency, context size, and tool round-trips."
+          runbook: "docs/runbooks.md#agentturnlatencyslobreach"
+
+  - name: harness-cost
+    rules:
+      - alert: TokenBudgetsExhaustingFrequently
+        expr: increase(user_token_budget_exhausted_total[1h]) > 10
+        for: 1h
+        labels:
+          severity: info
+          service: cost
+        annotations:
+          summary: "Users are hitting the daily token budget repeatedly"
+          description: "{{ $value | printf \"%.0f\" }} refusals in the last hour — either TOKEN_BUDGET_DAILY is too tight for real usage or an account is being abused."
+          runbook: "docs/runbooks.md#tokenbudgetsexhaustingfrequently"
+
+  - name: harness-dependencies
+    rules:
+      - alert: LLMProviderErrorsSpiking
+        expr: sum by (agent_name) (rate(llm_errors_total[10m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: llm
+        annotations:
+          summary: "LLM provider errors are spiking"
+          description: "agent={{ $labels.agent_name }} is seeing {{ $value | printf \"%.2f\" }} provider errors/s over 10m — check the provider status page, the API key, and rate limits."
+          runbook: "docs/runbooks.md#llmprovidererrorsspiking"
+
+      - alert: DatabaseConnectionsSaturated
+        expr: db_connections >= 25
+        for: 10m
+        labels:
+          severity: warning
+          service: db
+        annotations:
+          summary: "Postgres connection pool close to exhaustion"
+          description: "{{ $value }} active connections against POSTGRES_POOL_SIZE + MAX_OVERFLOW (default 20+10). Long streaming turns hold connections — raise the pool or shorten the turns."
+          runbook: "docs/runbooks.md#databaseconnectionssaturated"

@@ -55,6 +55,7 @@ dependencies = [
     "alembic>=1.18.5",
     "pymupdf>=1.28.0",
     "azure-identity>=1.25.3",
+    "langchain-ollama>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -70,7 +71,10 @@ test = [
 
 
 [tool.pytest.ini_options]
-markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "e2e: end-to-end tests against a live API + Postgres (gated behind RUN_E2E=1)",
+]
 python_files = ["test_*.py", "*_test.py", "tests.py"]
 asyncio_mode = "auto"
 

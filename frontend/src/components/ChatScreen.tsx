@@ -1,11 +1,20 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import * as api from "../lib/api";
-import type { AssistantTurn, Segment, SourceStatus, TodoItem, ToolStep, Turn } from "../lib/types";
+import type {
+  AssistantTurn,
+  ResumableEndReason,
+  Segment,
+  SourceStatus,
+  TodoItem,
+  ToolStep,
+  Turn,
+} from "../lib/types";
 import MessageBubble from "./MessageBubble";
 import Composer from "./Composer";
 import AgentActivity from "./AgentActivity";
 import TodoList from "./TodoList";
+import UsageIndicator from "./UsageIndicator";
 import ThinkingPanel from "./ThinkingPanel";
 import ArtifactApproval from "./ArtifactApproval";
 import DeliverableLinks from "./DeliverableLinks";
@@ -381,7 +390,15 @@ export default function ChatScreen() {
             updateLastAssistant(prev, (a) => ({ ...settleTodos(a), streaming: false, error: ev.content })),
           );
         } else if (ev.type === "done") {
-          setTurns((prev) => updateLastAssistant(prev, (a) => ({ ...settleTodos(a), streaming: false })));
+          // A capped/timed-out turn is a recoverable boundary, not a failure: keep everything
+          // rendered and surface the "continuar" notice under the turn. `blocked_input` is NOT
+          // resumable — the refusal is already the answer and repeating it changes nothing.
+          const resumable: ReadonlyArray<string> = ["call_limit", "timeout", "recursion_backstop"];
+          const endReason =
+            ev.reason && resumable.includes(ev.reason) ? (ev.reason as ResumableEndReason) : undefined;
+          setTurns((prev) =>
+            updateLastAssistant(prev, (a) => ({ ...settleTodos(a), streaming: false, endReason })),
+          );
         }
       }
     } catch (err) {
@@ -418,15 +435,20 @@ export default function ChatScreen() {
   return (
     <div className="flex h-full">
       {userToken && (
-        <ConversationsSidebar
-          userToken={userToken}
-          agentId={agentId}
-          currentSessionId={sessionId}
-          reloadKey={sidebarReload}
-          onSelect={setActiveSession}
-          onNew={handleNewConversation}
-          onDeletedActive={handleDeletedActive}
-        />
+        <div className="flex flex-col">
+          <ConversationsSidebar
+            userToken={userToken}
+            agentId={agentId}
+            currentSessionId={sessionId}
+            reloadKey={sidebarReload}
+            onSelect={setActiveSession}
+            onNew={handleNewConversation}
+            onDeletedActive={handleDeletedActive}
+          />
+          {/* Renders nothing unless a daily budget is configured — see UsageIndicator. Refreshed
+              after each turn so the number the user sees matches what they just spent. */}
+          <UsageIndicator userToken={userToken} reloadKey={turns.length} />
+        </div>
       )}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-slate-800 px-4 py-2.5">
@@ -568,6 +590,22 @@ export default function ChatScreen() {
                     {turn.error && (
                       <div className="ml-[42px] mt-1 rounded-lg border border-red-900 bg-red-950/50 px-3 py-2 text-sm text-red-300">
                         {turn.error}
+                      </div>
+                    )}
+                    {turn.endReason && !turn.streaming && (
+                      <div className="ml-[42px] mt-1 flex items-center justify-between gap-3 rounded-lg border border-amber-900 bg-amber-950/40 px-3 py-2 text-sm text-amber-200">
+                        <span>
+                          {turn.endReason === "timeout"
+                            ? "O turno atingiu o tempo máximo de processamento — o progresso foi preservado."
+                            : "O turno atingiu o limite de passos — o progresso foi preservado."}
+                        </span>
+                        <button
+                          onClick={() => void handleSend("continuar")}
+                          disabled={sending}
+                          className="shrink-0 rounded-md border border-amber-700 px-2.5 py-1 text-xs font-medium text-amber-100 hover:bg-amber-900/50 disabled:opacity-50"
+                        >
+                          Continuar
+                        </button>
                       </div>
                     )}
                   </div>

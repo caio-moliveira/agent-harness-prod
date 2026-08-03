@@ -1,0 +1,270 @@
+{
+  "id": null,
+  "uid": "agent-health",
+  "title": "Agent Health & SLOs",
+  "tags": ["agent", "slo", "turns", "reliability"],
+  "timezone": "browser",
+  "schemaVersion": 30,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "agent",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(agent_turn_terminations_total, agent)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "label": "Agent"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "SLOs",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Turnos concluídos (share)",
+      "description": "Fração dos turnos que terminaram em `completed`. Os demais motivos são fronteiras recuperáveis (call_limit/timeout) ou falhas reais (error).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 0.8 },
+              { "color": "green", "value": 0.9 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(agent_turn_terminations_total{agent=~\"$agent\", reason=\"completed\"}[1h])) / clamp_min(sum(rate(agent_turn_terminations_total{agent=~\"$agent\"}[1h])), 0.001)",
+          "legendFormat": "completed",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Taxa de erro (SLO < 2%)",
+      "description": "Turnos terminados em `error` — falhas reais. As terminações graciosas não contam aqui.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.02 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(agent_turn_terminations_total{agent=~\"$agent\", reason=\"error\"}[1h])) / clamp_min(sum(rate(agent_turn_terminations_total{agent=~\"$agent\"}[1h])), 0.001)",
+          "legendFormat": "error",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "p95 do turno (SLO < 120s)",
+      "description": "Percentil 95 da duração de turnos concluídos — o que o usuário espera de fato.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 120 },
+              { "color": "red", "value": 300 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(agent_turn_duration_seconds_bucket{agent=~\"$agent\", reason=\"completed\"}[30m])))",
+          "legendFormat": "p95",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Recursion backstop (invariante = 0)",
+      "description": "Deve ficar SEMPRE em zero: o recursion_limit é derivado do grafo para o cap gracioso disparar primeiro. Qualquer valor > 0 significa regressão na derivação.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(agent_turn_terminations_total{agent=~\"$agent\", reason=\"recursion_backstop\"}[24h]))",
+          "legendFormat": "24h",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Terminações de turno",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Terminações por motivo (taxa)",
+      "description": "completed | call_limit | timeout | recursion_backstop | error. Uma mudança de mistura aqui é o sinal mais direto de regressão de comportamento do agente.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } } },
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(agent_turn_terminations_total{agent=~\"$agent\"}[5m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "piechart",
+      "title": "Mistura de terminações (janela atual)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "targets": [
+        {
+          "expr": "sum by (reason) (increase(agent_turn_terminations_total{agent=~\"$agent\"}[$__range]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Latência e dependências",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Duração do turno — p50 / p95 / p99 (concluídos)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(agent_turn_duration_seconds_bucket{agent=~\"$agent\", reason=\"completed\"}[10m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(agent_turn_duration_seconds_bucket{agent=~\"$agent\", reason=\"completed\"}[10m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(agent_turn_duration_seconds_bucket{agent=~\"$agent\", reason=\"completed\"}[10m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Erros do provedor LLM",
+      "description": "llm_errors por agente — provedor fora do ar, chave inválida ou rate limit.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "targets": [
+        {
+          "expr": "sum by (agent_name) (rate(llm_errors_total[5m]))",
+          "legendFormat": "{{agent_name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Conexões Postgres ativas",
+      "description": "Turnos longos seguram conexões; o pool satura antes da CPU (POSTGRES_POOL_SIZE + MAX_OVERFLOW).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        { "expr": "db_connections", "legendFormat": "ativas", "refId": "A" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Ferramentas e guardrails",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Execuções de ferramentas por status",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 25 },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "targets": [
+        {
+          "expr": "sum by (tool_name, status) (rate(tool_executions_total[5m]))",
+          "legendFormat": "{{tool_name}} — {{status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Detecções de PII e bloqueios de guardrail",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 25 },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "targets": [
+        {
+          "expr": "sum by (pii_type) (rate(guardrail_pii_detections_total[5m]))",
+          "legendFormat": "PII {{pii_type}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(guardrail_requests_blocked_total[5m]))",
+          "legendFormat": "bloqueios",
+          "refId": "B"
+        }
+      ]
+    }
+  ]
+}

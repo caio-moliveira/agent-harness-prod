@@ -127,6 +127,39 @@ export interface TodoItem {
   status: "pending" | "in_progress" | "completed" | string;
 }
 
+/**
+ * How a turn ended (server turn-limit policy). Only "completed" is a plain finish — the others are
+ * recoverable boundaries (call cap / wall-clock timeout / recursion backstop): partial work is
+ * persisted server-side and the UI offers "continuar" to resume from the accumulated context.
+ */
+/** Token consumption and budget standing for the current UTC day (`GET /me/usage`). */
+export interface UsageStatus {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  turns: number;
+  /** 0 means no budget is enforced. */
+  limit: number;
+  remaining: number;
+  exceeded: boolean;
+  resets_at: string;
+}
+
+export type TurnEndReason =
+  | "completed"
+  | "call_limit"
+  | "timeout"
+  | "recursion_backstop"
+  /** Input guardrail refused the message (content filter or high-risk PII); the refusal itself is
+   *  streamed as the answer. Not recoverable by "continuar" — the user must rephrase. */
+  | "blocked_input"
+  /** The account's daily token budget is spent; the refusal is streamed as the answer. Not
+   *  resumable either — the budget resets on a clock, not on a click. */
+  | "budget_exhausted";
+
+/** Turn endings the UI offers to resume: the work stopped at a boundary, nothing was lost. */
+export type ResumableEndReason = "call_limit" | "timeout" | "recursion_backstop";
+
 export type StreamEvent =
   | { type: "tool_start"; name: string; input?: string }
   | { type: "tool_end"; name: string; output?: string }
@@ -134,7 +167,7 @@ export type StreamEvent =
   | { type: "thinking"; content: string }
   | { type: "todos"; items: TodoItem[] }
   | { type: "hitl_request"; id: number; action_type: string; title?: string; format?: string }
-  | { type: "done" }
+  | { type: "done"; reason?: TurnEndReason }
   | { type: "error"; content?: string };
 
 /** One persisted tool step of an assistant turn (returned with the conversation history). */
@@ -257,6 +290,8 @@ export interface AssistantTurn {
   todos?: TodoItem[];
   /** Live reasoning (Anthropic summarized thinking), streamed before/with the answer. */
   thinking?: string;
+  /** Set when the turn stopped at a recoverable limit (cap/timeout) — renders the "continuar" notice. */
+  endReason?: ResumableEndReason;
 }
 
 export type Turn = UserTurn | AssistantTurn;

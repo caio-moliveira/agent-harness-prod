@@ -16,6 +16,7 @@ from typing import Iterable
 from prometheus_client import Histogram
 from prometheus_client.core import GaugeMetricFamily
 from prometheus_client.registry import REGISTRY, Collector
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlmodel import select
 
 from src.app.core.common.logging import logger
@@ -66,6 +67,13 @@ class SuccessMetricsCollector(Collector):
         """Yield one gauge family per PRD metric."""
         try:
             m = compute_success_metrics()
+        except (ProgrammingError, OperationalError) as exc:
+            # Expected on a brand-new database: this collector is registered at import time, so a
+            # scrape can land before the lifespan's create_all/migrations have made the tables.
+            # It is a "not ready yet" state, not a fault — logging a full traceback for it (as this
+            # used to) fills the first boot with alarming noise that means nothing.
+            logger.debug("success_metrics_tables_not_ready", error=str(exc).split("\n")[0])
+            return
         except Exception:  # noqa: BLE001 - a metrics scrape must never take the app down
             logger.exception("success_metrics_compute_failed")
             return

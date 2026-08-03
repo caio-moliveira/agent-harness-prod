@@ -37,6 +37,7 @@ services:
 #    volumes:
 #      - ./app:/app/src
 #      - ./logs:/app/logs
+#      - artifact-storage:/app/data/artifacts
 #    env_file:
 #      - .env.${APP_ENV:-development}
 #    environment:
@@ -46,7 +47,9 @@ services:
 #      db:
 #        condition: service_healthy
 #    healthcheck:
-#      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+#      # Readiness (checks the database) — use /health/live for a liveness probe, which must
+#      # never depend on the database or a DB blip would restart healthy processes.
+#      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/ready"]
 #      interval: 30s
 #      timeout: 10s
 #      retries: 3
@@ -62,6 +65,7 @@ services:
       - "9090:9090"
     volumes:
       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
     networks:
@@ -105,3 +109,7 @@ networks:
 volumes:
   grafana-storage:
   postgres-data:
+  # Approved deliverables (ARTIFACT_STORAGE_ROOT). A named volume, never /tmp: a container restart
+  # would otherwise delete an approved artifact and its download would 404. Include this volume in
+  # the backup routine — it is NOT part of the Postgres dump (see docs/operations.md).
+  artifact-storage:

@@ -1,62 +1,20 @@
 """Shared fixtures for integration tests.
 
-Patches the database engine, Langfuse, and all agent factories so that tests
-run against an in-memory SQLite database with no real OpenAI or external calls.
-
-IMPORTANT: environment variables and monkey-patches at the top of this module
-run *before* any application code is imported.
+The environment bootstrap (test env vars, in-memory SQLite engine interception, Langfuse
+mocking) lives in the root ``tests/conftest.py`` — pytest imports it before this module and
+before any application code, for the whole suite (unit + integration + e2e alike). This module
+keeps only the integration-specific fixtures: the ASGI test client and the mocked agents.
 """
-
-import os
-
-# ---------------------------------------------------------------------------
-# Environment must be set BEFORE any application module is imported
-# ---------------------------------------------------------------------------
-
-os.environ["APP_ENV"] = "test"
-os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-integration-tests"
-os.environ["OPENAI_API_KEY"] = "sk-test-fake-key"
-os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-test"
-os.environ["LANGFUSE_SECRET_KEY"] = "sk-test"
-os.environ["LANGFUSE_HOST"] = "http://localhost:0"
-os.environ["MCP_ENABLED"] = "false"
 
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import sqlmodel as _sqlmodel_module
+from tests.conftest import get_shared_engine
 
 # ---------------------------------------------------------------------------
-# Intercept create_engine so DatabaseFactory uses an in-memory SQLite DB
-# ---------------------------------------------------------------------------
-
-_original_create_engine = _sqlmodel_module.create_engine
-_shared_engine = None
-
-
-def _sqlite_create_engine(*args, **kwargs):
-    """Replace any engine creation with a shared in-memory SQLite engine."""
-    global _shared_engine
-    if _shared_engine is None:
-        _shared_engine = _original_create_engine(
-            "sqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-        )
-    return _shared_engine
-
-
-_sqlmodel_module.create_engine = _sqlite_create_engine
-
-# Prevent Langfuse from making real network calls during module-level init
-_mock_langfuse_inst = MagicMock()
-_mock_langfuse_inst.auth_check.return_value = True
-patch("langfuse.Langfuse", return_value=_mock_langfuse_inst).start()
-patch("langfuse.langchain.CallbackHandler", return_value=MagicMock()).start()
-
-# ---------------------------------------------------------------------------
-# Now safe to import application code.
-# Importing the app triggers DatabaseFactory() which calls our patched
-# create_engine and sets _shared_engine.
+# Safe to import application code: the root conftest already installed the
+# SQLite engine interception, so importing the app triggers DatabaseFactory()
+# against in-memory SQLite.
 # ---------------------------------------------------------------------------
 
 import pytest
@@ -111,10 +69,10 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
     For every test a fresh set of DB tables, repositories, and mock agents is
     created so tests remain isolated from each other.
     """
-    SQLModel.metadata.drop_all(_shared_engine)
-    SQLModel.metadata.create_all(_shared_engine)
+    SQLModel.metadata.drop_all(get_shared_engine())
+    SQLModel.metadata.create_all(get_shared_engine())
 
-    db_session = Session(_shared_engine)
+    db_session = Session(get_shared_engine())
 
     from src.app.core.session import SessionRepository
     from src.app.core.user import UserRepository

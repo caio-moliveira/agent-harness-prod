@@ -1,6 +1,6 @@
 install:
 	pip install uv
-	uv sync
+	uv sync --group test
 
 DOCKER_COMPOSE ?= docker-compose
 
@@ -28,7 +28,33 @@ dev:
 	@echo "Starting server in development environment"
 	@bash -c "source scripts/set_env.sh development && uv run uvicorn src.app.main:app --reload --port 8000 --loop uvloop"
 
+# Operational commands (backup, retention, capacity) — see docs/operations.md
+backup:
+	@echo "Postgres dump (custom format) into $${BACKUP_DIR:-./backups}"
+	./scripts/backup.sh
+
+restore-drill:
+	@echo "Restore rehearsal into a scratch database — never touches the live one"
+	@test -n "$(dump)" || (echo "usage: make restore-drill dump=backups/<file>.dump"; exit 2)
+	./scripts/restore.sh $(dump) --into $${POSTGRES_DB:-mydb}_restore_check
+
+purge:
+	@echo "Applying the configured retention windows (see docs/operations.md)"
+	uv run python -m src.cli.retention purge
+
+load-test:
+	@echo "Streaming capacity run (mock LLM, no tokens; needs Postgres up)"
+	uv run python -m tests.load.streaming_load --users $${USERS:-10} --turns $${TURNS:-2}
+
 # Evaluation commands
+eval-golden:
+	@echo "Golden evals against the mock LLM (zero tokens; needs Postgres up)"
+	uv run python -m evals.run_eval --mode harness
+
+eval-golden-live:
+	@echo "Golden evals against the real MODEL from the environment (needs its API key + Postgres)"
+	uv run python -m evals.run_eval --mode live
+
 eval:
 	@echo "Running evaluation with interactive mode"
 	@bash -c "source scripts/set_env.sh ${ENV:-development} && python -m src.evals.main --interactive"
